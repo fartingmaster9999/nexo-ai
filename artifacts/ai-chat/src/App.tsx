@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, Brain, Code2, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, Brain, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -88,6 +88,7 @@ function Home() {
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const autoOpened = useRef<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
@@ -99,6 +100,7 @@ function Home() {
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeId) ?? null;
   const currentMessages = activeConversation?.messages ?? [];
+  const lastAssistantIndex = currentMessages.map((m) => m.role).lastIndexOf('assistant');
   const codeSource = (() => {
     for (let i = currentMessages.length - 1; i >= 0; i--) {
       const m = currentMessages[i];
@@ -107,6 +109,15 @@ function Home() {
     return null;
   })();
   const snippets = useMemo(() => codeSource ? extractSnippets(codeSource.text) : [], [codeSource?.text]);
+
+  useEffect(() => { setWorkspaceOpen(false); }, [activeId]);
+  useEffect(() => {
+    if (!streaming || !activeId || !snippets.length || !codeSource || codeSource.index !== lastAssistantIndex) return;
+    const key = `${activeId}:${codeSource.index}`;
+    if (autoOpened.current === key) return;
+    autoOpened.current = key;
+    setWorkspaceOpen(true);
+  }, [streaming, activeId, snippets.length, codeSource?.index, lastAssistantIndex]);
 
   useEffect(() => {
     setHydrated(true);
@@ -475,7 +486,6 @@ function Home() {
             </div>
           </div>
           <div className="topbar-right">
-            <button type="button" className={`top-btn ${workspaceOpen ? 'is-on' : ''}`} aria-pressed={workspaceOpen} onClick={() => setWorkspaceOpen((v) => !v)} data-testid="button-toggle-workspace"><Code2 size={15} /><span>Workspace</span></button>
             <button type="button" className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Appearance settings" data-testid="button-open-settings"><Settings2 size={17} /></button>
           </div>
         </header>
@@ -486,7 +496,7 @@ function Home() {
               <div className="welcome" data-testid="welcome-screen">
                 <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
                 <h1>Ask anything.<br /><em>Build</em> it right here.</h1>
-                <p>Everyday questions get quick answers. Open Workspace when you want to edit or run code. Turn on Deepthink for harder problems.</p>
+                <p>Everyday questions get quick answers. When Nexo generates code, it opens in a workspace beside the chat. Turn on Deepthink for harder problems.</p>
                 <div className="suggestions" aria-label="Ideas to get started">
                   {suggestions.map((suggestion) => (
                     <button
