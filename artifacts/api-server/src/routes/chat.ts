@@ -48,7 +48,6 @@ router.post("/chat", async (req, res): Promise<void> => {
     heartbeat = setInterval(() => {
       if (!res.destroyed && !res.writableEnded) res.write(": keepalive\n\n");
     }, 10000);
-    activity("clock", "Current date and time included");
 
     const lastPrompt = parsed.data.messages.at(-1)!.content;
     const coding = isCodingRequest(lastPrompt);
@@ -89,6 +88,8 @@ router.post("/chat", async (req, res): Promise<void> => {
     for await (const chunk of stream) {
       const choice = chunk.choices[0];
       if (choice?.finish_reason) finishReason = choice.finish_reason;
+      const reasoning = choice?.delta?.reasoning;
+      if (typeof reasoning === "string" && reasoning.length > 0) emit({ reasoning });
       const content = choice?.delta?.content;
       if (typeof content === "string" && content.length > 0) {
         hasContent = true;

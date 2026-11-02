@@ -19,4 +19,4 @@ Validate Groq model capabilities with a live request instead of trusting the SDK
 
 **Why:** The SDK accepts citation settings that GPT-OSS rejects at runtime, even though this model does support native browser search. Tool support and individual output options have separate compatibility constraints.
 
-**How to apply:** Check the selected model's documentation and make one targeted live call when enabling new provider features. Native browser results can supply source URLs without a separate citation-setting flag.
+**How to apply:** Check the selected model's documentation and make one targeted live call when enabling new provider features. Keep web retrieval external as required by the search policy, regardless of native browser capabilities.

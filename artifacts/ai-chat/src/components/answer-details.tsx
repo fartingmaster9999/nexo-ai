@@ -7,6 +7,7 @@ export type Notice = { id: string; message: string; model?: string };
 export type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
+  reasoning?: string;
   activity?: Activity[];
   sources?: Source[];
   notices?: Notice[];
@@ -59,11 +60,12 @@ const mark = (a: Activity, live: boolean) => {
 };
 
 export function ThinkingPanel({ message, live, index }: { message: ChatMessage; live: boolean; index: number }) {
-  const activity = message.activity ?? [];
+  const activity = (message.activity ?? []).filter((a) => a.id !== 'clock' && !/^Current (?:date|data) and time included$/i.test(a.label));
   const sources = message.sources ?? [];
+  const reasoning = message.reasoning ?? '';
   const [open, setOpen] = useState(live);
   useEffect(() => { if (live) setOpen(true); }, [live]);
-  if (!live && activity.length === 0 && sources.length === 0) return null;
+  if (!live && activity.length === 0 && sources.length === 0 && !reasoning) return null;
   const searching = live && activity.some((a) => a.kind === 'search' && a.status === 'running');
   const runningLabel = live ? [...activity].reverse().find((a) => a.status === 'running')?.label : undefined;
   const bodyId = `progress-body-${index}`;
@@ -83,7 +85,14 @@ export function ThinkingPanel({ message, live, index }: { message: ChatMessage; 
       )}
       {open && (
         <div className="term-body" id={bodyId}>
-          <p className="term-note"># live server progress and a brief approach summary, not private model reasoning</p>
+          {reasoning ? (
+            <>
+              <p className="term-note"># model reasoning — full trace returned by the provider</p>
+              <pre className="term-reasoning" data-testid={`reasoning-${index}`}>{reasoning}</pre>
+            </>
+          ) : (
+            <p className="term-note">{live ? '# waiting for model reasoning…' : '# no provider reasoning trace was recorded for this response'}</p>
+          )}
           {activity.length === 0 ? (
             <p className="term-line dim">{live ? 'waiting for server activity...' : 'no activity recorded.'}</p>
           ) : activity.map((a) => (

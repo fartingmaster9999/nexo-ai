@@ -11,7 +11,7 @@ test("normal chat always uses Groq GPT-OSS 120B with medium effort", () => {
   const result = buildChatRequest({ messages });
   assert.equal(result.model, "openai/gpt-oss-120b");
   assert.equal(result.reasoning_effort, "medium");
-  assert.equal(result.include_reasoning, false);
+  assert.equal(result.include_reasoning, true);
   assert.equal(result.stream, true);
   assert.deepEqual(result.messages.at(-1), messages[0]);
 });
@@ -20,7 +20,7 @@ test("Deepthink raises effort to high without changing provider or model", () =>
   const result = buildChatRequest({ messages, deepthink: true });
   assert.equal(result.reasoning_effort, "high");
   assert.equal(result.model, "openai/gpt-oss-120b");
-  assert.equal(result.include_reasoning, false);
+  assert.equal(result.include_reasoning, true);
   assert.ok(result.max_completion_tokens >= 8192);
 });
 
@@ -36,11 +36,11 @@ test("caller model and effort overrides are ignored and history is unmodified", 
   assert.deepEqual(messages, original);
 });
 
-test("Groq browser tools are never enabled; private reasoning stays hidden", () => {
+test("Groq browser tools stay disabled while provider-exposed reasoning is requested", () => {
   const result = buildChatRequest({ messages });
   assert.equal(result.tools, undefined);
   assert.equal(result.tool_choice, "none");
-  assert.equal(result.include_reasoning, false);
+  assert.equal(result.include_reasoning, true);
 });
 
 test("fresh UTC and local clock context comes from the server, not model memory", () => {
@@ -108,10 +108,10 @@ test("authorization errors are not incorrectly treated as usage limits", async (
   assert.equal(attempts, 1);
 });
 
-test("Qwen coding fallback uses its supported hidden reasoning format", () => {
+test("Qwen coding fallback returns reasoning separately using its supported parsed format", () => {
   const result = buildChatRequest({messages,deepthink:true},new Date(),{model:CODING_FALLBACK,coding:true});
   assert.equal(result.model,CODING_FALLBACK);
-  assert.equal(result.reasoning_format,"hidden");
+  assert.equal(result.reasoning_format,"parsed");
   assert.equal(result.include_reasoning,undefined);
   assert.equal(result.tools,undefined);
   assert.match(result.messages[0].content,/NumPy/);

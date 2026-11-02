@@ -26,7 +26,7 @@ type Conversation = {
   createdAt: number;
   updatedAt: number;
 };
-type StreamEvent = { content?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string };
+type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string };
 
 const STORAGE_KEY = 'still-chat-conversations-v1';
 const DEEPTHINK_KEY = 'nexo-deepthink';
@@ -327,6 +327,9 @@ function Home() {
           received += eventData.content;
           patchLast((message) => ({ ...message, content: received }));
           pump();
+        }
+        if (typeof eventData.reasoning === 'string' && eventData.reasoning) {
+          patchLast((m) => ({ ...m, reasoning: (m.reasoning ?? '') + eventData.reasoning }));
         }
         const act = eventData.activity;
         if (act && typeof act.id === 'string' && typeof act.label === 'string') {

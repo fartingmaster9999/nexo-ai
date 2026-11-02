@@ -31,6 +31,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .term-chev { transition: transform .2s; } .term-chev.is-open { transform: rotate(180deg); }
 .term-body { padding: 2px 14px 12px; border-top: 1px dashed hsl(var(--border)); animation: enter .2s ease both; }
 .term-note { margin: 9px 0 6px; color: hsl(var(--muted-foreground) / .8); font-size: 11px; }
+.term-reasoning { margin: 8px 0 14px; color: hsl(var(--foreground) / .88); font: inherit; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .term-line { margin: 2px 0; color: hsl(var(--foreground) / .82); line-height: 1.6; white-space: pre-wrap; }
 .term-line.dim { color: hsl(var(--muted-foreground)); }
 .term-tag { color: hsl(var(--primary)); }

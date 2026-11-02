@@ -40,9 +40,9 @@ export function buildChatRequest(input: ChatInput, now = new Date(), context: Re
   return {
     model: context.model ?? CHAT_MODEL,
     ...((context.model ?? CHAT_MODEL).startsWith("openai/gpt-oss")
-      ? { reasoning_effort: input.deepthink === true ? "high" as const : "medium" as const, include_reasoning: false }
+      ? { reasoning_effort: input.deepthink === true ? "high" as const : "medium" as const, include_reasoning: true }
       : (context.model ?? "").startsWith("qwen/")
-        ? { reasoning_effort: input.deepthink === true ? "high" as const : "medium" as const, reasoning_format: "hidden" as const }
+        ? { reasoning_effort: input.deepthink === true ? "high" as const : "medium" as const, reasoning_format: "parsed" as const }
         : {}),
     temperature: 0.6,
     top_p: 0.95,
@@ -65,7 +65,7 @@ export function buildChatRequest(input: ChatInput, now = new Date(), context: Re
           context.coding
             ? "For coding requests, provide complete runnable code inside fenced blocks tagged python, javascript, or html as appropriate, and briefly explain how it works. A browser IDE can run Python (NumPy as np, SciPy, Matplotlib pyplot as plt are preloaded; pandas and SymPy can be imported), JavaScript (Lodash as _, MathJS as math; console.log for output; no ES module imports), and sandboxed HTML/CSS. Import the libraries you use explicitly in Python. Other languages can be discussed but cannot run in the IDE. Never claim code was tested unless the user supplied execution results. Do not auto-run generated code."
             : "",
-          "Use readable Markdown, clear lists and fenced code blocks when helpful. Use plain-text notation for everyday calculations unless the user requests LaTeX. Give a useful final answer, not private internal reasoning.",
+          "Use readable Markdown, clear lists and fenced code blocks when helpful. Use plain-text notation for everyday calculations unless the user requests LaTeX. Keep the final answer separate from the provider's reasoning output.",
           "Ask a brief clarification only when essential information is missing. Respect the user's requested language and format.",
         ].join(" "),
       },
