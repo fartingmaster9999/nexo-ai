@@ -13,7 +13,6 @@ import { SettingsDialog } from '@/components/settings-dialog';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
 import { extractSnippets } from '@/lib/code-extract';
-import './nexo.css';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
 const logoUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/nexo-logo.png`;
