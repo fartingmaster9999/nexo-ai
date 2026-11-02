@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
 import Groq from "groq-sdk";
 import { StreamChatBody } from "@workspace/api-zod";
-import { buildChatRequest, CHAT_MODEL } from "../lib/chat-request";
+import { buildChatRequest, CHAT_MODEL, isValidTimeZone } from "../lib/chat-request";
+import { extractSearchSources } from "../lib/search-activity";
 
 const router: IRouter = Router();
 
@@ -15,12 +16,16 @@ router.post("/chat", async (req, res): Promise<void> => {
     res.status(503).json({ error: "Groq is not configured. Add GROQ_API_KEY to enable Nexo AI." });
     return;
   }
+  if (parsed.data.timeZone && !isValidTimeZone(parsed.data.timeZone)) {
+    res.status(400).json({ error: "The provided timezone is invalid." });
+    return;
+  }
 
   // Fixed Groq host: no provider override, OpenAI client, or fallback.
   const client = new Groq({
     apiKey: process.env.GROQ_API_KEY,
     baseURL: "https://api.groq.com",
-    timeout: 120000,
+    timeout: 180000,
     maxRetries: 2,
   });
   const controller = new AbortController();
@@ -32,20 +37,31 @@ router.post("/chat", async (req, res): Promise<void> => {
 
   try {
     const request = buildChatRequest(parsed.data);
-    const stream = await client.chat.completions.create(request, { signal: controller.signal });
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
     res.write(`data: ${JSON.stringify({ provider: "groq", model: CHAT_MODEL, reasoningEffort: request.reasoning_effort })}\n\n`);
+    res.write(`data: ${JSON.stringify({ activity: { id: "clock", label: "Current date and time included" } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ activity: { id: "generating", label: parsed.data.deepthink ? "Generating with Deepthink" : "Preparing an answer" } })}\n\n`);
     heartbeat = setInterval(() => {
       if (!res.destroyed && !res.writableEnded) res.write(": keepalive\n\n");
     }, 15000);
+    const stream = await client.chat.completions.create(request, { signal: controller.signal });
 
     let hasContent = false;
     let finishReason: string | null = null;
+    let searchObserved = false;
+    const seenSources = new Map<string, { title: string; url: string }>();
     for await (const chunk of stream) {
       const choice = chunk.choices[0];
+      const tools = choice?.delta?.executed_tools ?? [];
+      if (tools.some((tool) => tool.type === "browser_search" || tool.type.startsWith("browser."))) {
+        searchObserved = true;
+        res.write(`data: ${JSON.stringify({ activity: { id: "search", label: "Live web search used" } })}\n\n`);
+        for (const source of extractSearchSources(tools)) seenSources.set(source.url, source);
+        if (seenSources.size) res.write(`data: ${JSON.stringify({ sources: [...seenSources.values()].slice(0, 20) })}\n\n`);
+      }
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       const content = choice?.delta?.content;
       if (typeof content === "string" && content.length > 0) {
@@ -54,6 +70,7 @@ router.post("/chat", async (req, res): Promise<void> => {
       }
     }
     if (!hasContent) throw new Error("Empty Groq completion");
+    res.write(`data: ${JSON.stringify({ activity: { id: "complete", label: searchObserved ? "Answer prepared with live web results" : "Answer ready" } })}\n\n`);
     if (finishReason === "length") {
       res.write(`data: ${JSON.stringify({ error: "The response reached its length limit. Ask Nexo AI to continue." })}\n\n`);
     } else {

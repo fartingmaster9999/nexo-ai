@@ -21,6 +21,8 @@ export const HealthCheckResponse = zod.object({
  * @summary Stream an AI chat response
  */
 export const streamChatBodyDeepthinkDefault = false;
+export const streamChatBodyTimeZoneMax = 100;
+
 export const streamChatBodyMessagesItemContentMax = 12000;
 
 export const streamChatBodyMessagesMax = 40;
@@ -29,6 +31,7 @@ export const streamChatBodyMessagesMax = 40;
 
 export const StreamChatBody = zod.object({
   "deepthink": zod.boolean().default(streamChatBodyDeepthinkDefault).describe('Use high reasoning effort instead of medium'),
+  "timeZone": zod.string().max(streamChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
   "messages": zod.array(zod.object({
   "role": zod.enum(['user', 'assistant']),
   "content": zod.string().min(1).max(streamChatBodyMessagesItemContentMax)

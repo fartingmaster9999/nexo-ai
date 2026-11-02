@@ -245,3 +245,44 @@ body::before { content:''; position:fixed; inset:0; pointer-events:none; backgro
 .markdown tr:last-child td { border-bottom:0; }
 .markdown hr { border:0; border-top:1px solid hsl(var(--border)); margin:16px 0; }
 @media (max-width: 767px) { .mode-pill { font-size:9.5px; padding:5px 9px; } .hint-keys { display:none; } }
+
+/* refinement */
+.brand-mark { width:34px; height:34px; border:0; border-radius:0; background:transparent; object-fit:contain; }
+.welcome-logo { width:68px; height:68px; border:0; border-radius:0; box-shadow:none; background:transparent; object-fit:contain; }
+.avatar:not(.user-avatar) { background:transparent; border:0; border-radius:0; }
+.avatar img { object-fit:contain; }
+.message-row.assistant .message-content { padding-top:3px; }
+.deep-toggle { padding:6px 12px; gap:7px; font-weight:500; }
+.deep-toggle[aria-pressed="true"] { color:hsl(214 100% 86%); border-color:hsl(var(--primary)); background:hsl(214 95% 58% / .16); box-shadow:inset 0 0 0 1px hsl(214 95% 58% / .25); }
+.deep-toggle[aria-pressed="true"] svg { color:hsl(var(--primary)); }
+.brain-think { display:inline-flex; align-items:center; gap:11px; color:hsl(var(--muted-foreground)); font-size:13px; }
+.brain-orb { position:relative; width:28px; height:28px; display:grid; place-items:center; color:hsl(var(--primary)); }
+.brain-orb svg { animation: brainPulse 1.6s ease-in-out infinite; }
+.brain-ring { position:absolute; inset:0; border-radius:50%; border:1px solid hsl(var(--primary) / .5); animation: ring 1.8s ease-out infinite; }
+.brain-ring.r2 { animation-delay:.9s; }
+.brain-think.is-deep .brain-label { color:hsl(214 90% 78%); }
+.brain-dots { display:inline-flex; gap:3px; margin-left:5px; }
+.brain-dots i { width:3px; height:3px; border-radius:50%; background:currentColor; animation: dot 1.2s ease-in-out infinite; }
+.brain-dots i:nth-child(2){animation-delay:.15s} .brain-dots i:nth-child(3){animation-delay:.3s}
+.deep-inline { display:inline-flex; color:hsl(var(--primary)); margin-left:6px; vertical-align:-1px; animation: brainPulse 1.6s ease-in-out infinite; }
+@keyframes brainPulse { 50% { transform:scale(1.12); opacity:.7; } }
+@keyframes ring { from { transform:scale(.6); opacity:.9; } to { transform:scale(1.5); opacity:0; } }
+@keyframes dot { 0%,100% { opacity:.25; transform:translateY(0); } 50% { opacity:1; transform:translateY(-2px); } }
+.activity { margin:0 0 10px; font-size:11.5px; }
+.activity summary { list-style:none; display:inline-flex; align-items:center; gap:8px; cursor:pointer; color:hsl(var(--muted-foreground)); padding:4px 10px 4px 8px; border:1px solid hsl(var(--border)); border-radius:999px; transition:color .16s, border-color .16s; }
+.activity summary::-webkit-details-marker { display:none; }
+.activity summary:hover { color:hsl(var(--foreground)); border-color:hsl(214 60% 30%); }
+.activity-count { font-family:var(--app-font-mono); font-size:10px; opacity:.75; }
+.activity-chev { transition:transform .2s ease; }
+.activity[open] .activity-chev { transform:rotate(180deg); }
+.activity-pip { width:6px; height:6px; border-radius:50%; background:hsl(var(--muted-foreground)); }
+.activity-pip.is-live { background:hsl(var(--primary)); animation: dot 1.2s ease-in-out infinite; }
+.activity-body { margin-top:8px; padding:11px 13px; border-left:1px solid hsl(var(--primary) / .45); animation: enter .2s ease both; }
+.activity-note { margin:0 0 8px; color:hsl(var(--muted-foreground)); font-size:10.5px; }
+.activity-empty { margin:0; color:hsl(var(--muted-foreground)); }
+.activity-list { margin:0; padding-left:18px; list-style:decimal; color:hsl(var(--foreground) / .85); }
+.activity-list li { margin:3px 0; }
+.activity-head { margin:10px 0 5px; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:hsl(var(--muted-foreground)); }
+.activity-sources a { display:flex; align-items:center; gap:6px; color:hsl(214 95% 72%); text-decoration:none; padding:2px 0; overflow:hidden; }
+.activity-sources a span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.activity-sources a:hover span { text-decoration:underline; }

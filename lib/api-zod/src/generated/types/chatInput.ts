@@ -11,6 +11,11 @@ export interface ChatInput {
   /** Use high reasoning effort instead of medium */
   deepthink?: boolean;
   /**
+     * Browser IANA timezone, validated by the server for current-time context
+     * @maxLength 100
+     */
+  timeZone?: string;
+  /**
      * @minItems 1
      * @maxItems 40
      */

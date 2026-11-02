@@ -39,7 +39,7 @@ paths:
               $ref: "#/components/schemas/ChatInput"
       responses:
         "200":
-          description: Server-sent events with assistant response chunks
+          description: Server-sent JSON events containing content, activity labels, sources, request metadata, done, or error. Private model reasoning is never included.
           content:
             text/event-stream: {}
         "400":
@@ -95,6 +95,10 @@ components:
           type: boolean
           default: false
           description: Use high reasoning effort instead of medium
+        timeZone:
+          type: string
+          maxLength: 100
+          description: Browser IANA timezone, validated by the server for current-time context
         messages:
           type: array
           minItems: 1

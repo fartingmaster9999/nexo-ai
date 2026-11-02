@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, Brain, LoaderCircle, Menu, MessageSquare, Plus, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, Brain, Menu, MessageSquare, Plus, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import logoUrl from '@assets/Screenshot_2025-08-18_173849_1793633613340.png';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
+import { AnswerActivity, BrainThinking, type Activity, type Source, type ChatMessage } from '@/components/answer-details';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
-type ChatMessage = { role: 'user' | 'assistant'; content: string };
+const logoUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/nexo-logo.png`;
+const prefersReducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
 type Conversation = {
   id: string;
   title: string;
@@ -18,7 +20,7 @@ type Conversation = {
   createdAt: number;
   updatedAt: number;
 };
-type StreamEvent = { content?: string; done?: boolean; error?: string };
+type StreamEvent = { content?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[] };
 
 const STORAGE_KEY = 'still-chat-conversations-v1';
 const DEEPTHINK_KEY = 'nexo-deepthink';
@@ -72,6 +74,7 @@ function Home() {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [streaming, setStreaming] = useState(false);
+  const [visibleReply, setVisibleReply] = useState<{ id: string; content: string } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
@@ -80,6 +83,7 @@ function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const activeStreamId = useRef<string | null>(null);
+  const flushRef = useRef<(() => void) | null>(null);
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeId) ?? null;
   const currentMessages = activeConversation?.messages ?? [];
@@ -100,7 +104,7 @@ function Home() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [currentMessages.length, currentMessages[currentMessages.length - 1]?.content]);
+  }, [currentMessages.length, currentMessages[currentMessages.length - 1]?.content, visibleReply?.content]);
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -125,6 +129,8 @@ function Home() {
   }, [updateConversation]);
 
   const createConversation = useCallback(() => {
+    flushRef.current?.();
+    flushRef.current = null;
     removePendingAssistant(activeStreamId.current);
     abortRef.current?.abort();
     abortRef.current = null;
@@ -166,6 +172,8 @@ function Home() {
   };
 
   const stopResponse = () => {
+    flushRef.current?.();
+    flushRef.current = null;
     removePendingAssistant(activeStreamId.current);
     abortRef.current?.abort();
     abortRef.current = null;
@@ -196,7 +204,7 @@ function Home() {
     const userMessage: ChatMessage = { role: 'user', content: prompt };
     const fullMessages = [...conversation.messages.filter((m) => m.content.trim()), userMessage];
     const requestMessages = fullMessages.slice(-CONTEXT_LIMIT).map((message) => ({
-      ...message,
+      role: message.role,
       content: message.content.slice(0, 12000),
     }));
     const assistantMessage: ChatMessage = { role: 'assistant', content: '' };
@@ -213,18 +221,55 @@ function Home() {
     setDraft('');
     setError('');
     setStreaming(true);
+    setVisibleReply({ id: conversationId, content: '' });
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     const controller = new AbortController();
     abortRef.current = controller;
     activeStreamId.current = conversationId;
     let received = '';
+    let shown = 0;
+    let timer: number | null = null;
+    let drainResolve: (() => void) | null = null;
+    const patchLast = (fn: (m: ChatMessage) => ChatMessage) => updateConversation(conversationId, (item) => ({
+      ...item,
+      messages: item.messages.map((message, index) =>
+        index === item.messages.length - 1 && message.role === 'assistant' ? fn(message) : message),
+      updatedAt: Date.now(),
+    }));
+    // Persist complete received text separately from its animated presentation.
+    const writeShown = () => setVisibleReply({ id: conversationId, content: received.slice(0, shown) });
+    const tick = () => {
+      const remaining = received.length - shown;
+      if (remaining <= 0) {
+        timer = null;
+        drainResolve?.(); drainResolve = null;
+        return;
+      }
+      shown = prefersReducedMotion() ? received.length : Math.min(received.length, shown + Math.max(2, Math.ceil(remaining / 14)));
+      writeShown();
+      timer = window.setTimeout(tick, 28);
+    };
+    const pump = () => { if (timer === null) timer = window.setTimeout(tick, 0); };
+    const drain = () => new Promise<void>((resolve) => {
+      if (shown >= received.length && timer === null) return resolve();
+      drainResolve = resolve; pump();
+    });
+    const flushOutput = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+      if (shown < received.length) { shown = received.length; writeShown(); }
+      drainResolve?.();
+      drainResolve = null;
+    };
+    flushRef.current = flushOutput;
+    controller.signal.addEventListener('abort', flushOutput, { once: true });
     try {
       const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         credentials: 'include',
-        body: JSON.stringify({ messages: requestMessages, deepthink }),
+        body: JSON.stringify({ messages: requestMessages, deepthink, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -249,15 +294,20 @@ function Home() {
         if (eventData.error) throw new Error(eventData.error);
         if (typeof eventData.content === 'string') {
           received += eventData.content;
-          updateConversation(conversationId, (item) => ({
-            ...item,
-            messages: item.messages.map((message, index) =>
-              index === item.messages.length - 1 && message.role === 'assistant'
-                ? { ...message, content: received }
-                : message
-            ),
-            updatedAt: Date.now(),
-          }));
+          patchLast((message) => ({ ...message, content: received }));
+          pump();
+        }
+        const act = eventData.activity;
+        if (act && typeof act.id === 'string' && typeof act.label === 'string') {
+          patchLast((m) => (m.activity ?? []).some((a) => a.id === act.id) ? m : { ...m, activity: [...(m.activity ?? []), { id: act.id, label: act.label }] });
+        }
+        if (Array.isArray(eventData.sources)) {
+          const incoming = eventData.sources.filter((src) => src && typeof src.url === 'string' && /^https?:\/\//i.test(src.url));
+          if (incoming.length) patchLast((m) => {
+            const list = [...(m.sources ?? [])];
+            incoming.forEach((src) => { if (!list.some((x) => x.url === src.url)) list.push({ title: String(src.title ?? ''), url: src.url }); });
+            return { ...m, sources: list };
+          });
         }
         if (eventData.done) doneEvent = true;
       };
@@ -274,6 +324,8 @@ function Home() {
         blocks.forEach(acceptEvent);
       }
       if (pending.trim()) acceptEvent(pending);
+      await drain();
+      if (controller.signal.aborted) return;
       if (!doneEvent) {
         throw new Error(received ? 'The connection closed before the response finished. The partial answer is kept above.' : 'The connection closed before any response arrived. Please try again.');
       }
@@ -288,6 +340,7 @@ function Home() {
         }));
       }
     } catch (requestError) {
+      if (abortRef.current === controller) flushRef.current?.();
       if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
       if (requestError instanceof Error && requestError.name === 'AbortError') return;
       setError(requestError instanceof Error ? requestError.message : 'Something went wrong. Please try again.');
@@ -301,10 +354,13 @@ function Home() {
         }));
       }
     } finally {
+      controller.signal.removeEventListener('abort', flushOutput);
+      if (timer !== null && abortRef.current !== controller) { window.clearTimeout(timer); timer = null; }
       controller.abort();
       if (abortRef.current === controller) {
         abortRef.current = null;
         activeStreamId.current = null;
+        flushRef.current = null;
         setStreaming(false);
       }
     }
@@ -330,10 +386,7 @@ function Home() {
       <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`} aria-label="Conversation history">
         <div className="brand">
           <img className="brand-mark" src={logoUrl} alt="Nexo AI logo" data-testid="img-logo" />
-          <div>
-            <div className="brand-name">Nexo AI</div>
-            <div className="brand-note">GPT-OSS 120B on Groq</div>
-          </div>
+          <div className="brand-name">Nexo AI</div>
         </div>
         <button className="new-chat" type="button" onClick={createConversation} data-testid="button-new-chat">
           <Plus size={16} /> New conversation
@@ -366,7 +419,6 @@ function Home() {
             </div>
           ))}
         </div>
-        <div className="sidebar-foot"><span className="status-dot" aria-hidden="true" /> Private to this browser</div>
       </aside>
       <button
         className={`scrim ${sidebarOpen ? 'is-visible' : ''}`}
@@ -386,7 +438,6 @@ function Home() {
               {activeConversation?.title ?? 'New conversation'}
             </div>
           </div>
-          <div className={`mode-pill ${deepthink ? 'is-deep' : ''}`} data-testid="status-mode"><span className="mode-dot" aria-hidden="true" />{deepthink ? 'Deepthink · high reasoning' : 'Standard · medium reasoning'}</div>
         </header>
 
         <section className="chat-region" aria-label="AI conversation">
@@ -416,19 +467,22 @@ function Home() {
             ) : (
               <div className="conversation-flow" data-testid={`active-conversation-${activeConversation?.id ?? 'none'}`}>
                 {currentMessages.map((message, index) => {
-                  const isPending = streaming && message.role === 'assistant' && index === currentMessages.length - 1 && !message.content;
+                  const isLive = streaming && activeStreamId.current === activeConversation?.id && message.role === 'assistant' && index === currentMessages.length - 1;
+                  const displayContent = isLive && visibleReply?.id === activeConversation?.id ? visibleReply.content : message.content;
+                  const isPending = isLive && !displayContent;
                   return (
                     <article className={`message-row ${message.role}`} key={`${activeConversation?.id}-${index}`} data-testid={`message-${message.role}-${index}`}>
                       <div className={`avatar ${message.role === 'user' ? 'user-avatar' : ''}`} aria-hidden="true">
                         {message.role === 'assistant' ? <img src={logoUrl} alt="" /> : <span>Y</span>}
                       </div>
                       <div className="message-content">
-                        <div className="message-role">{message.role === 'assistant' ? 'Nexo AI' : 'You'}</div>
+                        {message.role === 'assistant' && <AnswerActivity message={message} live={isLive} index={index} />}
                         <div className={`message-text ${message.role === 'assistant' ? 'markdown' : ''}`} data-testid={`message-content-${index}`}>
-                          {isPending ? <span className="thinking"><LoaderCircle size={15} className="animate-spin" aria-hidden="true" /> {deepthink ? 'Thinking deeply' : 'Thinking'}</span> : message.role === 'assistant' ? (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{ a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer nofollow" />, table: ({ node: _n, ...props }) => <div className="table-wrap"><table {...props} /></div> }}>{message.content}</ReactMarkdown>
+                          {isPending ? <BrainThinking deep={deepthink} /> : message.role === 'assistant' ? (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{ a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer nofollow" />, table: ({ node: _n, ...props }) => <div className="table-wrap"><table {...props} /></div> }}>{displayContent}</ReactMarkdown>
                           ) : message.content}
-                          {streaming && message.role === 'assistant' && index === currentMessages.length - 1 && message.content && <span className="typing-caret" aria-hidden="true" />}
+                          {isLive && displayContent && deepthink && <span className="deep-inline" role="status" aria-label="Deepthink is working" data-testid="status-thinking"><Brain size={12} aria-hidden="true" /></span>}
+                          {isLive && displayContent && <span className="typing-caret" aria-hidden="true" />}
                         </div>
                       </div>
                     </article>
@@ -473,13 +527,12 @@ function Home() {
                 )}
               </div>
               <div className="composer-hint">
-                <button type="button" role="switch" aria-checked={deepthink} aria-label="Deepthink (high reasoning)" className={`deep-toggle ${deepthink ? 'is-on' : ''}`} disabled={streaming} title={streaming ? 'Mode cannot change while a response is streaming' : undefined} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
-                  <Brain size={13} aria-hidden="true" /><span>Deepthink</span><span className="switch-track" aria-hidden="true"><span className="switch-thumb" /></span><span className="deep-state">{deepthink ? 'High' : 'Medium'}</span>
+                <button type="button" aria-pressed={deepthink} className={`deep-toggle ${deepthink ? 'is-on' : ''}`} disabled={streaming} title={streaming ? 'Mode cannot change while a response is streaming' : undefined} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
+                  <Brain size={14} aria-hidden="true" /><span>Deepthink</span>
                 </button>
                 <span className="hint-keys">Enter to send · Shift + Enter for new line</span>
               </div>
             </form>
-          <p className="privacy-note">Powered by GPT-OSS 120B on Groq. Conversations are saved only in this browser.</p>
           </div>
         </section>
       </main>
