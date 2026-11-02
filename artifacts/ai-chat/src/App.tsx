@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, Bot, LoaderCircle, Menu, MessageSquare, Plus, Sparkles, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, Brain, LoaderCircle, Menu, MessageSquare, Plus, Trash2, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import logoUrl from '@assets/Screenshot_2025-08-18_173849_1793633613340.png';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -18,6 +21,8 @@ type Conversation = {
 type StreamEvent = { content?: string; done?: boolean; error?: string };
 
 const STORAGE_KEY = 'still-chat-conversations-v1';
+const DEEPTHINK_KEY = 'nexo-deepthink';
+const CONTEXT_LIMIT = 20;
 const queryClient = new QueryClient();
 
 const suggestions = [
@@ -69,6 +74,8 @@ function Home() {
   const [streaming, setStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
+  useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -187,14 +194,18 @@ function Home() {
 
     const conversationId = conversation.id;
     const userMessage: ChatMessage = { role: 'user', content: prompt };
-    const requestMessages = [...conversation.messages.slice(-19), userMessage];
+    const fullMessages = [...conversation.messages.filter((m) => m.content.trim()), userMessage];
+    const requestMessages = fullMessages.slice(-CONTEXT_LIMIT).map((message) => ({
+      ...message,
+      content: message.content.slice(0, 12000),
+    }));
     const assistantMessage: ChatMessage = { role: 'assistant', content: '' };
     setConversations((items) => {
       const exists = items.some((item) => item.id === conversationId);
       const updated: Conversation = {
         ...(exists ? items.find((item) => item.id === conversationId)! : conversation!),
         title: conversation!.messages.length === 0 ? titleFromPrompt(prompt) : conversation!.title,
-        messages: [...requestMessages, assistantMessage],
+        messages: [...fullMessages, assistantMessage],
         updatedAt: Date.now(),
       };
       return [updated, ...items.filter((item) => item.id !== conversationId)];
@@ -209,11 +220,11 @@ function Home() {
     activeStreamId.current = conversationId;
     let received = '';
     try {
-      const response = await fetch('/api/openai/chat', {
+      const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         credentials: 'include',
-        body: JSON.stringify({ messages: requestMessages }),
+        body: JSON.stringify({ messages: requestMessages, deepthink }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -263,7 +274,11 @@ function Home() {
         blocks.forEach(acceptEvent);
       }
       if (pending.trim()) acceptEvent(pending);
+      if (!doneEvent) {
+        throw new Error(received ? 'The connection closed before the response finished. The partial answer is kept above.' : 'The connection closed before any response arrived. Please try again.');
+      }
       if (!received.trim()) {
+        setError('Nexo AI returned an empty response. Try rephrasing or sending again.');
         updateConversation(conversationId, (item) => ({
           ...item,
           messages: item.messages.filter((message, index) =>
@@ -273,6 +288,7 @@ function Home() {
         }));
       }
     } catch (requestError) {
+      if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
       if (requestError instanceof Error && requestError.name === 'AbortError') return;
       setError(requestError instanceof Error ? requestError.message : 'Something went wrong. Please try again.');
       if (!received) {
@@ -285,6 +301,7 @@ function Home() {
         }));
       }
     } finally {
+      controller.abort();
       if (abortRef.current === controller) {
         abortRef.current = null;
         activeStreamId.current = null;
@@ -312,10 +329,10 @@ function Home() {
     <div className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`} aria-label="Conversation history">
         <div className="brand">
-          <div className="brand-mark" aria-hidden="true"><Sparkles size={17} strokeWidth={1.8} /></div>
+          <img className="brand-mark" src={logoUrl} alt="Nexo AI logo" data-testid="img-logo" />
           <div>
-            <div className="brand-name">Still</div>
-            <div className="brand-note">A little more clarity</div>
+            <div className="brand-name">Nexo AI</div>
+            <div className="brand-note">GPT-OSS 120B on Groq</div>
           </div>
         </div>
         <button className="new-chat" type="button" onClick={createConversation} data-testid="button-new-chat">
@@ -324,7 +341,7 @@ function Home() {
         <div className="section-label">Your conversations</div>
         <div className="thread-list" role="list" aria-label="Saved conversations" data-testid="list-conversations">
           {conversations.length === 0 ? (
-            <div className="thread-empty" data-testid="empty-conversations">Your conversations will find a home here.</div>
+            <div className="thread-empty" data-testid="empty-conversations">No conversations yet.</div>
           ) : conversations.map((conversation) => (
             <div className="thread-item" role="listitem" key={conversation.id} data-testid={`conversation-${conversation.id}`}>
               <button
@@ -365,20 +382,21 @@ function Home() {
             <button className="mobile-menu" type="button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation menu" data-testid="button-open-menu">
               <Menu size={19} />
             </button>
-            <div className="context-title" title={activeConversation?.title ?? 'A quiet place to think'}>
-              {activeConversation?.title ?? 'A quiet place to think'}
+            <div className="context-title" title={activeConversation?.title ?? 'New conversation'}>
+              {activeConversation?.title ?? 'New conversation'}
             </div>
           </div>
-          <div className="topbar-note"><Sparkles size={13} /><span>Thoughtful answers, no setup</span></div>
+          <div className={`mode-pill ${deepthink ? 'is-deep' : ''}`} data-testid="status-mode"><span className="mode-dot" aria-hidden="true" />{deepthink ? 'Deepthink · high reasoning' : 'Standard · medium reasoning'}</div>
         </header>
 
         <section className="chat-region" aria-label="AI conversation">
           <div className="messages" aria-live="polite" aria-relevant="additions text" data-testid="chat-messages">
             {currentMessages.length === 0 ? (
               <div className="welcome" data-testid="welcome-screen">
-                <div className="welcome-kicker">A fresh start</div>
-                <h1>What’s on<br />your <em>mind?</em></h1>
-                <p>Bring a question, a half-formed thought, or something you want to understand. We’ll take it one step at a time.</p>
+                <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
+                <div className="welcome-kicker">Nexo AI</div>
+                <h1>Ask anything.<br /><em>Go deeper</em> when it matters.</h1>
+                <p>Everyday questions get quick answers. Turn on Deepthink for harder problems that need more reasoning.</p>
                 <div className="suggestions" aria-label="Ideas to get started">
                   {suggestions.map((suggestion) => (
                     <button
@@ -402,12 +420,14 @@ function Home() {
                   return (
                     <article className={`message-row ${message.role}`} key={`${activeConversation?.id}-${index}`} data-testid={`message-${message.role}-${index}`}>
                       <div className={`avatar ${message.role === 'user' ? 'user-avatar' : ''}`} aria-hidden="true">
-                        {message.role === 'assistant' ? <Bot size={16} /> : <span>Y</span>}
+                        {message.role === 'assistant' ? <img src={logoUrl} alt="" /> : <span>Y</span>}
                       </div>
                       <div className="message-content">
-                        <div className="message-role">{message.role === 'assistant' ? 'Still' : 'You'}</div>
-                        <div className="message-text" data-testid={`message-content-${index}`}>
-                          {isPending ? <><LoaderCircle size={15} className="animate-spin" aria-label="Thinking" /> <span className="sr-only">Thinking</span></> : message.content}
+                        <div className="message-role">{message.role === 'assistant' ? 'Nexo AI' : 'You'}</div>
+                        <div className={`message-text ${message.role === 'assistant' ? 'markdown' : ''}`} data-testid={`message-content-${index}`}>
+                          {isPending ? <span className="thinking"><LoaderCircle size={15} className="animate-spin" aria-hidden="true" /> {deepthink ? 'Thinking deeply' : 'Thinking'}</span> : message.role === 'assistant' ? (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{ a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer nofollow" />, table: ({ node: _n, ...props }) => <div className="table-wrap"><table {...props} /></div> }}>{message.content}</ReactMarkdown>
+                          ) : message.content}
                           {streaming && message.role === 'assistant' && index === currentMessages.length - 1 && message.content && <span className="typing-caret" aria-hidden="true" />}
                         </div>
                       </div>
@@ -436,7 +456,7 @@ function Home() {
                   value={draft}
                   onChange={(event) => onDraftChange(event.target.value)}
                   onKeyDown={onComposerKeyDown}
-                  placeholder="Ask anything, or start with what’s on your mind…"
+                  placeholder={deepthink ? 'Describe a hard problem…' : 'Ask Nexo AI anything…'}
                   aria-label="Your message"
                   maxLength={12000}
                   disabled={streaming}
@@ -452,9 +472,14 @@ function Home() {
                   </button>
                 )}
               </div>
-              <div className="composer-hint"><span>Enter to send · Shift + Enter for a new line</span><span>{draft.length > 0 ? `${draft.length} characters` : 'Take your time'}</span></div>
+              <div className="composer-hint">
+                <button type="button" role="switch" aria-checked={deepthink} aria-label="Deepthink (high reasoning)" className={`deep-toggle ${deepthink ? 'is-on' : ''}`} disabled={streaming} title={streaming ? 'Mode cannot change while a response is streaming' : undefined} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
+                  <Brain size={13} aria-hidden="true" /><span>Deepthink</span><span className="switch-track" aria-hidden="true"><span className="switch-thumb" /></span><span className="deep-state">{deepthink ? 'High' : 'Medium'}</span>
+                </button>
+                <span className="hint-keys">Enter to send · Shift + Enter for new line</span>
+              </div>
             </form>
-          <p className="privacy-note">AI usage is billed to Replit credits. Your conversations stay in this browser.</p>
+          <p className="privacy-note">Powered by GPT-OSS 120B on Groq. Conversations are saved only in this browser.</p>
           </div>
         </section>
       </main>

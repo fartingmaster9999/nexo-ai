@@ -27,6 +27,8 @@ export interface ChatMessage {
 }
 
 export interface ChatInput {
+  /** Use high reasoning effort instead of medium */
+  deepthink?: boolean;
   /**
      * @minItems 1
      * @maxItems 40

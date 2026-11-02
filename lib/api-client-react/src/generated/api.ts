@@ -130,18 +130,18 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
 
 
 
-export const getStreamOpenaiChatUrl = () => {
+export const getStreamChatUrl = () => {
 
 
 
 
-  return `/api/openai/chat`
+  return `/api/chat`
 }
 
 /**
  * @summary Stream an AI chat response
  */
-export const streamOpenaiChat = async (chatInput: ChatInput, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {
+export const streamChat = async (chatInput: ChatInput, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {
 
     const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
@@ -157,7 +157,7 @@ export const streamOpenaiChat = async (chatInput: ChatInput, options?: Parameter
     }
     return headers;
   };
-return customFetch<unknown>(getStreamOpenaiChatUrl(),
+return customFetch<unknown>(getStreamChatUrl(),
   {
     ...options,
     method: 'POST',
@@ -170,13 +170,13 @@ return customFetch<unknown>(getStreamOpenaiChatUrl(),
 
 
 
-export const getStreamOpenaiChatMutationKey = () => ['streamOpenaiChat'] as const;
+export const getStreamChatMutationKey = () => ['streamChat'] as const;
 
-export const getStreamOpenaiChatMutationOptions = <TError = ErrorType<ApiError>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamOpenaiChat>>, TError,StreamOpenaiChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof streamOpenaiChat>>, TError,StreamOpenaiChatMutationVariables, TContext> => {
+export const getStreamChatMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamChat>>, TError,StreamChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof streamChat>>, TError,StreamChatMutationVariables, TContext> => {
 
-const mutationKey = getStreamOpenaiChatMutationKey();
+const mutationKey = getStreamChatMutationKey();
 const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
@@ -186,10 +186,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof streamOpenaiChat>>, StreamOpenaiChatMutationVariables> = (props) => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof streamChat>>, StreamChatMutationVariables> = (props) => {
           const {data} = props ?? {};
 
-          return  streamOpenaiChat(data,requestOptions)
+          return  streamChat(data,requestOptions)
         }
 
 
@@ -199,22 +199,22 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
   return  { mutationFn, ...mutationOptions }}
 
-    export type StreamOpenaiChatMutationResult = NonNullable<Awaited<ReturnType<typeof streamOpenaiChat>>>
-    export type StreamOpenaiChatMutationBody = BodyType<ChatInput>
-    export type StreamOpenaiChatMutationError = ErrorType<ApiError>
-    export type StreamOpenaiChatMutationVariables = {data: BodyType<ChatInput>}
+    export type StreamChatMutationResult = NonNullable<Awaited<ReturnType<typeof streamChat>>>
+    export type StreamChatMutationBody = BodyType<ChatInput>
+    export type StreamChatMutationError = ErrorType<ApiError>
+    export type StreamChatMutationVariables = {data: BodyType<ChatInput>}
 
     /**
  * @summary Stream an AI chat response
  */
-export const useStreamOpenaiChat = <TError = ErrorType<ApiError>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamOpenaiChat>>, TError,StreamOpenaiChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+export const useStreamChat = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamChat>>, TError,StreamChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
-        Awaited<ReturnType<typeof streamOpenaiChat>>,
+        Awaited<ReturnType<typeof streamChat>>,
         TError,
-        StreamOpenaiChatMutationVariables,
+        StreamChatMutationVariables,
         TContext
       > => {
-      return useMutation(getStreamOpenaiChatMutationOptions(options));
+      return useMutation(getStreamChatMutationOptions(options));
     }
 

@@ -1,0 +1,1 @@
+- [AI provider policy](ai-provider-policy.md) — Nexo AI must use the user's Groq key, with no OpenAI API or Replit AI billing fallback.

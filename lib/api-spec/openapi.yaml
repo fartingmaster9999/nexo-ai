@@ -10,8 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
-  - name: openai
-    description: OpenAI chat operations
+  - name: chat
+    description: Groq-powered Nexo AI chat
 paths:
   /healthz:
     get:
@@ -26,10 +26,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
-  /openai/chat:
+  /chat:
     post:
-      operationId: streamOpenaiChat
-      tags: [openai]
+      operationId: streamChat
+      tags: [chat]
       summary: Stream an AI chat response
       requestBody:
         required: true
@@ -48,8 +48,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
-        "500":
+        "502":
           description: AI service error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: Groq is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: Groq rate limit reached
           content:
             application/json:
               schema:
@@ -79,6 +91,10 @@ components:
     ChatInput:
       type: object
       properties:
+        deepthink:
+          type: boolean
+          default: false
+          description: Use high reasoning effort instead of medium
         messages:
           type: array
           minItems: 1

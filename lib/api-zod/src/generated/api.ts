@@ -20,19 +20,21 @@ export const HealthCheckResponse = zod.object({
 /**
  * @summary Stream an AI chat response
  */
-export const streamOpenaiChatBodyMessagesItemContentMax = 12000;
+export const streamChatBodyDeepthinkDefault = false;
+export const streamChatBodyMessagesItemContentMax = 12000;
 
-export const streamOpenaiChatBodyMessagesMax = 40;
+export const streamChatBodyMessagesMax = 40;
 
 
 
-export const StreamOpenaiChatBody = zod.object({
+export const StreamChatBody = zod.object({
+  "deepthink": zod.boolean().default(streamChatBodyDeepthinkDefault).describe('Use high reasoning effort instead of medium'),
   "messages": zod.array(zod.object({
   "role": zod.enum(['user', 'assistant']),
-  "content": zod.string().min(1).max(streamOpenaiChatBodyMessagesItemContentMax)
-})).min(1).max(streamOpenaiChatBodyMessagesMax)
+  "content": zod.string().min(1).max(streamChatBodyMessagesItemContentMax)
+})).min(1).max(streamChatBodyMessagesMax)
 })
 
-export const StreamOpenaiChatResponse = zod.unknown()
+export const StreamChatResponse = zod.unknown()
 
 
