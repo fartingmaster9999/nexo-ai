@@ -1,8 +1,13 @@
 import { Router, type IRouter } from "express";
 import Groq from "groq-sdk";
 import { StreamChatBody } from "@workspace/api-zod";
-import { buildChatRequest, CHAT_MODEL, isValidTimeZone } from "../lib/chat-request";
-import { extractSearchSources } from "../lib/search-activity";
+import { buildChatRequest, isValidTimeZone } from "../lib/chat-request";
+import { buildSearchQuery, isCodingRequest, needsWebSearch } from "../lib/chat-policy";
+import { searchWeb } from "../lib/web-search";
+import {
+  availableModels, chooseModels, openModelStream, PRIMARY_MODEL, SMALL_MODEL,
+  UsageLimitError, USAGE_LIMIT_MESSAGE, DOWNGRADE_MESSAGE, markRateLimited,
+} from "../lib/model-routing";
 
 const router: IRouter = Router();
 
@@ -13,86 +18,100 @@ router.post("/chat", async (req, res): Promise<void> => {
     return;
   }
   if (!process.env.GROQ_API_KEY) {
-    res.status(503).json({ error: "Groq is not configured. Add GROQ_API_KEY to enable Nexo AI." });
+    res.status(503).json({ error: "Nexo AI is not configured. Please contact the site owner." });
     return;
   }
-  if (parsed.data.timeZone && !isValidTimeZone(parsed.data.timeZone)) {
+  if (parsed.data.timeZone !== undefined && !isValidTimeZone(parsed.data.timeZone)) {
     res.status(400).json({ error: "The provided timezone is invalid." });
     return;
   }
-
-  // Fixed Groq host: no provider override, OpenAI client, or fallback.
   const client = new Groq({
-    apiKey: process.env.GROQ_API_KEY,
-    baseURL: "https://api.groq.com",
-    timeout: 180000,
-    maxRetries: 2,
+    apiKey: process.env.GROQ_API_KEY, baseURL: "https://api.groq.com",
+    timeout: 120000, maxRetries: 0,
   });
   const controller = new AbortController();
-  const abortOnDisconnect = () => {
-    if (!res.writableEnded) controller.abort();
-  };
+  const abortOnDisconnect = () => { if (!res.writableEnded) controller.abort(); };
   res.on("close", abortOnDisconnect);
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let activeModel = PRIMARY_MODEL;
+  const emit = (event: object) => {
+    if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  const activity = (id: string, label: string, kind = "info", status = "complete") =>
+    emit({ activity: { id, label, kind, status } });
 
   try {
-    const request = buildChatRequest(parsed.data);
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
-    res.write(`data: ${JSON.stringify({ provider: "groq", model: CHAT_MODEL, reasoningEffort: request.reasoning_effort })}\n\n`);
-    res.write(`data: ${JSON.stringify({ activity: { id: "clock", label: "Current date and time included" } })}\n\n`);
-    res.write(`data: ${JSON.stringify({ activity: { id: "generating", label: parsed.data.deepthink ? "Generating with Deepthink" : "Preparing an answer" } })}\n\n`);
     heartbeat = setInterval(() => {
       if (!res.destroyed && !res.writableEnded) res.write(": keepalive\n\n");
-    }, 15000);
-    const stream = await client.chat.completions.create(request, { signal: controller.signal });
+    }, 10000);
+    activity("clock", "Current date and time included");
 
+    const lastPrompt = parsed.data.messages.at(-1)!.content;
+    const coding = isCodingRequest(lastPrompt);
+    let webContext: string | undefined;
+    let searchFailed = false;
+    if (needsWebSearch(lastPrompt)) {
+      activity("search", "Searching the web and reading public pages…", "search", "running");
+      try {
+        const result = await searchWeb(buildSearchQuery(parsed.data.messages));
+        if (controller.signal.aborted) return;
+        webContext = result.context;
+        emit({ sources: result.sources });
+        activity("search", `${result.cached ? "Reused recent" : "Found"} ${result.sources.length} public sources${result.provider === "public-scraper" ? " with the direct scraper" : ""}`, "search");
+      } catch {
+        if (controller.signal.aborted) return;
+        req.log.warn({ service: "web-search" }, "External sources could not be retrieved");
+        searchFailed = true;
+        activity("search", "Web search unavailable; current facts could not be verified", "search", "error");
+      }
+    }
+    if (controller.signal.aborted) return;
+    activity("generating", parsed.data.deepthink ? "Thinking… Deepthink is working" : "Preparing a focused answer", "thinking", "running");
+
+    const ids = coding ? await availableModels(client) : [PRIMARY_MODEL, SMALL_MODEL];
+    const candidates = chooseModels(ids, coding);
+    const { model, stream } = await openModelStream(
+      candidates,
+      (candidate) => client.chat.completions.create(
+        buildChatRequest(parsed.data, new Date(), { model: candidate, webContext, searchFailed, coding }),
+        { signal: controller.signal },
+      ),
+      (fallback) => emit({ notice: { id: "model-downgrade", message: DOWNGRADE_MESSAGE, model: fallback } }),
+    );
+    activeModel = model;
+    emit({ provider: "groq", model, reasoningEffort: parsed.data.deepthink ? "high" : "medium" });
     let hasContent = false;
     let finishReason: string | null = null;
-    let searchObserved = false;
-    const seenSources = new Map<string, { title: string; url: string }>();
     for await (const chunk of stream) {
       const choice = chunk.choices[0];
-      const tools = choice?.delta?.executed_tools ?? [];
-      if (tools.some((tool) => tool.type === "browser_search" || tool.type.startsWith("browser."))) {
-        searchObserved = true;
-        res.write(`data: ${JSON.stringify({ activity: { id: "search", label: "Live web search used" } })}\n\n`);
-        for (const source of extractSearchSources(tools)) seenSources.set(source.url, source);
-        if (seenSources.size) res.write(`data: ${JSON.stringify({ sources: [...seenSources.values()].slice(0, 20) })}\n\n`);
-      }
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       const content = choice?.delta?.content;
       if (typeof content === "string" && content.length > 0) {
         hasContent = true;
-        res.write(`data: ${JSON.stringify({ content })}\n\n`);
+        emit({ content });
       }
     }
-    if (!hasContent) throw new Error("Empty Groq completion");
-    res.write(`data: ${JSON.stringify({ activity: { id: "complete", label: searchObserved ? "Answer prepared with live web results" : "Answer ready" } })}\n\n`);
-    if (finishReason === "length") {
-      res.write(`data: ${JSON.stringify({ error: "The response reached its length limit. Ask Nexo AI to continue." })}\n\n`);
-    } else {
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-    }
+    if (!hasContent) throw new Error("Empty completion");
+    activity("generating", "…done thinking.", "thinking");
+    emit(finishReason === "length"
+      ? { error: "The response reached its length limit. Ask Nexo AI to continue." }
+      : { done: true });
     res.end();
   } catch (error) {
     if (controller.signal.aborted || res.destroyed || res.writableEnded) return;
     const status = error instanceof Groq.APIError ? error.status : undefined;
-    // Do not log SDK errors wholesale: request headers can contain credentials.
-    req.log.error({ provider: "groq", status }, "Groq chat request failed");
-    const message = status === 429
-      ? "Groq's usage limit was reached. Please wait briefly and try again."
-      : status === 401 || status === 403
-        ? "Groq could not authorize this request. Check the server's Groq API key and model access."
-        : "Groq could not complete the response. Please try again.";
-    if (res.headersSent) {
-      res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
-      res.end();
-    } else {
-      res.status(status === 429 ? 429 : 502).json({ error: message });
-    }
+    req.log.error({ provider: "groq", status }, "Chat request failed");
+    if (status === 429) markRateLimited(activeModel);
+    const message = status === 429 || error instanceof UsageLimitError ? USAGE_LIMIT_MESSAGE
+      : status === 401 || status === 403 ? "Nexo AI could not authorize this request. Please contact the site owner."
+        : "The response could not be completed. Please try again.";
+    activity("generating", "Response interrupted", "thinking", "error");
+    emit({ error: message });
+    res.end();
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     res.off("close", abortOnDisconnect);

@@ -1,0 +1,26 @@
+export type InputMessage = { role: "user" | "assistant"; content: string };
+
+export function isCodingRequest(text: string): boolean {
+  return /```|\b(code|coding|debug|program(?:ming)?|script|function|algorithm|numpy|scipy|matplotlib|python|javascript|typescript|html|css|sql|compile|compiler|traceback|stack trace)\b/i.test(text);
+}
+
+/** 2024 is the user's search policy, not a claim about a model's training cutoff. */
+export function needsWebSearch(text: string): boolean {
+  const current = /\b(latest|current(?:ly)?|recent|news|today|tonight|tomorrow|yesterday|this (?:week|month|year)|breaking|weather|forecast|stock price|exchange rate|live score|who won|who (?:is|are).{0,60}(?:president|prime minister|ceo|governor))\b/i;
+  const years = [...text.matchAll(/\b(?:19|20)\d{2}\b/g)].map((m) => Number(m[0]));
+  if (years.length && years.every((year) => year < 2024) && !current.test(text)) return false;
+  if (/\b(time|date|day)\b/i.test(text) && /\b(now|today|current)\b|what time is it|what (?:day|date) is it/i.test(text)
+    && !/\b(news|weather|event|match|game|release|price|meeting)\b/i.test(text)) return false;
+  if (isCodingRequest(text) && !/\b(latest|new (?:api|version)|released?|documentation|202[4-9]|20[3-9]\d)\b/i.test(text)) return false;
+  return years.some((year) => year >= 2024) || current.test(text)
+    || /\b(search|look up|browse|find.{0,20}(?:online|web|internet))\b/i.test(text);
+}
+
+export function buildSearchQuery(messages: InputMessage[]): string {
+  const last = messages.at(-1)?.content ?? "";
+  const previous = messages.slice(0, -1).reverse().find((message) => message.role === "user")?.content;
+  // Resolve short temporal follow-ups without sending the whole private conversation.
+  const context = last.length < 100 && /\b(it|that|this|those|about|tomorrow|today)\b/i.test(last) && previous
+    ? `${previous.slice(0, 250)} ${last}` : last;
+  return context.replace(/```[\s\S]*?```/g, "").replace(/\s+/g, " ").trim().slice(0, 650);
+}

@@ -39,7 +39,7 @@ paths:
               $ref: "#/components/schemas/ChatInput"
       responses:
         "200":
-          description: Server-sent JSON events containing content, activity labels, sources, request metadata, done, or error. Private model reasoning is never included.
+          description: Server-sent JSON events containing content, activity with id/label/kind/status, sources, model metadata, notice with id/message/model for fallbacks, done, or error. Private model reasoning is never included. Web search is external and selective.
           content:
             text/event-stream: {}
         "400":

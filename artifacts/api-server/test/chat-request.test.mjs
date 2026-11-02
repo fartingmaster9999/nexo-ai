@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildChatRequest, isValidTimeZone } from "../src/lib/chat-request.ts";
+import { buildChatRequest, isValidTimeZone, boundedHistory } from "../src/lib/chat-request.ts";
 import { extractSearchSources } from "../src/lib/search-activity.ts";
+import { needsWebSearch, isCodingRequest, buildSearchQuery } from "../src/lib/chat-policy.ts";
+import { chooseModels, openModelStream, USAGE_LIMIT_MESSAGE, PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK } from "../src/lib/model-routing.ts";
 
 const messages = [{ role: "user", content: "What is 17 times 19?" }];
 
@@ -34,10 +36,10 @@ test("caller model and effort overrides are ignored and history is unmodified", 
   assert.deepEqual(messages, original);
 });
 
-test("live search is available automatically and private reasoning stays hidden", () => {
+test("Groq browser tools are never enabled; private reasoning stays hidden", () => {
   const result = buildChatRequest({ messages });
-  assert.deepEqual(result.tools, [{ type: "browser_search" }]);
-  assert.equal(result.tool_choice, "auto");
+  assert.equal(result.tools, undefined);
+  assert.equal(result.tool_choice, "none");
   assert.equal(result.include_reasoning, false);
 });
 
@@ -61,4 +63,65 @@ test("public sources are deduplicated and unsafe links rejected", () => {
     ],
     search_results: { results: [{ url: "https://www.nasa.gov/news/", title: "NASA News" }] },
   }]), [{ url: "https://www.nasa.gov/news/", title: "NASA News" }]);
+});
+
+test("search is selective, honors the 2024 policy and does not waste searches on clock or coding", () => {
+  for (const prompt of ["Hi", "Explain Newton's laws", "What happened in 1999?", "Search the web about the 1969 moon landing", "What is the current date and time?", "Write Python code to sort a list", "My current code has a bug"]) {
+    assert.equal(needsWebSearch(prompt), false, prompt);
+  }
+  for (const prompt of ["What happened at the 2024 Olympics?", "Latest NASA news", "Who is the president of the USA?", "What is today's weather in Chicago?", "Latest Python version"]) {
+    assert.equal(needsWebSearch(prompt), true, prompt);
+  }
+  assert.equal(isCodingRequest("Generate Python code using numpy"), true);
+  assert.equal(isCodingRequest("Tell me a story"), false);
+  assert.match(buildSearchQuery([{role:"user",content:"Weather in Chicago"}, {role:"assistant",content:"Sunny"}, {role:"user",content:"What about tomorrow?"}]), /Weather in Chicago/);
+});
+
+test("model selection uses a real coder when available and the requested fallbacks otherwise", () => {
+  const ids = [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK];
+  assert.deepEqual(chooseModels(ids, false), [PRIMARY_MODEL, SMALL_MODEL]);
+  assert.deepEqual(chooseModels(ids, true), [PRIMARY_MODEL, CODING_FALLBACK]);
+  assert.deepEqual(chooseModels([...ids,"qwen/example-coder"], true), ["qwen/example-coder", CODING_FALLBACK]);
+});
+
+test("an actual 429 switches models once and emits a downgrade notice", async () => {
+  const attempts = [], notices = [];
+  const result = await openModelStream(["unit-primary","unit-fallback"], async model => {
+    attempts.push(model);
+    if (model === "unit-primary") throw {status:429};
+    return "working-stream";
+  }, model => notices.push(model));
+  assert.deepEqual(attempts, ["unit-primary","unit-fallback"]);
+  assert.deepEqual(notices, ["unit-fallback"]);
+  assert.equal(result.model, "unit-fallback");
+  assert.equal(result.stream, "working-stream");
+});
+
+test("exhausting both models returns the exact requested usage message", async () => {
+  await assert.rejects(openModelStream(["quota-a","quota-b"], async () => {throw {status:429};}, () => {}), {message:USAGE_LIMIT_MESSAGE});
+  assert.equal(USAGE_LIMIT_MESSAGE, "You have reached your usage limits, please try again later");
+});
+
+test("authorization errors are not incorrectly treated as usage limits", async () => {
+  let attempts = 0;
+  await assert.rejects(openModelStream(["auth-a","auth-b"], async () => {attempts++;throw Object.assign(new Error("Denied"),{status:401});}, () => {}));
+  assert.equal(attempts, 1);
+});
+
+test("Qwen coding fallback uses its supported hidden reasoning format", () => {
+  const result = buildChatRequest({messages,deepthink:true},new Date(),{model:CODING_FALLBACK,coding:true});
+  assert.equal(result.model,CODING_FALLBACK);
+  assert.equal(result.reasoning_format,"hidden");
+  assert.equal(result.include_reasoning,undefined);
+  assert.equal(result.tools,undefined);
+  assert.match(result.messages[0].content,/NumPy/);
+});
+
+test("only API context is bounded; the newest message is retained and input history unmodified", () => {
+  const history = Array.from({length:20},(_,i)=>({role:i%2?"user":"assistant",content:String(i).repeat(2000)}));
+  const original = structuredClone(history);
+  const bounded = boundedHistory(history,16000);
+  assert.ok(bounded.reduce((n,m)=>n+m.content.length,0)<=16000);
+  assert.deepEqual(bounded.at(-1),history.at(-1));
+  assert.deepEqual(history,original);
 });

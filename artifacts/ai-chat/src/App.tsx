@@ -1,13 +1,19 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, Brain, Menu, MessageSquare, Plus, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, Brain, Code2, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
-import { AnswerActivity, BrainThinking, type Activity, type Source, type ChatMessage } from '@/components/answer-details';
+import { NoticeBanner, ThinkingPanel, BrainThinking, type Activity, type Source, type ChatMessage, type Notice } from '@/components/answer-details';
+import { CodeWorkspace } from '@/components/code-workspace';
+import { SettingsDialog } from '@/components/settings-dialog';
+import { useThemeSettings } from '@/hooks/use-theme';
+import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
+import { extractSnippets } from '@/lib/code-extract';
+import './nexo.css';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
 const logoUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/nexo-logo.png`;
@@ -20,7 +26,7 @@ type Conversation = {
   createdAt: number;
   updatedAt: number;
 };
-type StreamEvent = { content?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[] };
+type StreamEvent = { content?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string };
 
 const STORAGE_KEY = 'still-chat-conversations-v1';
 const DEEPTHINK_KEY = 'nexo-deepthink';
@@ -31,7 +37,7 @@ const suggestions = [
   { label: 'Make a plan', text: 'Help me make a realistic plan for a calmer, more focused week.' },
   { label: 'Understand something', text: 'Explain compound interest in plain language, with a simple example.' },
   { label: 'Find the words', text: 'Help me write a thoughtful note to someone I have not checked in with.' },
-  { label: 'Think it through', text: 'I have a decision to make. Help me sort through the trade-offs.' },
+  { label: 'Write some code', text: 'Write a Python script that plots a damped sine wave with Matplotlib.' },
 ];
 
 function readConversations(): Conversation[] {
@@ -75,7 +81,14 @@ function Home() {
   const [error, setError] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [visibleReply, setVisibleReply] = useState<{ id: string; content: string } | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebar = useSidebar();
+  const sidebarOpen = sidebar.open;
+  const setSidebarOpen = sidebar.setOpen;
+  const closeIfMobile = () => { if (isMobile()) setSidebarOpen(false); };
+  const theme = useThemeSettings();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const autoOpened = useRef<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
@@ -87,6 +100,22 @@ function Home() {
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeId) ?? null;
   const currentMessages = activeConversation?.messages ?? [];
+  const lastAssistantIndex = currentMessages.map((m) => m.role).lastIndexOf('assistant');
+  const codeSource = (() => {
+    for (let i = currentMessages.length - 1; i >= 0; i--) {
+      const m = currentMessages[i];
+      if (m.role === 'assistant' && m.content.includes('```')) return { index: i, text: m.content };
+    }
+    return null;
+  })();
+  const snippets = useMemo(() => codeSource ? extractSnippets(codeSource.text) : [], [codeSource?.text]);
+  useEffect(() => {
+    if (!snippets.length || !activeId || !codeSource) return;
+    const k = `${activeId}:${codeSource.index}`;
+    if (autoOpened.current === k) return;
+    autoOpened.current = k;
+    if (codeSource.index === lastAssistantIndex && streaming) setWorkspaceOpen(true);
+  }, [snippets.length, activeId, codeSource?.index, lastAssistantIndex, streaming]);
 
   useEffect(() => {
     setHydrated(true);
@@ -108,7 +137,7 @@ function Home() {
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setSidebarOpen(false);
+      if (event.key === 'Escape' && isMobile() && !document.querySelector('[role="dialog"]')) setSidebarOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -147,14 +176,14 @@ function Home() {
     };
     setConversations((items) => [conversation, ...items]);
     setActiveId(conversation.id);
-    setSidebarOpen(false);
+    closeIfMobile();
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   }, [removePendingAssistant]);
 
   const selectConversation = (id: string) => {
     setActiveId(id);
     setError('');
-    setSidebarOpen(false);
+    closeIfMobile();
   };
 
   const deleteConversation = (conversation: Conversation) => {
@@ -299,8 +328,19 @@ function Home() {
         }
         const act = eventData.activity;
         if (act && typeof act.id === 'string' && typeof act.label === 'string') {
-          patchLast((m) => (m.activity ?? []).some((a) => a.id === act.id) ? m : { ...m, activity: [...(m.activity ?? []), { id: act.id, label: act.label }] });
+          const clean: Activity = { id: act.id, label: act.label, kind: act.kind, status: act.status };
+          patchLast((m) => {
+            const list = m.activity ?? [];
+            return list.some((a) => a.id === act.id)
+              ? { ...m, activity: list.map((a) => a.id === act.id ? { ...a, ...Object.fromEntries(Object.entries(clean).filter(([, v]) => v !== undefined)) } : a) }
+              : { ...m, activity: [...list, clean] };
+          });
         }
+        const nt = eventData.notice;
+        if (nt && typeof nt.id === 'string' && typeof nt.message === 'string') {
+          patchLast((m) => (m.notices ?? []).some((n) => n.id === nt.id) ? m : { ...m, notices: [...(m.notices ?? []), { id: nt.id, message: nt.message, model: typeof nt.model === 'string' ? nt.model : undefined }] });
+        }
+        if (typeof eventData.model === 'string') { const mdl = eventData.model; patchLast((m) => ({ ...m, model: mdl })); }
         if (Array.isArray(eventData.sources)) {
           const incoming = eventData.sources.filter((src) => src && typeof src.url === 'string' && /^https?:\/\//i.test(src.url));
           if (incoming.length) patchLast((m) => {
@@ -383,15 +423,15 @@ function Home() {
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`} aria-label="Conversation history">
+      <aside id="history-sidebar" className={`sidebar ${sidebarOpen ? 'is-open' : 'is-collapsed'}`} style={{ ['--sb-w' as string]: `${sidebar.width}px` }} aria-label="Conversation history">
         <div className="brand">
           <img className="brand-mark" src={logoUrl} alt="Nexo AI logo" data-testid="img-logo" />
           <div className="brand-name">Nexo AI</div>
+          <button type="button" className="icon-btn sb-close-mobile" onClick={() => setSidebarOpen(false)} aria-label="Close history sidebar" data-testid="button-close-sidebar"><X size={16} /></button>
         </div>
         <button className="new-chat" type="button" onClick={createConversation} data-testid="button-new-chat">
           <Plus size={16} /> New conversation
         </button>
-        <div className="section-label">Your conversations</div>
         <div className="thread-list" role="list" aria-label="Saved conversations" data-testid="list-conversations">
           {conversations.length === 0 ? (
             <div className="thread-empty" data-testid="empty-conversations">No conversations yet.</div>
@@ -419,7 +459,12 @@ function Home() {
             </div>
           ))}
         </div>
+        <button type="button" className="sidebar-settings" onClick={() => setSettingsOpen(true)} data-testid="button-open-settings-sidebar"><Settings2 size={14} /> Appearance</button>
       </aside>
+      {sidebarOpen && (
+        <div className="sb-sep" role="separator" aria-orientation="vertical" aria-label="Resize conversation history" tabIndex={0}
+          aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} aria-valuenow={sidebar.width} {...sidebar.separatorProps} data-testid="separator-sidebar" />
+      )}
       <button
         className={`scrim ${sidebarOpen ? 'is-visible' : ''}`}
         type="button"
@@ -431,12 +476,16 @@ function Home() {
       <main className="main-pane">
         <header className="topbar">
           <div className="topbar-left">
-            <button className="mobile-menu" type="button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation menu" data-testid="button-open-menu">
-              <Menu size={19} />
+            <button className="icon-btn" type="button" onClick={() => setSidebarOpen((v) => !v)} aria-label={sidebarOpen ? 'Close history sidebar' : 'Open history sidebar'} aria-expanded={sidebarOpen} aria-controls="history-sidebar" data-testid="button-toggle-sidebar">
+              <PanelLeft size={18} />
             </button>
             <div className="context-title" title={activeConversation?.title ?? 'New conversation'}>
               {activeConversation?.title ?? 'New conversation'}
             </div>
+          </div>
+          <div className="topbar-right">
+            <button type="button" className={`top-btn ${workspaceOpen ? 'is-on' : ''}`} aria-pressed={workspaceOpen} onClick={() => setWorkspaceOpen((v) => !v)} data-testid="button-toggle-workspace"><Code2 size={15} /><span>Workspace</span></button>
+            <button type="button" className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Appearance settings" data-testid="button-open-settings"><Settings2 size={17} /></button>
           </div>
         </header>
 
@@ -445,8 +494,8 @@ function Home() {
             {currentMessages.length === 0 ? (
               <div className="welcome" data-testid="welcome-screen">
                 <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
-                <h1>Ask anything.<br /><em>Go deeper</em> when it matters.</h1>
-                <p>Everyday questions get quick answers. Turn on Deepthink for harder problems that need more reasoning.</p>
+                <h1>Ask anything.<br /><em>Build</em> it right here.</h1>
+                <p>Everyday questions get quick answers. Ask for code and it opens in a live workspace beside the chat. Turn on Deepthink for harder problems.</p>
                 <div className="suggestions" aria-label="Ideas to get started">
                   {suggestions.map((suggestion) => (
                     <button
@@ -471,11 +520,12 @@ function Home() {
                   const isPending = isLive && !displayContent;
                   return (
                     <article className={`message-row ${message.role}`} key={`${activeConversation?.id}-${index}`} data-testid={`message-${message.role}-${index}`}>
-                      <div className={`avatar ${message.role === 'user' ? 'user-avatar' : ''}`} aria-hidden="true">
-                        {message.role === 'assistant' ? <img src={logoUrl} alt="" /> : <span>Y</span>}
+                      <div className={`avatar ${message.role === 'user' ? 'user-avatar is-blank' : ''}`} aria-hidden="true">
+                        {message.role === 'assistant' && <img src={logoUrl} alt="" />}
                       </div>
                       <div className="message-content">
-                        {message.role === 'assistant' && <AnswerActivity message={message} live={isLive} index={index} />}
+                        {message.role === 'assistant' && <NoticeBanner notices={message.notices} index={index} />}
+                        {message.role === 'assistant' && <ThinkingPanel message={message} live={isLive} index={index} />}
                         <div className={`message-text ${message.role === 'assistant' ? 'markdown' : ''}`} data-testid={`message-content-${index}`}>
                           {isPending ? <BrainThinking deep={deepthink} /> : message.role === 'assistant' ? (
                             <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{ a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer nofollow" />, table: ({ node: _n, ...props }) => <div className="table-wrap"><table {...props} /></div> }}>{displayContent}</ReactMarkdown>
@@ -535,6 +585,11 @@ function Home() {
           </div>
         </section>
       </main>
+      {workspaceOpen && (
+        <CodeWorkspace conversationId={activeId} snippets={snippets} onClose={() => setWorkspaceOpen(false)} canAsk={!streaming}
+          isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} />
+      )}
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId={theme.themeId} accentId={theme.accentId} setTheme={theme.setTheme} setAccent={theme.setAccent} />
     </div>
   );
 }
