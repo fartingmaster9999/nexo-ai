@@ -7,7 +7,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
-import { NoticeBanner, ThinkingPanel, BrainThinking, type Activity, type Source, type ChatMessage, type Notice } from '@/components/answer-details';
+import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type Source, type ChatMessage, type Notice } from '@/components/answer-details';
 import { CodeWorkspace } from '@/components/code-workspace';
 import { SettingsDialog } from '@/components/settings-dialog';
 import { useThemeSettings } from '@/hooks/use-theme';
@@ -238,7 +238,7 @@ function Home() {
       role: message.role,
       content: message.content.slice(0, 12000),
     }));
-    const assistantMessage: ChatMessage = { role: 'assistant', content: '' };
+    const assistantMessage: ChatMessage = { role: 'assistant', content: '', deepthink };
     setConversations((items) => {
       const exists = items.some((item) => item.id === conversationId);
       const updated: Conversation = {
@@ -522,6 +522,7 @@ function Home() {
                   const isLive = streaming && activeStreamId.current === activeConversation?.id && message.role === 'assistant' && index === currentMessages.length - 1;
                   const displayContent = isLive && visibleReply?.id === activeConversation?.id ? visibleReply.content : message.content;
                   const isPending = isLive && !displayContent;
+                  const replyDeepthink = message.deepthink ?? deepthink;
                   return (
                     <article className={`message-row ${message.role}`} key={`${activeConversation?.id}-${index}`} data-testid={`message-${message.role}-${index}`}>
                       <div className={`avatar ${message.role === 'user' ? 'user-avatar is-blank' : ''}`} aria-hidden="true">
@@ -531,10 +532,10 @@ function Home() {
                         {message.role === 'assistant' && <NoticeBanner notices={message.notices} index={index} />}
                         {message.role === 'assistant' && <ThinkingPanel message={message} live={isLive} index={index} />}
                         <div className={`message-text ${message.role === 'assistant' ? 'markdown' : ''}`} data-testid={`message-content-${index}`}>
-                          {isPending ? <BrainThinking deep={deepthink} /> : message.role === 'assistant' ? (
+                          {isPending ? (isSearching(message, isLive) ? null : <ReplyStatus mode={replyDeepthink ? 'deep' : 'normal'} />) : message.role === 'assistant' ? (
                             <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{ a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer nofollow" />, table: ({ node: _n, ...props }) => <div className="table-wrap"><table {...props} /></div> }}>{displayContent}</ReactMarkdown>
                           ) : message.content}
-                          {isLive && displayContent && deepthink && <span className="deep-inline" role="status" aria-label="Deepthink is working" data-testid="status-thinking"><Brain size={12} aria-hidden="true" /></span>}
+                          {isLive && displayContent && replyDeepthink && !isSearching(message, isLive) && <ReplyStatus mode="deep" compact />}
                           {isLive && displayContent && <span className="typing-caret" aria-hidden="true" />}
                         </div>
                       </div>

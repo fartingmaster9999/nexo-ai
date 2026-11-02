@@ -33,9 +33,27 @@ export function isCoolingDown(model: string): boolean {
 }
 
 export function markRateLimited(model: string, retryAfter?: string | null): void {
-  const seconds = retryAfter ? Number(retryAfter) : NaN;
-  // Skip repeated failed requests briefly, but never pretend quotas have reset.
-  cooldowns.set(model, Date.now() + Math.min(300, Math.max(15, Number.isFinite(seconds) ? seconds : 60)) * 1000);
+  const seconds = retryAfter?.trim() ? Number(retryAfter) : NaN;
+  const dateDelay = retryAfter && !Number.isFinite(seconds)
+    ? (Date.parse(retryAfter) - Date.now()) / 1000 : NaN;
+  const delay = Number.isFinite(seconds) ? seconds : Number.isFinite(dateDelay) ? dateDelay : 1;
+  // Honor short provider retry windows instead of inventing a 15–60 second lockout.
+  cooldowns.set(model, Date.now() + Math.min(300, Math.max(0, delay)) * 1000);
+}
+
+/** Only allowlisted quota metadata; never log upstream bodies, prompts or credentials. */
+export function rateLimitDiagnostics(error: unknown) {
+  const candidate = error as { headers?: Headers; error?: { error?: { message?: string }; message?: string } };
+  const message = candidate.error?.error?.message ?? candidate.error?.message ?? "";
+  const metric = /\b(TPM|TPD|RPM|RPD|ITPM|OTPM)\b/i.exec(message)?.[1]?.toUpperCase();
+  return {
+    metric: metric ?? "unknown",
+    retryAfter: candidate.headers?.get?.("retry-after") ?? null,
+    remainingRequests: candidate.headers?.get?.("x-ratelimit-remaining-requests") ?? null,
+    remainingTokens: candidate.headers?.get?.("x-ratelimit-remaining-tokens") ?? null,
+    tokenLimit: candidate.headers?.get?.("x-ratelimit-limit-tokens") ?? null,
+    resetTokens: candidate.headers?.get?.("x-ratelimit-reset-tokens") ?? null,
+  };
 }
 
 export class UsageLimitError extends Error {
@@ -47,6 +65,7 @@ export async function openModelStream<T>(
   models: string[],
   create: (model: string) => Promise<T>,
   onDowngrade: (model: string) => void,
+  onRateLimit?: (model: string, diagnostics: ReturnType<typeof rateLimitDiagnostics>) => void,
 ): Promise<{ model: string; stream: T }> {
   for (let index = 0; index < models.length; index++) {
     const model = models[index]!;
@@ -57,6 +76,7 @@ export async function openModelStream<T>(
       const candidate = error as { status?: number; headers?: Headers };
       if (candidate.status !== 429) throw error;
       markRateLimited(model, candidate.headers?.get?.("retry-after"));
+      onRateLimit?.(model, rateLimitDiagnostics(error));
     }
   }
   throw new UsageLimitError();

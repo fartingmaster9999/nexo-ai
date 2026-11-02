@@ -6,7 +6,7 @@ import { buildSearchQuery, isCodingRequest, needsWebSearch } from "../lib/chat-p
 import { searchWeb } from "../lib/web-search";
 import {
   availableModels, chooseModels, openModelStream, PRIMARY_MODEL, SMALL_MODEL,
-  UsageLimitError, USAGE_LIMIT_MESSAGE, DOWNGRADE_MESSAGE, markRateLimited,
+  UsageLimitError, USAGE_LIMIT_MESSAGE, DOWNGRADE_MESSAGE, markRateLimited, rateLimitDiagnostics,
 } from "../lib/model-routing";
 
 const router: IRouter = Router();
@@ -80,6 +80,10 @@ router.post("/chat", async (req, res): Promise<void> => {
         { signal: controller.signal },
       ),
       (fallback) => emit({ notice: { id: "model-downgrade", message: DOWNGRADE_MESSAGE, model: fallback } }),
+      (limitedModel, quota) => req.log.warn(
+        { provider: "groq", model: limitedModel, ...quota },
+        "Groq rate limit triggered model fallback",
+      ),
     );
     activeModel = model;
     emit({ provider: "groq", model, reasoningEffort: parsed.data.deepthink ? "high" : "medium" });
@@ -106,7 +110,10 @@ router.post("/chat", async (req, res): Promise<void> => {
     if (controller.signal.aborted || res.destroyed || res.writableEnded) return;
     const status = error instanceof Groq.APIError ? error.status : undefined;
     req.log.error({ provider: "groq", status }, "Chat request failed");
-    if (status === 429) markRateLimited(activeModel);
+    if (status === 429) {
+      markRateLimited(activeModel, error instanceof Groq.APIError ? error.headers?.get("retry-after") : undefined);
+      req.log.warn({ provider: "groq", model: activeModel, ...rateLimitDiagnostics(error) }, "Groq stream rate limited");
+    }
     const message = status === 429 || error instanceof UsageLimitError ? USAGE_LIMIT_MESSAGE
       : status === 401 || status === 403 ? "Nexo AI could not authorize this request. Please contact the site owner."
         : "The response could not be completed. Please try again.";

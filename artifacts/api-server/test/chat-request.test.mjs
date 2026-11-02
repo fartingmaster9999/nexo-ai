@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { buildChatRequest, isValidTimeZone, boundedHistory } from "../src/lib/chat-request.ts";
 import { extractSearchSources } from "../src/lib/search-activity.ts";
 import { needsWebSearch, isCodingRequest, buildSearchQuery } from "../src/lib/chat-policy.ts";
-import { chooseModels, openModelStream, USAGE_LIMIT_MESSAGE, PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK } from "../src/lib/model-routing.ts";
+import { chooseModels, openModelStream, USAGE_LIMIT_MESSAGE, PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK, markRateLimited, isCoolingDown, rateLimitDiagnostics } from "../src/lib/model-routing.ts";
 
 const messages = [{ role: "user", content: "What is 17 times 19?" }];
 
@@ -106,6 +106,37 @@ test("authorization errors are not incorrectly treated as usage limits", async (
   let attempts = 0;
   await assert.rejects(openModelStream(["auth-a","auth-b"], async () => {attempts++;throw Object.assign(new Error("Denied"),{status:401});}, () => {}));
   assert.equal(attempts, 1);
+});
+
+test("cooldowns honor short retry-after values without an artificial minimum", () => {
+  const original = Date.now;
+  let clock = 100000;
+  Date.now = () => clock;
+  try {
+    markRateLimited("short-window", "0.5");
+    assert.equal(isCoolingDown("short-window"), true);
+    clock += 501;
+    assert.equal(isCoolingDown("short-window"), false);
+    markRateLimited("missing-window");
+    clock += 1001;
+    assert.equal(isCoolingDown("missing-window"), false);
+    markRateLimited("date-window", new Date(clock + 3000).toUTCString());
+    clock += 3001;
+    assert.equal(isCoolingDown("date-window"), false);
+  } finally { Date.now = original; }
+});
+
+test("quota diagnostics identify token limits without copying provider bodies", async () => {
+  const error = {status:429, headers:new Headers({"retry-after":"0.5","x-ratelimit-remaining-requests":"990"}),
+    error:{error:{message:"Rate limit on tokens per minute (TPM). PRIVATE PROMPT"}}};
+  const attempts = [];
+  await openModelStream(["diagnostic-a","diagnostic-b"], async model => {
+    if(model === "diagnostic-a") throw error;
+    return "ok";
+  }, () => {}, (model, quota) => attempts.push({model,...quota}));
+  assert.equal(attempts[0].metric, "TPM");
+  assert.equal(attempts[0].remainingRequests, "990");
+  assert.equal(JSON.stringify(rateLimitDiagnostics(error)).includes("PRIVATE"), false);
 });
 
 test("Qwen coding fallback returns reasoning separately using its supported parsed format", () => {
