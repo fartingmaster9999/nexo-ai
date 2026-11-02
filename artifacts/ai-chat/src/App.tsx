@@ -88,7 +88,6 @@ function Home() {
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
-  const autoOpened = useRef<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
@@ -100,7 +99,6 @@ function Home() {
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeId) ?? null;
   const currentMessages = activeConversation?.messages ?? [];
-  const lastAssistantIndex = currentMessages.map((m) => m.role).lastIndexOf('assistant');
   const codeSource = (() => {
     for (let i = currentMessages.length - 1; i >= 0; i--) {
       const m = currentMessages[i];
@@ -109,13 +107,6 @@ function Home() {
     return null;
   })();
   const snippets = useMemo(() => codeSource ? extractSnippets(codeSource.text) : [], [codeSource?.text]);
-  useEffect(() => {
-    if (!snippets.length || !activeId || !codeSource) return;
-    const k = `${activeId}:${codeSource.index}`;
-    if (autoOpened.current === k) return;
-    autoOpened.current = k;
-    if (codeSource.index === lastAssistantIndex && streaming) setWorkspaceOpen(true);
-  }, [snippets.length, activeId, codeSource?.index, lastAssistantIndex, streaming]);
 
   useEffect(() => {
     setHydrated(true);
@@ -427,11 +418,11 @@ function Home() {
         <div className="brand">
           <img className="brand-mark" src={logoUrl} alt="Nexo AI logo" data-testid="img-logo" />
           <div className="brand-name">Nexo AI</div>
+          <button className="icon-btn new-chat" type="button" onClick={createConversation} aria-label="New conversation" title="New conversation" data-testid="button-new-chat">
+            <Plus size={18} aria-hidden="true" />
+          </button>
           <button type="button" className="icon-btn sb-close-mobile" onClick={() => setSidebarOpen(false)} aria-label="Close history sidebar" data-testid="button-close-sidebar"><X size={16} /></button>
         </div>
-        <button className="new-chat" type="button" onClick={createConversation} data-testid="button-new-chat">
-          <Plus size={16} /> New conversation
-        </button>
         <div className="thread-list" role="list" aria-label="Saved conversations" data-testid="list-conversations">
           {conversations.length === 0 ? (
             <div className="thread-empty" data-testid="empty-conversations">No conversations yet.</div>
@@ -495,7 +486,7 @@ function Home() {
               <div className="welcome" data-testid="welcome-screen">
                 <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
                 <h1>Ask anything.<br /><em>Build</em> it right here.</h1>
-                <p>Everyday questions get quick answers. Ask for code and it opens in a live workspace beside the chat. Turn on Deepthink for harder problems.</p>
+                <p>Everyday questions get quick answers. Open Workspace when you want to edit or run code. Turn on Deepthink for harder problems.</p>
                 <div className="suggestions" aria-label="Ideas to get started">
                   {suggestions.map((suggestion) => (
                     <button

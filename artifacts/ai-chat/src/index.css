@@ -93,12 +93,8 @@ button { color: inherit; }
 .brand-name { font-weight:600; font-size: 18px; line-height: 1; letter-spacing: -.02em; }
 .brand-note { color: hsl(var(--muted-foreground)); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; margin-top: 4px; }
 .new-chat {
-  border: 1px solid hsl(var(--primary)); background: hsl(var(--primary)); color: hsl(var(--primary-foreground));
-  border-radius: 12px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 9px;
-  padding: 12px 14px; font-weight: 600; font-size: 13px; cursor: pointer;
-  transition: transform .18s ease, background .18s ease;
+  margin-left: auto;
 }
-.new-chat:hover { background: hsl(var(--primary) / .85); transform: translateY(-1px); }
 .section-label { padding: 26px 9px 9px; font-size: 10px; font-weight: 700; color: hsl(var(--muted-foreground)); text-transform: uppercase; letter-spacing: .12em; }
 .thread-list { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; flex: 1; margin-right: -5px; padding-right: 5px; }
 .thread-empty { padding: 14px 10px; font-size: 12px; line-height: 1.6; color: hsl(var(--muted-foreground)); }
