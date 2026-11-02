@@ -123,6 +123,11 @@ test("cooldowns honor short retry-after values without an artificial minimum", (
     markRateLimited("date-window", new Date(clock + 3000).toUTCString());
     clock += 3001;
     assert.equal(isCoolingDown("date-window"), false);
+    markRateLimited("daily-token-window", "1147");
+    clock += 301000;
+    assert.equal(isCoolingDown("daily-token-window"), true);
+    clock += 847000;
+    assert.equal(isCoolingDown("daily-token-window"), false);
   } finally { Date.now = original; }
 });
 
@@ -137,6 +142,24 @@ test("quota diagnostics identify token limits without copying provider bodies", 
   assert.equal(attempts[0].metric, "TPM");
   assert.equal(attempts[0].remainingRequests, "990");
   assert.equal(JSON.stringify(rateLimitDiagnostics(error)).includes("PRIVATE"), false);
+});
+
+test("a failed fallback never claims a lighter model is answering", async () => {
+  const notices = [];
+  await assert.rejects(openModelStream(["failed-notice-a", "failed-notice-b"],
+    async () => { throw {status:429}; }, model => notices.push(model)), {message:USAGE_LIMIT_MESSAGE});
+  assert.deepEqual(notices, []);
+});
+
+test("a successful fallback is announced only after its stream is accepted", async () => {
+  const events = [];
+  await openModelStream(["ordered-a", "ordered-b"], async model => {
+    events.push(`attempt:${model}`);
+    if (model === "ordered-a") throw {status:429};
+    events.push("accepted");
+    return "stream";
+  }, model => events.push(`notice:${model}`));
+  assert.deepEqual(events, ["attempt:ordered-a","attempt:ordered-b","accepted","notice:ordered-b"]);
 });
 
 test("Qwen coding fallback returns reasoning separately using its supported parsed format", () => {

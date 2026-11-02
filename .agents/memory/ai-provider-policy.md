@@ -23,6 +23,12 @@ Validate Groq model capabilities with a live request instead of trusting the SDK
 
 Do not interpret every Groq 429 as exhausted daily requests. Token and request limits are independent and organization-wide; reasoning and repeated conversation history consume tokens.
 
-**Why:** A reported quota issue was reproducible as Nexo downgrading while direct 120B calls still succeeded with daily request allowance remaining. Artificial minimum cooldowns can outlast the provider's actual rejection window; historical rejection details were unavailable.
+**Why:** A reported quota issue was reproducible as Nexo downgrading while direct 120B calls still succeeded with daily request allowance remaining. Later diagnostics confirmed a daily token (TPD) rejection despite remaining daily requests. Artificial minimum cooldowns can also outlast short provider rejection windows.
 
 **How to apply:** Honor provider retry windows, avoid long invented cooldowns, and retain only allowlisted quota diagnostics (metric, counters, reset/retry headers), never raw upstream bodies or prompts. Distinguish observed limits from an unproven historical cause.
+
+A successful fallback should be described as a model switch that allows continued chatting, not as overall usage exhaustion.
+
+**Why:** The user reported a contradictory usage-limit warning while answers were still arriving from the fallback model.
+
+**How to apply:** Announce the fallback only after the provider accepts its stream, use a neutral informational notice, and reserve the blocking usage-limit error for failure of every eligible model. Normalize older saved fallback notices when displaying them.

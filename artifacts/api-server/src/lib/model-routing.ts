@@ -4,7 +4,7 @@ export const PRIMARY_MODEL = "openai/gpt-oss-120b";
 export const SMALL_MODEL = "openai/gpt-oss-20b";
 export const CODING_FALLBACK = "qwen/qwen3.8-27b";
 export const USAGE_LIMIT_MESSAGE = "You have reached your usage limits, please try again later";
-export const DOWNGRADE_MESSAGE = "You've hit your usage limits and are being downgraded to a less smart model.";
+export const DOWNGRADE_MESSAGE = "The main model is temporarily rate-limited. A lighter model is answering this reply—you can keep chatting.";
 
 let catalog: { ids: string[]; expires: number } | undefined;
 const cooldowns = new Map<string, number>();
@@ -38,7 +38,7 @@ export function markRateLimited(model: string, retryAfter?: string | null): void
     ? (Date.parse(retryAfter) - Date.now()) / 1000 : NaN;
   const delay = Number.isFinite(seconds) ? seconds : Number.isFinite(dateDelay) ? dateDelay : 1;
   // Honor short provider retry windows instead of inventing a 15–60 second lockout.
-  cooldowns.set(model, Date.now() + Math.min(300, Math.max(0, delay)) * 1000);
+  cooldowns.set(model, Date.now() + Math.min(86400, Math.max(0, delay)) * 1000);
 }
 
 /** Only allowlisted quota metadata; never log upstream bodies, prompts or credentials. */
@@ -70,8 +70,12 @@ export async function openModelStream<T>(
   for (let index = 0; index < models.length; index++) {
     const model = models[index]!;
     if (isCoolingDown(model)) continue;
-    if (index > 0) onDowngrade(model);
-    try { return { model, stream: await create(model) }; }
+    try {
+      const stream = await create(model);
+      // A fallback notice describes a confirmed usable stream, not a failed attempt.
+      if (index > 0) onDowngrade(model);
+      return { model, stream };
+    }
     catch (error) {
       const candidate = error as { status?: number; headers?: Headers };
       if (candidate.status !== 429) throw error;

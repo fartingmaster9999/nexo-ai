@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, Brain, ChevronDown } from 'lucide-react';
+import { AlertTriangle, Brain, ChevronDown, Info } from 'lucide-react';
 import { splitReasoning } from '../lib/reasoning-sections';
 
 export type Activity = { id: string; label: string; kind?: 'search' | 'thinking' | 'info'; status?: 'running' | 'complete' | 'error' };
@@ -26,7 +26,8 @@ function SearchFigure() {
   return (
     <span className="rs-fig rs-search" aria-hidden="true">
       <span className="rs-stage">
-        <span className="rs-globe"><i className="g-mer m1" /><i className="g-mer m2" /><i className="g-lat" /></span>
+        <span className="rs-halo" />
+        <span className="rs-globe"><i className="g-mer m1" /><i className="g-mer m2" /><i className="g-lat" /><i className="g-lat t" /><i className="g-lat b" /></span>
         <span className="rs-orbit"><span className="rs-glass"><i className="lens" /><i className="handle" /></span></span>
       </span>
     </span>
@@ -37,7 +38,8 @@ function BrainFigure() {
   return (
     <span className="rs-fig rs-brain" aria-hidden="true">
       <span className="rs-stage">
-        <span className="rs-layer l1" /><span className="rs-layer l2" />
+        <span className="rs-halo" />
+        <span className="rs-layer l1" /><span className="rs-layer l2" /><i className="rs-spark" />
         <span className="rs-brain-icon"><Brain size={16} /></span>
       </span>
     </span>
@@ -48,7 +50,8 @@ function NormalFigure() {
   return (
     <span className="rs-fig rs-normal" aria-hidden="true">
       <span className="rs-stage">
-        <i className="rs-plane p1" /><i className="rs-plane p2" /><i className="rs-plane p3" />
+        <span className="rs-halo" />
+        <i className="rs-plane p3" /><i className="rs-plane p2" /><i className="rs-plane p1" /><i className="rs-core" />
       </span>
     </span>
   );
@@ -74,12 +77,20 @@ export function NoticeBanner({ notices, index }: { notices?: Notice[]; index: nu
   if (!notices?.length) return null;
   return (
     <>
-      {notices.map((n) => (
-        <div key={n.id} className="notice-banner" role="status" data-testid={`notice-${index}-${n.id}`}>
-          <AlertTriangle size={14} aria-hidden="true" />
-          <span>{n.message}{n.model ? <> <b className="notice-model">{n.model}</b></> : null}</span>
-        </div>
-      ))}
+      {notices.map((n) => {
+        const fallback = n.id === 'model-downgrade';
+        // Normalize old saved notices too; a successful model switch is not a blocked chat.
+        const text = fallback
+          ? 'The main model is temporarily rate-limited. A lighter model is answering this reply—you can keep chatting.'
+          : n.message;
+        const Icon = fallback ? Info : AlertTriangle;
+        return (
+          <div key={n.id} className={`notice-banner${fallback ? ' notice-info' : ''}`} role="status" data-testid={`notice-${index}-${n.id}`}>
+            <Icon size={14} aria-hidden="true" />
+            <span>{text}</span>
+          </div>
+        );
+      })}
     </>
   );
 }
