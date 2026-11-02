@@ -445,7 +445,6 @@ function Home() {
             {currentMessages.length === 0 ? (
               <div className="welcome" data-testid="welcome-screen">
                 <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
-                <div className="welcome-kicker">Nexo AI</div>
                 <h1>Ask anything.<br /><em>Go deeper</em> when it matters.</h1>
                 <p>Everyday questions get quick answers. Turn on Deepthink for harder problems that need more reasoning.</p>
                 <div className="suggestions" aria-label="Ideas to get started">
