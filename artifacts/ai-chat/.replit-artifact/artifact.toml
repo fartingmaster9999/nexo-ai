@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "AI Chat"
+description = "A simple AI chat app for asking questions and continuing conversations, with locally saved chat history."
+version = "1.0.0"
+id = "artifacts/ai-chat"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25374
+
+[services.development]
+run = "pnpm --filter @workspace/ai-chat run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/ai-chat", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/ai-chat/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25374"
+BASE_PATH = "/"
