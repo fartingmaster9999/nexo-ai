@@ -58,6 +58,7 @@
   --app-font-serif: 'Geist', 'Inter', -apple-system, 'SF Pro Display', sans-serif;
   --app-font-mono: 'Geist Mono', 'IBM Plex Mono', monospace;
   --radius: 0.75rem;
+  --code-bg: 224 32% 4%;
   --sidebar: 222 30% 4%;
   --sidebar-foreground: 214 30% 92%;
   --sidebar-border: 220 22% 12%;
