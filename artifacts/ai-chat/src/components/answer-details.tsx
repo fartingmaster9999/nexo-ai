@@ -108,7 +108,7 @@ export function ThinkingPanel({ message, live, index }: { message: ChatMessage; 
     <div className={`term ${live ? 'is-live' : ''}`} data-testid={`panel-progress-${index}`}>
       <button type="button" className="term-head" aria-expanded={open} aria-controls={open ? bodyId : undefined} aria-label={`${open ? 'Hide' : 'Show'} model reasoning`} onClick={() => setOpen((v) => !v)} data-testid={`toggle-progress-${index}`}>
         <span className="term-prompt" aria-hidden="true">&gt;&gt;&gt;</span>
-        <span className="term-title">{live ? 'Thinking' : 'Thought process'}{live && <span className="term-ellipsis" aria-hidden="true" />}</span>
+        <span className="term-title">{message.deepthink ? (live ? 'Deepthinking' : 'Deepthink reasoning') : (live ? 'Thinking' : 'Thought process')}{live && <span className="term-ellipsis" aria-hidden="true" />}</span>
         <ChevronDown size={13} className={`term-chev ${open ? 'is-open' : ''}`} aria-hidden="true" />
       </button>
       {searching && (

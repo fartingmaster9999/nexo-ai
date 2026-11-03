@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, Brain, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Brain, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -216,6 +216,7 @@ function Home() {
     if (streaming) return;
     const prompt = (suggestedText ?? draft).trim();
     if (!prompt) return;
+    const requestDeepthink = deepthink;
 
     let conversation = activeConversation;
     if (!conversation) {
@@ -237,7 +238,7 @@ function Home() {
       role: message.role,
       content: message.content.slice(0, 12000),
     }));
-    const assistantMessage: ChatMessage = { role: 'assistant', content: '', deepthink };
+    const assistantMessage: ChatMessage = { role: 'assistant', content: '', deepthink: requestDeepthink };
     setConversations((items) => {
       const exists = items.some((item) => item.id === conversationId);
       const updated: Conversation = {
@@ -299,7 +300,7 @@ function Home() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         credentials: 'include',
-        body: JSON.stringify({ messages: requestMessages, deepthink, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+        body: JSON.stringify({ messages: requestMessages, deepthink: requestDeepthink, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -436,6 +437,7 @@ function Home() {
           </button>
           <button type="button" className="icon-btn sb-close-mobile" onClick={() => setSidebarOpen(false)} aria-label="Close history sidebar" data-testid="button-close-sidebar"><X size={16} /></button>
         </div>
+        <div className="thread-heading" aria-hidden="true">Recent</div>
         <div className="thread-list" role="list" aria-label="Saved conversations" data-testid="list-conversations">
           {conversations.length === 0 ? (
             <div className="thread-empty" data-testid="empty-conversations">No conversations yet.</div>
@@ -498,7 +500,7 @@ function Home() {
               <div className="welcome" data-testid="welcome-screen">
                 <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
                 <h1>Ask anything.<br /><em>Build</em> it right here.</h1>
-                <p>Everyday questions get quick answers. When Nexo generates code, it opens in a workspace beside the chat. Turn on Deepthink for harder problems.</p>
+                <p>Quick answers for everyday questions. Code opens in a workspace beside the chat. Switch on Deepthink for harder problems.</p>
                 <div className="suggestions" aria-label="Ideas to get started">
                   {suggestions.map((suggestion) => (
                     <button
@@ -509,7 +511,7 @@ function Home() {
                       disabled={streaming}
                       data-testid={`suggestion-${suggestion.label.toLowerCase().replace(/\s+/g, '-')}`}
                     >
-                      <span className="suggestion-label">{suggestion.label}</span>
+                      <span className="suggestion-label">{suggestion.label}<ArrowUpRight size={14} className="suggestion-arrow" aria-hidden="true" /></span>
                       <span className="suggestion-text">{suggestion.text}</span>
                     </button>
                   ))}
@@ -555,7 +557,7 @@ function Home() {
           )}
 
           <div>
-            <form className="composer-wrap" onSubmit={(event) => void sendMessage(event)} aria-label="Send a message">
+            <form className={`composer-wrap ${deepthink ? 'is-deep' : ''}`} onSubmit={(event) => void sendMessage(event)} aria-label="Send a message">
               <div className="composer">
                 <textarea
                   ref={textareaRef}
@@ -569,6 +571,12 @@ function Home() {
                   disabled={streaming}
                   data-testid="input-message"
                 />
+              </div>
+              <div className="composer-hint">
+                <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
+                  <span className="deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink{deepthink ? ' on' : ''}</span>
+                </button>
+                <span className="hint-keys">Enter to send · Shift + Enter for new line</span>
                 {streaming ? (
                   <button className="send-button stop" type="button" onClick={stopResponse} aria-label="Stop response" title="Stop response" data-testid="button-stop-response">
                     <X size={17} />
@@ -578,12 +586,6 @@ function Home() {
                     <ArrowUp size={18} />
                   </button>
                 )}
-              </div>
-              <div className="composer-hint">
-                <button type="button" aria-pressed={deepthink} className={`deep-toggle ${deepthink ? 'is-on' : ''}`} disabled={streaming} title={streaming ? 'Mode cannot change while a response is streaming' : undefined} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
-                  <Brain size={14} aria-hidden="true" /><span>Deepthink</span>
-                </button>
-                <span className="hint-keys">Enter to send · Shift + Enter for new line</span>
               </div>
             </form>
           </div>

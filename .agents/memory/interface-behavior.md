@@ -20,3 +20,9 @@ Thinking menus must start collapsed, even during streaming, without step counts 
 **Why:** The user requested less visual clutter and an explicit choice to read reasoning, without replacing the full trace with a summary.
 
 **How to apply:** Never auto-expand on live updates. Use a globe with an orbiting magnifier for actual web search, a brain only for Deepthink, and a distinct abstract animation for normal replies. Each status should cycle between flat and dimensional views, respect reduced-motion settings, and avoid showing competing status indicators.
+
+Deepthink may be changed while a reply is streaming, but the selection applies only to the next request. Each reply retains the mode captured when it was sent.
+
+**Why:** The user reported Deepthink not working even though a live high-effort Groq request succeeded; the control had been disabled throughout streaming and its selected state was easy to miss.
+
+**How to apply:** Keep the toggle usable, make its on state visibly blue and clearly labeled, explain next-message behavior in its tooltip, and never relabel an in-progress reply based on a later preference change.
