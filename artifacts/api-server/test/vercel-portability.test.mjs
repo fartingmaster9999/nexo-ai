@@ -3,6 +3,22 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createFirecrawlSearch } from "../src/lib/firecrawl-client.ts";
 
+test("Vercel Express entrypoint exports the app without requiring PORT", async () => {
+  const previousPort = process.env.PORT;
+  const previousVercel = process.env.VERCEL;
+  delete process.env.PORT;
+  process.env.VERCEL = "1";
+  try {
+    const { default: app } = await import("../src/index.ts");
+    assert.equal(typeof app, "function");
+  } finally {
+    if (previousPort === undefined) delete process.env.PORT;
+    else process.env.PORT = previousPort;
+    if (previousVercel === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = previousVercel;
+  }
+});
+
 test("direct Firecrawl transport preserves request options and uses only its own endpoint", async () => {
   const signal = new AbortController().signal;
   let request;
@@ -59,10 +75,10 @@ test("Vercel services route browser API calls before the static frontend", async
   assert.equal(frontend.outputDirectory, "dist/public");
   assert.equal(frontend.rewrites, undefined);
   assert.equal(frontend.routes, undefined);
-  assert.equal(backend.entrypoint, "src/app.ts");
+  assert.equal(backend.entrypoint, "src/index.ts");
   assert.ok(backend.buildCommand.length > 0);
-  assert.equal(backend.functions["src/app.ts"].supportsCancellation, true);
-  assert.equal(backend.functions["src/app.ts"].maxDuration, 180);
+  assert.equal(backend.functions["src/index.ts"].supportsCancellation, true);
+  assert.equal(backend.functions["src/index.ts"].maxDuration, 180);
   const sandbox = config.services["mockup-sandbox"];
   assert.equal(sandbox.root, "artifacts/mockup-sandbox");
   assert.equal(sandbox.framework, "vite");

@@ -48,3 +48,15 @@ adds no useful route coverage.
 **How to apply:** Preserve normal Vite file routing unless real client routes
 require a fallback. Check actual JavaScript and image content types whenever
 changing Vercel rewrites or service-level routing.
+
+For the Express service, keep the conventional `src/index.ts` entrypoint
+compatible with both Vercel Functions and Replit: default-export the app, and
+only start a listener when a standalone `PORT` is supplied.
+
+**Why:** Vercel's Express runtime loads `src/index.ts` as a handler without
+setting `PORT`; treating that as fatal caused production requests to fail before
+they reached chat or Groq. Replit still needs the same file to bind its port.
+
+**How to apply:** Keep the Vercel entrypoint and per-function settings aligned
+with `src/index.ts`. Test its import with `VERCEL=1` and no `PORT`, as well as
+the normal Replit workflow with `PORT`.

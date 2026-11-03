@@ -11,11 +11,11 @@
     "api-server": {
       "root": "artifacts/api-server",
       "framework": "express",
-      "entrypoint": "src/app.ts",
+      "entrypoint": "src/index.ts",
       "installCommand": "cd ../.. && npx --yes pnpm@10.26.1 install --frozen-lockfile --prod=false",
       "buildCommand": "npx --yes pnpm@10.26.1 run build",
       "functions": {
-        "src/app.ts": {
+        "src/index.ts": {
           "maxDuration": 180,
           "supportsCancellation": true
         }

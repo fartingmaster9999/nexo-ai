@@ -40,8 +40,10 @@ overrides from the earlier single-function setup before redeploying.
 All services install the workspace from the repository root using pinned pnpm
 10, with development dependencies enabled for build tools. Vite builds into
 `artifacts/ai-chat/dist/public` and `artifacts/mockup-sandbox/dist`. Vercel compiles the Express entry point
-`artifacts/api-server/src/app.ts` directly. The API build script also produces the
-standalone server bundle used by Replit, but Vercel does not start that listener.
+`artifacts/api-server/src/index.ts` as the Express serverless handler. It only
+starts a standalone listener when `PORT` is supplied, preserving Replit's server
+workflow without requiring a port in Vercel Functions. The API build script also
+produces the standalone server bundle used by Replit.
 The `.vercelignore` file excludes Replit's local tooling, caches, dependencies,
 and generated outputs from upload and local Vercel file discovery.
 

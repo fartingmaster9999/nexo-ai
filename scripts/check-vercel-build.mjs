@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile, readdir } from "node:fs/promises";
 import { once } from "node:events";
-// This is the same source entry point Vercel's Express service compiles.
-import app from "../artifacts/api-server/src/app.ts";
-
 // Deliberately check missing-key recovery rather than consuming real allowances.
 assert.ok(!process.env.GROQ_API_KEY, "Run this check with pnpm check:vercel");
+const originalPort = process.env.PORT;
+delete process.env.PORT;
+const { default: app } = await import("../artifacts/api-server/src/index.ts");
+if (originalPort !== undefined) process.env.PORT = originalPort;
+
 const server = createServer(app);
 server.listen(0, "127.0.0.1");
 await once(server, "listening");
@@ -42,7 +44,7 @@ try {
   assert.match(sandboxHtml, /(?:src|href)="\/assets\//);
   const sandboxAssets = await readdir(new URL("assets/", sandboxDir));
   assert.ok(sandboxAssets.some(file => file.startsWith("index-") && file.endsWith(".js")));
-  console.log("Vercel service smoke checks passed: API entry point, validation, missing-key recovery, 404s, frontend, code-runner and sandbox assets.");
+  console.log("Vercel service smoke checks passed: serverless entrypoint without PORT, validation, missing-key recovery, 404s, frontend, code-runner and sandbox assets.");
 } finally {
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }

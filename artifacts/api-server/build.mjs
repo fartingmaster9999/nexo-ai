@@ -15,7 +15,8 @@ async function buildAll() {
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
-    // Vercel uses src/app.ts directly; this build is the standalone Replit server.
+    // The entrypoint exports an Express handler on Vercel and also starts the
+    // standalone Replit server when that environment supplies PORT.
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
     platform: "node",
     bundle: true,
