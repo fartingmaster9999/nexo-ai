@@ -54,8 +54,8 @@
   --accent-foreground: 214 90% 80%;
   --destructive: 2 78% 62%;
   --destructive-foreground: 0 0% 98%;
-  --app-font-sans: 'Geist', 'DM Sans', sans-serif;
-  --app-font-serif: 'Geist', sans-serif;
+  --app-font-sans: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+  --app-font-serif: 'Geist', 'Inter', -apple-system, 'SF Pro Display', sans-serif;
   --app-font-mono: 'Geist Mono', 'IBM Plex Mono', monospace;
   --radius: 0.75rem;
   --sidebar: 222 30% 4%;

@@ -26,3 +26,9 @@ Deepthink may be changed while a reply is streaming, but the selection applies o
 **Why:** The user reported Deepthink not working even though a live high-effort Groq request succeeded; the control had been disabled throughout streaming and its selected state was easy to miss.
 
 **How to apply:** Keep the toggle usable, make its on state visibly blue and clearly labeled, explain next-message behavior in its tooltip, and never relabel an in-progress reply based on a later preference change.
+
+The visual direction is a premium, modern SaaS chat interface inspired by DeepSeek, v0, and Bolt, while retaining Nexo's own logo and black-and-blue identity.
+
+**Why:** The user supplied an explicit refinement brief emphasizing restrained rich-black surfaces, balanced spacing, readable hierarchy, subtle card feedback, and tactile composer controls.
+
+**How to apply:** Prefer coordinated refinements over extra decorative UI. Keep other user-selectable themes and accents functional, and preserve saved sidebar sizing when changing defaults.

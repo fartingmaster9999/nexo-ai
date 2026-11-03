@@ -8,7 +8,7 @@ const clamp = (n: number) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.ro
 export const isMobile = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
 
 export function useSidebar() {
-  const [width, setWidth] = useState(() => { const n = Number(localStorage.getItem(W_KEY)); return n ? clamp(n) : 276; });
+  const [width, setWidth] = useState(() => { const n = Number(localStorage.getItem(W_KEY)); return n ? clamp(n) : 260; });
   const [open, setOpen] = useState(() => !isMobile() && localStorage.getItem(O_KEY) !== '0');
   const drag = useRef<{ x: number; w: number } | null>(null);
 

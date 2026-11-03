@@ -6,9 +6,9 @@ export type AccentId = 'blue' | 'cyan' | 'violet' | 'emerald' | 'amber' | 'rose'
 type Palette = Record<string, string>;
 export const THEMES: { id: ThemeId; name: string; note: string; light: boolean; vars: Palette }[] = [
   { id: 'midnight', name: 'Midnight', note: 'The original black and blue', light: false, vars: {
-    background: '222 28% 5%', foreground: '214 30% 92%', border: '220 22% 14%', card: '222 26% 8%', muted: '220 22% 11%',
-    'muted-foreground': '216 14% 58%', secondary: '218 40% 13%', accent: '214 60% 18%', 'accent-foreground': '214 90% 80%',
-    sidebar: '222 30% 4%', 'sidebar-border': '220 22% 12%', 'sidebar-accent': '218 35% 11%', 'code-bg': '222 30% 3%' } },
+    background: '240 4% 4.5%', foreground: '240 6% 93%', border: '240 4% 15%', card: '240 5% 7.5%', muted: '240 4% 11%',
+    'muted-foreground': '240 5% 65%', secondary: '240 4% 12%', accent: '214 40% 16%', 'accent-foreground': '214 90% 82%',
+    sidebar: '240 5% 6%', 'sidebar-border': '240 4% 12%', 'sidebar-accent': '240 4% 11%', 'code-bg': '240 5% 3.5%' } },
   { id: 'graphite', name: 'Graphite', note: 'Neutral charcoal, low glare', light: false, vars: {
     background: '230 6% 9%', foreground: '40 10% 90%', border: '230 5% 18%', card: '230 6% 12%', muted: '230 5% 15%',
     'muted-foreground': '230 5% 60%', secondary: '230 6% 17%', accent: '230 8% 21%', 'accent-foreground': '40 20% 92%',
