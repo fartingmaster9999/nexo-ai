@@ -4,3 +4,4 @@
 - [Connector runtime access](connector-runtime-access.md) — A ready connection can still be unavailable to the running app; verify access from the app itself.
 - [Interface behavior](interface-behavior.md) — The IDE opens when code is generated, with no manual open button; new conversation stays icon-only in the sidebar.
 - [Chat reliability](chat-reliability.md) — Preserve legacy history and partial replies; prune complete context turns without silent prompt truncation or automatic regeneration.
+- [Hosting portability](hosting-portability.md) — Support independent Vercel hosting while preserving Replit development and Groq-only inference.

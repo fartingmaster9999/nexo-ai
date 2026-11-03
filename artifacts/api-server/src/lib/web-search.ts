@@ -1,4 +1,4 @@
-import { ReplitConnectors } from "@replit/connectors-sdk";
+import { createFirecrawlSearch } from "./firecrawl-client";
 import { extractSearchSources } from "./search-activity";
 import { scrapePublicSearch } from "./public-scraper";
 import { logger } from "./logger";
@@ -12,8 +12,10 @@ export type SearchResult = {
 };
 const cache = new Map<string, { expires: number; result: SearchResult }>();
 const pending = new Map<string, Promise<SearchResult>>();
-const connectors = new ReplitConnectors();
-const proxyFetch = connectors.createProxyFetch("firecrawl");
+const firecrawlSearch = createFirecrawlSearch({
+  apiKey: process.env.FIRECRAWL_API_KEY,
+  isVercel: process.env.VERCEL === "1",
+});
 let firecrawlUnavailableUntil = 0;
 
 export async function searchWeb(query: string): Promise<SearchResult> {
@@ -31,7 +33,7 @@ export async function searchWeb(query: string): Promise<SearchResult> {
     let provider: SearchResult["provider"] = "firecrawl";
     try {
       if (firecrawlUnavailableUntil > Date.now()) throw new Error("Connection not available");
-      const response = await proxyFetch("https://api.firecrawl.dev/v2/search", {
+      const response = await firecrawlSearch({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npx --yes pnpm@10.26.1 install --frozen-lockfile",
+  "buildCommand": "npx --yes pnpm@10.26.1 run build:vercel",
+  "outputDirectory": "artifacts/ai-chat/dist/public",
+  "fluid": true,
+  "functions": {
+    "api/index.mjs": {
+      "maxDuration": 180,
+      "supportsCancellation": true,
+      "includeFiles": "artifacts/api-server/dist/**"
+    }
+  },
+  "routes": [
+    { "src": "/api(?:/.*)?", "dest": "/api/index" },
+    { "handle": "filesystem" },
+    { "src": "/.*", "dest": "/index.html" }
+  ]
+}

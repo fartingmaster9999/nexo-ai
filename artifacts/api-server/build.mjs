@@ -15,7 +15,8 @@ async function buildAll() {
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
-    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
+    // Vercel imports the app; the regular build still starts a standalone server.
+    entryPoints: [path.resolve(artifactDir, process.argv.includes("--serverless") ? "src/app.ts" : "src/index.ts")],
     platform: "node",
     bundle: true,
     format: "esm",
