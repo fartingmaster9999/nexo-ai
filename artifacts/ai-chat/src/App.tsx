@@ -472,8 +472,9 @@ function Home() {
             {currentMessages.length === 0 ? (
               <div className="welcome" data-testid="welcome-screen">
                 <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
+                <div className="welcome-kicker">A workspace for questions, ideas &amp; code</div>
                 <h1>Ask anything.<br /><em className="hero-accent">Build it right here.</em></h1>
-                <p>Quick answers for everyday questions. Code opens in a workspace beside the chat. Switch on Deepthink for harder problems.</p>
+                <p>Get a clear answer, shape an idea, or start building. Code opens in a workspace beside the chat.</p>
                 <div className="suggestions" aria-label="Ideas to get started">
                   {suggestions.map((suggestion) => (
                     <button

@@ -230,3 +230,115 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 .send-button.stop { background: hsl(var(--foreground) / .9); color: hsl(var(--background)); }
 @media (max-width: 767px) { .composer-wrap { padding: 12px 10px 10px 14px; } }
 @media (prefers-reduced-motion: reduce) { .send-button { transition: none !important; } }
+
+/* ---------- Welcome + composer polish ---------- */
+.chat-region { max-width: 900px; padding-right: clamp(20px, 4vw, 48px); padding-left: clamp(20px, 4vw, 48px); }
+.messages { padding-top: 10px; }
+.welcome {
+  max-width: 680px;
+  margin: clamp(22px, 5vh, 48px) auto 22px;
+}
+.welcome-logo {
+  width: 46px;
+  height: 46px;
+  margin: 0 0 16px;
+  border-radius: 14px;
+  box-shadow: 0 0 0 5px hsl(var(--primary) / .07), 0 12px 30px -16px hsl(var(--primary) / .65);
+}
+.welcome-kicker {
+  justify-content: flex-start;
+  margin: 0 0 15px;
+  color: hsl(var(--muted-foreground) / .9);
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: .105em;
+  text-transform: uppercase;
+}
+.welcome-kicker::before { display: none; }
+.welcome-kicker::after { width: 32px; }
+.welcome h1 {
+  max-width: 640px;
+  margin-bottom: 14px;
+  font-size: clamp(38px, 5.4vw, 58px);
+  line-height: 1.015;
+  letter-spacing: -.052em;
+}
+.welcome h1 .hero-accent {
+  background: linear-gradient(105deg, hsl(var(--primary)), color-mix(in oklab, hsl(var(--primary)) 68%, white));
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.welcome p { max-width: 540px; font-size: 14px; line-height: 1.65; }
+.suggestions {
+  gap: 9px;
+  margin-top: 24px;
+}
+.suggestion {
+  min-height: 76px;
+  justify-content: center;
+  gap: 5px;
+  padding: 13px 15px;
+  border-color: hsl(var(--foreground) / .075);
+  background: linear-gradient(135deg, hsl(var(--card) / .82), hsl(var(--card) / .52));
+  box-shadow: inset 0 1px 0 hsl(var(--foreground) / .025);
+}
+.suggestion:hover:not(:disabled) {
+  border-color: hsl(var(--primary) / .32);
+  background: linear-gradient(135deg, hsl(var(--primary) / .09), hsl(var(--card) / .82));
+  box-shadow: 0 12px 28px -22px hsl(var(--primary) / .45), inset 0 1px 0 hsl(var(--foreground) / .035);
+}
+.suggestion-label { font-size: 13px; }
+.suggestion-text { font-size: 12px; line-height: 1.45; }
+.composer-wrap {
+  border-color: hsl(var(--foreground) / .1);
+  background: color-mix(in oklab, hsl(var(--card)) 94%, hsl(var(--background)));
+  box-shadow: 0 1px 0 hsl(var(--foreground) / .035) inset, 0 24px 55px -38px hsl(220 80% 45% / .35);
+  transition: border-color .22s ease, box-shadow .28s ease, background .22s ease;
+}
+.composer-wrap:focus-within {
+  border-color: hsl(var(--foreground) / .2);
+  box-shadow: 0 1px 0 hsl(var(--foreground) / .04) inset, 0 24px 55px -38px hsl(220 80% 45% / .38);
+}
+.composer-wrap.is-deep { border-color: hsl(var(--primary) / .32); }
+.composer-wrap.is-deep:focus-within { border-color: hsl(var(--primary) / .42); }
+.composer textarea { min-height: 46px; padding-top: 5px; }
+.deep-toggle {
+  border: 1px solid hsl(var(--foreground) / .09);
+  background: hsl(var(--foreground) / .025);
+  transition: color .2s ease, border-color .2s ease, background .2s ease, transform .2s var(--ease-out);
+}
+.deep-toggle:hover { border-color: hsl(var(--primary) / .32); background: hsl(var(--primary) / .07); }
+.deep-toggle.is-on { border-color: hsl(var(--primary) / .3); background: hsl(var(--primary) / .12); }
+.send-button:not(:disabled) { box-shadow: 0 5px 16px -9px hsl(var(--primary) / .8); }
+
+@media (min-width: 1000px) and (min-height: 680px) {
+  .welcome { margin-top: clamp(24px, 4.2vh, 42px); }
+}
+@media (max-height: 760px) and (min-width: 768px) {
+  .welcome { margin-top: 18px; margin-bottom: 12px; }
+  .welcome-logo { width: 40px; height: 40px; margin-bottom: 12px; }
+  .welcome-kicker { margin-bottom: 10px; }
+  .welcome h1 { font-size: clamp(36px, 4.8vw, 52px); margin-bottom: 10px; }
+  .welcome p { font-size: 13px; }
+  .suggestions { margin-top: 17px; }
+  .suggestion { min-height: 66px; padding: 10px 13px; }
+}
+@media (max-width: 767px) {
+  .chat-region { padding-right: 16px; padding-left: 16px; }
+  .welcome { margin: clamp(24px, 7vh, 54px) auto 18px; }
+  .welcome-logo { width: 42px; height: 42px; margin-bottom: 18px; }
+  .welcome-kicker { font-size: 9px; letter-spacing: .08em; }
+  .welcome h1 { font-size: clamp(36px, 10vw, 48px); }
+  .welcome p { font-size: 13px; }
+  .suggestions { gap: 8px; margin-top: 20px; }
+  .suggestion { min-height: 70px; padding: 10px 11px; }
+  .hint-keys { font-size: 10px; }
+}
+@media (max-width: 390px) {
+  .suggestions { grid-template-columns: 1fr; }
+  .suggestion { min-height: 58px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .welcome > *, .suggestion, .deep-toggle, .composer-wrap { animation: none !important; transition: none !important; }
+}
