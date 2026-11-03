@@ -45,15 +45,25 @@ test("Vercel transport keeps upstream failure statuses and rejects network failu
   await assert.rejects(unavailable({}), /network unavailable/);
 });
 
-test("Vercel routes API before filesystem and SPA fallback without matching lookalike paths", async () => {
+test("Vercel services route browser API calls before the static frontend", async () => {
   const config = JSON.parse(await readFile(new URL("../../../vercel.json", import.meta.url), "utf8"));
-  const [api, filesystem, spa] = config.routes;
-  const pattern = new RegExp(`^(?:${api.src})$`);
-  for (const path of ["/api", "/api/chat", "/api/healthz", "/api/unknown"]) assert.ok(pattern.test(path));
-  for (const path of ["/", "/apiculture", "/nexo-logo.png"]) assert.ok(!pattern.test(path));
-  assert.equal(api.dest, "/api/index");
-  assert.equal(filesystem.handle, "filesystem");
-  assert.equal(spa.dest, "/index.html");
-  assert.equal(config.functions["api/index.mjs"].supportsCancellation, true);
-  assert.equal(config.outputDirectory, "artifacts/ai-chat/dist/public");
+  assert.deepEqual(Object.keys(config.services), ["ai-chat", "api-server"]);
+  assert.deepEqual(config.rewrites, [
+    { source: "/api/:path*", destination: { service: "api-server" } },
+    { source: "/(.*)", destination: { service: "ai-chat" } },
+  ]);
+  const frontend = config.services["ai-chat"];
+  const backend = config.services["api-server"];
+  assert.equal(frontend.root, "artifacts/ai-chat");
+  assert.equal(frontend.outputDirectory, "dist/public");
+  assert.deepEqual(frontend.rewrites, [{ source: "/(.*)", destination: "/index.html" }]);
+  assert.equal(backend.entrypoint, "src/app.ts");
+  assert.ok(backend.buildCommand.length > 0);
+  assert.equal(backend.functions["src/app.ts"].supportsCancellation, true);
+  assert.equal(backend.functions["src/app.ts"].maxDuration, 180);
+  for (const forbidden of ["functions", "installCommand", "buildCommand", "outputDirectory", "framework", "routes"]) {
+    assert.ok(!(forbidden in config), `${forbidden} must not be top-level in services mode`);
+  }
+  // Static browser calls use the public rewrite, not runtime-only private URLs.
+  for (const service of Object.values(config.services)) assert.ok(!service.bindings?.length);
 });

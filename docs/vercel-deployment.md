@@ -1,13 +1,21 @@
 # Deploy Nexo AI to Vercel
 
-This repository now supports **one Vercel project** for both the static React
-frontend and the streaming Express API. No UI changes or Next.js migration are
+This repository uses **Vercel Services**: one Vercel project, one website address,
+and two independently built services. No UI changes or Next.js migration are
 needed. The existing Replit workflows remain supported.
+
+| Service | Public path | Purpose |
+| --- | --- | --- |
+| `ai-chat` | `/` and all non-API paths | Chat interface, assets, and browser code runner |
+| `api-server` | `/api` and `/api/*` | Streaming Groq chat and selective web retrieval |
+
+The design-only `mockup-sandbox` is deliberately excluded from the deployment.
+This does not remove the browser code runner used for generated code.
 
 ## 1. Push the repository to GitHub
 
 Push the whole repository, not just `artifacts/ai-chat`. Keep `pnpm-lock.yaml`,
-`pnpm-workspace.yaml`, `lib/`, `artifacts/`, `api/`, and `vercel.json`.
+`pnpm-workspace.yaml`, `lib/`, `artifacts/`, and `vercel.json`.
 Do not commit secrets, `.env` files, `node_modules`, or generated `dist` files.
 
 ## 2. Import it into Vercel
@@ -17,18 +25,22 @@ Choose **Add New → Project**, import the GitHub repository, and use:
 | Setting | Value |
 | --- | --- |
 | Root Directory | Repository root (`.`), not an artifact subfolder |
-| Framework Preset | Other |
+| Framework Preset | Services, or allow detection from `vercel.json` |
 | Node.js Version | 24.x (also pinned in root `package.json`) |
-| Install Command | `npx --yes pnpm@10.26.1 install --frozen-lockfile` |
-| Build Command | `npx --yes pnpm@10.26.1 run build:vercel` |
-| Output Directory | `artifacts/ai-chat/dist/public` |
+| Project-level Install/Build/Output overrides | Leave unset; each service owns these settings |
 
-The root `vercel.json` supplies the commands, output directory, routes, Fluid
-compute, cancellation support, and a 180-second function duration. Use a Vercel
-plan/configuration that supports that duration. A shorter maximum can interrupt
-long Deepthink responses. No separate API project or cross-origin API URL is needed.
-The commands explicitly select pnpm 10 because Vercel's overridden bare `pnpm`
-install command can otherwise select an older version without workspace catalogs.
+The root `vercel.json` supplies the per-service commands, output directory,
+entry point, cancellation support, public rewrites and a 180-second API function
+duration. Use a Vercel plan/configuration that supports that duration. A shorter
+maximum can interrupt long Deepthink responses. No separate API project or
+cross-origin API URL is needed. Remove any old project-level build or output
+overrides from the earlier single-function setup before redeploying.
+
+Both services install the workspace from the repository root using pinned pnpm
+10, with development dependencies enabled for build tools. Vite builds into
+`artifacts/ai-chat/dist/public`. Vercel compiles the Express entry point
+`artifacts/api-server/src/app.ts` directly. The API build script also produces the
+standalone server bundle used by Replit, but Vercel does not start that listener.
 
 ## 3. Configure server-side environment variables
 
@@ -67,9 +79,22 @@ Click Deploy in Vercel. After it finishes:
 6. Check Function logs if anything fails. Updating environment variables
    requires a new deployment before existing deployments pick them up.
 
-`api/index.mjs` imports the bundled Express app without opening a listening port.
-API routes are processed before static assets and the SPA fallback, so unknown
-API routes return API 404s rather than HTML.
+The API service exports Express without opening a listening port. Replit still
+uses `src/index.ts` to start its standalone server.
+
+Top-level rewrites route `/api/:path*` to `api-server` first and everything else
+to `ai-chat`. Vercel Services preserves the original path: `/api/chat` reaches
+the existing Express `/api/chat` route unchanged. Once a request enters the API
+service, unknown API paths return API 404s, not the frontend's HTML fallback.
+
+### Why there are no private bindings
+
+The Vite frontend is static code running in the visitor's browser. It calls the
+public same-origin `/api/chat` endpoint. Neither service calls the other from a
+server function, so no internal bindings are needed. Bindings only resolve inside
+functions at runtime; do not expose a private bound URL through `VITE_` variables
+or try to use it in the browser/build. Groq and Firecrawl are external providers,
+not other services in this project.
 
 ## Public-access caution
 
@@ -91,5 +116,21 @@ pnpm --filter @workspace/api-server run test
 pnpm check:vercel
 ```
 
-This builds but does not publish. Vercel's cloud packaging, domain routing,
-provider credentials, and streaming must still be checked after deployment.
+These commands build both services and exercise the actual
+Express source entry point with provider credentials disabled. They do not publish.
+
+For a full local Services routing check, use the current Vercel CLI:
+
+```sh
+vercel dev --local
+```
+
+`--local` runs without Vercel cloud authentication (`-L` is the older alias).
+Visit the address it prints;
+verify `/`, `/api/healthz`, `/api/chat`, and the logo/code-runner assets.
+Without `-L`, `vercel dev` uses your linked Vercel project. No binding variables
+need to be supplied manually. Vite defaults to `/` and port 5173 if the local
+runner does not supply Replit's `BASE_PATH`/`PORT`.
+
+Vercel's cloud packaging, provider credentials, and streaming still need a check
+after deployment. Services documentation: https://vercel.com/docs/services.

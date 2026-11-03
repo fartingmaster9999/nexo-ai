@@ -1,12 +1,12 @@
 {
   "name": "@workspace/api-server",
+  "engines": { "node": "24.x" },
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
-    "build:vercel": "node ./build.mjs --serverless",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test test/*.test.mjs"

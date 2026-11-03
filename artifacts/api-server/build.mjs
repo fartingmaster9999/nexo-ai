@@ -15,8 +15,8 @@ async function buildAll() {
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
-    // Vercel imports the app; the regular build still starts a standalone server.
-    entryPoints: [path.resolve(artifactDir, process.argv.includes("--serverless") ? "src/app.ts" : "src/index.ts")],
+    // Vercel uses src/app.ts directly; this build is the standalone Replit server.
+    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
     platform: "node",
     bundle: true,
     format: "esm",
