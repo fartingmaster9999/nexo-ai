@@ -17,11 +17,14 @@ const proxyFetch = connectors.createProxyFetch("firecrawl");
 let firecrawlUnavailableUntil = 0;
 
 export async function searchWeb(query: string): Promise<SearchResult> {
+  query = query.trim().slice(0, 1000);
+  if (!query) throw new Error("Search query is empty");
   const key = query.toLowerCase().trim();
   const cached = cache.get(key);
   if (cached && cached.expires > Date.now()) return { ...cached.result, cached: true };
   const active = pending.get(key);
   if (active) return active;
+  if (pending.size >= 20) throw new Error("Web search is temporarily busy");
   const task = (async (): Promise<SearchResult> => {
     // One external call searches and scrapes three pages in parallel. No Groq tools.
     let pages: SearchPage[] = [];

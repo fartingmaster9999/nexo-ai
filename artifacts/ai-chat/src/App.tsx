@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AlertCircle, ArrowUp, ArrowUpRight, Brain, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
-import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type Source, type ChatMessage, type Notice } from '@/components/answer-details';
-import { CodeWorkspace } from '@/components/code-workspace';
+import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type ChatMessage } from '@/components/answer-details';
+import { consumeChatStream, type StreamEvent } from '@/lib/chat-stream';
+import { useConversations } from '@/hooks/use-conversations';
+import type { Conversation } from '@/lib/conversation-storage';
+import { prepareRequestMessages } from '@/lib/request-context';
 import { SettingsDialog } from '@/components/settings-dialog';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
@@ -17,19 +19,8 @@ import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
 const logoUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/nexo-logo.png`;
 const prefersReducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-
-type Conversation = {
-  id: string;
-  title: string;
-  messages: ChatMessage[];
-  createdAt: number;
-  updatedAt: number;
-};
-type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string };
-
-const STORAGE_KEY = 'still-chat-conversations-v1';
+const CodeWorkspace = lazy(() => import('@/components/code-workspace').then(module => ({ default: module.CodeWorkspace })));
 const DEEPTHINK_KEY = 'nexo-deepthink';
-const CONTEXT_LIMIT = 20;
 const queryClient = new QueryClient();
 
 const suggestions = [
@@ -38,21 +29,6 @@ const suggestions = [
   { label: 'Find the words', text: 'Help me write a thoughtful note to someone I have not checked in with.' },
   { label: 'Write some code', text: 'Write a Python script that plots a damped sine wave with Matplotlib.' },
 ];
-
-function readConversations(): Conversation[] {
-  try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is Conversation =>
-      item && typeof item.id === 'string' &&
-      typeof item.title === 'string' &&
-      Array.isArray(item.messages) &&
-      typeof item.updatedAt === 'number'
-    ).sort((a, b) => b.updatedAt - a.updatedAt);
-  } catch {
-    return [];
-  }
-}
 
 function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -63,21 +39,11 @@ function titleFromPrompt(prompt: string) {
   return title.length > 42 ? `${title.slice(0, 39).trimEnd()}…` : title;
 }
 
-function formatEvent(block: string): StreamEvent | null {
-  const data = block.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
-  if (!data || data === '[DONE]') return data === '[DONE]' ? { done: true } : null;
-  try {
-    return JSON.parse(data) as StreamEvent;
-  } catch {
-    return null;
-  }
-}
-
 function Home() {
-  const [conversations, setConversations] = useState<Conversation[]>(readConversations);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
+  const [conversations, setConversations, persistConversations] = useConversations(setError);
   const [streaming, setStreaming] = useState(false);
   const [visibleReply, setVisibleReply] = useState<{ id: string; content: string } | null>(null);
   const sidebar = useSidebar();
@@ -88,7 +54,6 @@ function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const autoOpened = useRef<string | null>(null);
-  const [hydrated, setHydrated] = useState(false);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -119,21 +84,20 @@ function Home() {
   }, [streaming, activeId, snippets.length, codeSource?.index, lastAssistantIndex]);
 
   useEffect(() => {
-    setHydrated(true);
-  }, []);
+    const flush = () => { flushRef.current?.(); persistConversations(); };
+    window.addEventListener('pagehide', flush);
+    return () => {
+      flush();
+      abortRef.current?.abort();
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [persistConversations]);
 
   useEffect(() => {
-    if (hydrated) {
-      try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
-      } catch {
-        setError('Your browser could not save this conversation. Check available storage and try again.');
-      }
+    const container = messagesEndRef.current?.parentElement?.parentElement;
+    if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 200) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
     }
-  }, [conversations, hydrated]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [currentMessages.length, currentMessages[currentMessages.length - 1]?.content, visibleReply?.content]);
 
   useEffect(() => {
@@ -153,7 +117,7 @@ function Home() {
     updateConversation(id, (item) => ({
       ...item,
       messages: item.messages.filter((message, index) =>
-        !(index === item.messages.length - 1 && message.role === 'assistant' && !message.content)
+        !(index === item.messages.length - 1 && message.role === 'assistant' && !message.content && !message.reasoning)
       ),
     }));
   }, [updateConversation]);
@@ -190,12 +154,17 @@ function Home() {
   const deleteConversation = (conversation: Conversation) => {
     const confirmed = window.confirm(`Delete “${conversation.title}”? This cannot be undone.`);
     if (!confirmed) return;
-    setConversations((items) => items.filter((item) => item.id !== conversation.id));
-    if (activeId === conversation.id) {
+    if (activeStreamId.current === conversation.id) {
+      flushRef.current?.();
+      flushRef.current = null;
       abortRef.current?.abort();
       abortRef.current = null;
       activeStreamId.current = null;
       setStreaming(false);
+    }
+    setConversations((items) => items.filter((item) => item.id !== conversation.id));
+    persistConversations();
+    if (activeId === conversation.id) {
       setActiveId(null);
       setError('');
     }
@@ -213,9 +182,10 @@ function Home() {
 
   const sendMessage = async (event?: FormEvent, suggestedText?: string) => {
     event?.preventDefault();
-    if (streaming) return;
+    if (abortRef.current || streaming) return;
     const prompt = (suggestedText ?? draft).trim();
     if (!prompt) return;
+    if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); return; }
     const requestDeepthink = deepthink;
 
     let conversation = activeConversation;
@@ -234,10 +204,7 @@ function Home() {
     const conversationId = conversation.id;
     const userMessage: ChatMessage = { role: 'user', content: prompt };
     const fullMessages = [...conversation.messages.filter((m) => m.content.trim()), userMessage];
-    const requestMessages = fullMessages.slice(-CONTEXT_LIMIT).map((message) => ({
-      role: message.role,
-      content: message.content.slice(0, 12000),
-    }));
+    const requestMessages = prepareRequestMessages(fullMessages);
     const assistantMessage: ChatMessage = { role: 'assistant', content: '', deepthink: requestDeepthink };
     setConversations((items) => {
       const exists = items.some((item) => item.id === conversationId);
@@ -262,15 +229,29 @@ function Home() {
     let shown = 0;
     let timer: number | null = null;
     let drainResolve: (() => void) | null = null;
-    const patchLast = (fn: (m: ChatMessage) => ChatMessage) => updateConversation(conversationId, (item) => ({
+    let pendingMessage = assistantMessage;
+    let dirtyMessage = false;
+    const commitMessage = () => {
+      if (!dirtyMessage) return;
+      dirtyMessage = false;
+      const snapshot = pendingMessage;
+      updateConversation(conversationId, (item) => ({
       ...item,
       messages: item.messages.map((message, index) =>
-        index === item.messages.length - 1 && message.role === 'assistant' ? fn(message) : message),
+        index === item.messages.length - 1 && message.role === 'assistant' ? snapshot : message),
       updatedAt: Date.now(),
-    }));
+      }));
+    };
+    const patchLast = (fn: (m: ChatMessage) => ChatMessage) => {
+      pendingMessage = fn(pendingMessage);
+      dirtyMessage = true;
+      pump();
+    };
     // Persist complete received text separately from its animated presentation.
     const writeShown = () => setVisibleReply({ id: conversationId, content: received.slice(0, shown) });
     const tick = () => {
+      if (abortRef.current !== controller) { timer = null; return; }
+      commitMessage();
       const remaining = received.length - shown;
       if (remaining <= 0) {
         timer = null;
@@ -279,9 +260,9 @@ function Home() {
       }
       shown = prefersReducedMotion() ? received.length : Math.min(received.length, shown + Math.max(2, Math.ceil(remaining / 14)));
       writeShown();
-      timer = window.setTimeout(tick, 28);
+      timer = window.setTimeout(tick, 50);
     };
-    const pump = () => { if (timer === null) timer = window.setTimeout(tick, 0); };
+    const pump = () => { if (timer === null) timer = window.setTimeout(tick, 50); };
     const drain = () => new Promise<void>((resolve) => {
       if (shown >= received.length && timer === null) return resolve();
       drainResolve = resolve; pump();
@@ -289,12 +270,18 @@ function Home() {
     const flushOutput = () => {
       if (timer !== null) window.clearTimeout(timer);
       timer = null;
-      if (shown < received.length) { shown = received.length; writeShown(); }
+      if (abortRef.current === controller) {
+        commitMessage();
+        if (shown < received.length) { shown = received.length; writeShown(); }
+        persistConversations();
+      }
       drainResolve?.();
       drainResolve = null;
     };
     flushRef.current = flushOutput;
     controller.signal.addEventListener('abort', flushOutput, { once: true });
+    const deadline = window.setTimeout(() => controller.abort(new Error('The response timed out. Your partial answer is kept; please try again.')), 180000);
+    const connectTimeout = window.setTimeout(() => controller.abort(new Error('The server did not respond in time. Please try again.')), 30000);
     try {
       const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/chat`, {
         method: 'POST',
@@ -303,6 +290,7 @@ function Home() {
         body: JSON.stringify({ messages: requestMessages, deepthink: requestDeepthink, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
         signal: controller.signal,
       });
+      window.clearTimeout(connectTimeout);
       if (!response.ok) {
         let message = `The request could not be completed (${response.status}).`;
         try {
@@ -315,13 +303,8 @@ function Home() {
       }
       if (!response.body) throw new Error('This browser could not open the response stream. Please try again.');
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let pending = '';
-      let doneEvent = false;
-      const acceptEvent = (block: string) => {
-        const eventData = formatEvent(block);
-        if (!eventData) return;
+      const acceptEvent = (eventData: StreamEvent) => {
+        if (abortRef.current !== controller) return;
         if (eventData.error) throw new Error(eventData.error);
         if (typeof eventData.content === 'string') {
           received += eventData.content;
@@ -354,51 +337,41 @@ function Home() {
             return { ...m, sources: list };
           });
         }
-        if (eventData.done) doneEvent = true;
       };
-
-      while (!doneEvent) {
-        const { value, done } = await reader.read();
-        if (done) {
-          pending += decoder.decode();
-          break;
-        }
-        pending += decoder.decode(value, { stream: true });
-        const blocks = pending.split(/\r?\n\r?\n/);
-        pending = blocks.pop() ?? '';
-        blocks.forEach(acceptEvent);
-      }
-      if (pending.trim()) acceptEvent(pending);
+      await consumeChatStream(response.body, controller, acceptEvent);
       await drain();
       if (controller.signal.aborted) return;
-      if (!doneEvent) {
-        throw new Error(received ? 'The connection closed before the response finished. The partial answer is kept above.' : 'The connection closed before any response arrived. Please try again.');
-      }
       if (!received.trim()) {
         setError('Nexo AI returned an empty response. Try rephrasing or sending again.');
         updateConversation(conversationId, (item) => ({
           ...item,
           messages: item.messages.filter((message, index) =>
-            !(index === item.messages.length - 1 && message.role === 'assistant' && !message.content)
+            !(index === item.messages.length - 1 && message.role === 'assistant' && !message.content && !message.reasoning)
           ),
           updatedAt: Date.now(),
         }));
       }
     } catch (requestError) {
+      if (abortRef.current !== controller) return;
       if (abortRef.current === controller) flushRef.current?.();
-      if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
-      if (requestError instanceof Error && requestError.name === 'AbortError') return;
-      setError(requestError instanceof Error ? requestError.message : 'Something went wrong. Please try again.');
+      const failure = controller.signal.aborted ? controller.signal.reason : requestError;
+      if (failure instanceof Error && failure.name === 'AbortError') return;
+      console.warn('[nexo:chat]', { operation: 'stream', aborted: controller.signal.aborted, partial: received.length > 0 });
+      setError(failure instanceof Error ? failure.message : 'Something went wrong. Please try again.');
       if (!received) {
         updateConversation(conversationId, (item) => ({
           ...item,
           messages: item.messages.filter((message, index) =>
-            !(index === item.messages.length - 1 && message.role === 'assistant' && !message.content)
+            !(index === item.messages.length - 1 && message.role === 'assistant' && !message.content && !message.reasoning)
           ),
           updatedAt: Date.now(),
         }));
       }
     } finally {
+      window.clearTimeout(deadline);
+      window.clearTimeout(connectTimeout);
+      flushOutput();
+      persistConversations();
       controller.signal.removeEventListener('abort', flushOutput);
       if (timer !== null && abortRef.current !== controller) { window.clearTimeout(timer); timer = null; }
       controller.abort();
@@ -534,7 +507,7 @@ function Home() {
                         {message.role === 'assistant' && <ThinkingPanel message={message} live={isLive} index={index} />}
                         <div className={`message-text ${message.role === 'assistant' ? 'markdown' : ''}`} data-testid={`message-content-${index}`}>
                           {isPending ? (isSearching(message, isLive) ? null : <ReplyStatus mode={replyDeepthink ? 'deep' : 'normal'} />) : message.role === 'assistant' ? (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{ a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer nofollow" />, table: ({ node: _n, ...props }) => <div className="table-wrap"><table {...props} /></div> }}>{displayContent}</ReactMarkdown>
+                            <MessageMarkdown content={displayContent} />
                           ) : message.content}
                           {isLive && displayContent && replyDeepthink && !isSearching(message, isLive) && <ReplyStatus mode="deep" compact />}
                           {isLive && displayContent && <span className="typing-caret" aria-hidden="true" />}
@@ -592,8 +565,10 @@ function Home() {
         </section>
       </main>
       {workspaceOpen && (
+        <Suspense fallback={null}>
         <CodeWorkspace conversationId={activeId} snippets={snippets} onClose={() => setWorkspaceOpen(false)} canAsk={!streaming}
           isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} />
+        </Suspense>
       )}
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId={theme.themeId} accentId={theme.accentId} setTheme={theme.setTheme} setAccent={theme.setAccent} />
     </div>

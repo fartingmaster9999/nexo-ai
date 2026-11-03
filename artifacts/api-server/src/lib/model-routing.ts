@@ -7,19 +7,24 @@ export const USAGE_LIMIT_MESSAGE = "You have reached your usage limits, please t
 export const DOWNGRADE_MESSAGE = "The main model is temporarily rate-limited. A lighter model is answering this reply—you can keep chatting.";
 
 let catalog: { ids: string[]; expires: number } | undefined;
+let catalogRequest: Promise<string[]> | undefined;
 const cooldowns = new Map<string, number>();
 
 export async function availableModels(client: Groq): Promise<string[]> {
   if (catalog && catalog.expires > Date.now()) return catalog.ids;
-  try {
-    const result = await client.models.list();
+  if (catalogRequest) return catalogRequest;
+  catalogRequest = (async () => { try {
+    const result = await client.models.list({ timeout: 5000, maxRetries: 0 });
     const ids = result.data.map((model) => model.id);
     catalog = { ids, expires: Date.now() + 600000 };
     return ids;
   } catch {
     // These models were verified against this account; failed discovery never invents a coder model.
-    return [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK];
-  }
+    const ids = catalog?.ids ?? [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK];
+    catalog = { ids, expires: Date.now() + 30000 };
+    return ids;
+  } })();
+  try { return await catalogRequest; } finally { catalogRequest = undefined; }
 }
 
 export function chooseModels(ids: string[], coding: boolean): string[] {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { AlertTriangle, Brain, ChevronDown, Info } from 'lucide-react';
 import { splitReasoning } from '../lib/reasoning-sections';
 
@@ -95,7 +95,7 @@ export function NoticeBanner({ notices, index }: { notices?: Notice[]; index: nu
   );
 }
 
-export function ThinkingPanel({ message, live, index }: { message: ChatMessage; live: boolean; index: number }) {
+export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index }: { message: ChatMessage; live: boolean; index: number }) {
   const reasoning = message.reasoning ?? '';
   const [open, setOpen] = useState(false);
   const searching = isSearching(message, live);
@@ -103,7 +103,7 @@ export function ThinkingPanel({ message, live, index }: { message: ChatMessage; 
   if (!live && !reasoning && !hasActivity) return null;
   const runningLabel = searching ? [...(message.activity ?? [])].reverse().find((a) => a.kind === 'search' && a.status === 'running')?.label : undefined;
   const bodyId = `progress-body-${index}`;
-  const sections = splitReasoning(reasoning);
+  const sections = open ? splitReasoning(reasoning) : [];
   return (
     <div className={`term ${live ? 'is-live' : ''}`} data-testid={`panel-progress-${index}`}>
       <button type="button" className="term-head" aria-expanded={open} aria-controls={open ? bodyId : undefined} aria-label={`${open ? 'Hide' : 'Show'} model reasoning`} onClick={() => setOpen((v) => !v)} data-testid={`toggle-progress-${index}`}>
@@ -131,6 +131,6 @@ export function ThinkingPanel({ message, live, index }: { message: ChatMessage; 
       )}
     </div>
   );
-}
+});
 
 export const AnswerActivity = ThinkingPanel;
