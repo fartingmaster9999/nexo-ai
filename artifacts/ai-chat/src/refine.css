@@ -265,7 +265,7 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
   letter-spacing: -.052em;
 }
 .welcome h1 .hero-accent {
-  background: linear-gradient(105deg, hsl(var(--primary)), color-mix(in oklab, hsl(var(--primary)) 68%, white));
+  background: linear-gradient(105deg, hsl(var(--primary) / .88), color-mix(in oklab, hsl(var(--primary)) 82%, hsl(var(--foreground))));
   -webkit-background-clip: text;
   background-clip: text;
 }
@@ -342,3 +342,33 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 @media (prefers-reduced-motion: reduce) {
   .welcome > *, .suggestion, .deep-toggle, .composer-wrap { animation: none !important; transition: none !important; }
 }
+
+/* Lower the ambient contrast while keeping key actions legible. */
+body::before {
+  background:
+    radial-gradient(48% 30% at 72% -12%, hsl(var(--primary) / .035), transparent 72%),
+    radial-gradient(36% 24% at 0% 100%, hsl(var(--primary) / .012), transparent 74%);
+}
+.app-shell { background: hsl(var(--background)); }
+.sidebar { background: color-mix(in oklab, hsl(var(--sidebar)) 94%, black); }
+.topbar { background: hsl(var(--background) / .94); }
+.suggestion {
+  background: linear-gradient(135deg, hsl(var(--card) / .7), hsl(var(--background) / .92));
+  border-color: hsl(var(--foreground) / .055);
+}
+.suggestion:hover:not(:disabled) {
+  background: linear-gradient(135deg, hsl(var(--primary) / .045), hsl(var(--background) / .96));
+  border-color: hsl(var(--foreground) / .12);
+  box-shadow: 0 10px 26px -24px hsl(var(--primary) / .28);
+}
+.composer-wrap {
+  background: color-mix(in oklab, hsl(var(--background)) 78%, hsl(var(--card)));
+  border-color: hsl(var(--foreground) / .075);
+  box-shadow: 0 1px 0 hsl(var(--foreground) / .025) inset, 0 18px 42px -38px hsl(220 80% 32% / .2);
+}
+.composer-wrap:focus-within {
+  border-color: hsl(var(--foreground) / .14);
+  box-shadow: 0 1px 0 hsl(var(--foreground) / .03) inset, 0 18px 42px -38px hsl(220 80% 32% / .24);
+}
+.composer-wrap.is-deep { border-color: hsl(var(--primary) / .25); }
+.welcome-logo { box-shadow: 0 0 0 4px hsl(var(--primary) / .045), 0 10px 25px -18px hsl(var(--primary) / .38); }

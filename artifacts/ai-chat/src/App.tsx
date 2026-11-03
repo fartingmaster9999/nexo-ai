@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Brain, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Brain, MessageSquare, PanelLeft, Plus, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -11,7 +11,6 @@ import { consumeChatStream, type StreamEvent } from '@/lib/chat-stream';
 import { useConversations } from '@/hooks/use-conversations';
 import type { Conversation } from '@/lib/conversation-storage';
 import { prepareRequestMessages } from '@/lib/request-context';
-import { SettingsDialog } from '@/components/settings-dialog';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
 import { extractSnippets } from '@/lib/code-extract';
@@ -51,7 +50,6 @@ function Home() {
   const setSidebarOpen = sidebar.setOpen;
   const closeIfMobile = () => { if (isMobile()) setSidebarOpen(false); };
   const theme = useThemeSettings();
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
@@ -438,7 +436,6 @@ function Home() {
             </div>
           ))}
         </div>
-        <button type="button" className="sidebar-settings" onClick={() => setSettingsOpen(true)} data-testid="button-open-settings-sidebar"><Settings2 size={14} /> Appearance</button>
       </aside>
       {sidebarOpen && (
         <div className="sb-sep" role="separator" aria-orientation="vertical" aria-label="Resize conversation history" tabIndex={0}
@@ -462,9 +459,6 @@ function Home() {
               {activeConversation?.title ?? 'New conversation'}
             </div>
           </div>
-          <div className="topbar-right">
-            <button type="button" className="icon-btn" onClick={() => setSettingsOpen(true)} aria-label="Appearance settings" data-testid="button-open-settings"><Settings2 size={17} /></button>
-          </div>
         </header>
 
         <section className="chat-region" aria-label="AI conversation">
@@ -472,7 +466,6 @@ function Home() {
             {currentMessages.length === 0 ? (
               <div className="welcome" data-testid="welcome-screen">
                 <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
-                <div className="welcome-kicker">A workspace for questions, ideas &amp; code</div>
                 <h1>Ask anything.<br /><em className="hero-accent">Build it right here.</em></h1>
                 <p>Get a clear answer, shape an idea, or start building. Code opens in a workspace beside the chat.</p>
                 <div className="suggestions" aria-label="Ideas to get started">
@@ -571,7 +564,6 @@ function Home() {
           isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} />
         </Suspense>
       )}
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId={theme.themeId} accentId={theme.accentId} setTheme={theme.setTheme} setAccent={theme.setAccent} />
     </div>
   );
 }
