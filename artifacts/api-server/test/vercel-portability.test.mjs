@@ -47,8 +47,9 @@ test("Vercel transport keeps upstream failure statuses and rejects network failu
 
 test("Vercel services route browser API calls before the static frontend", async () => {
   const config = JSON.parse(await readFile(new URL("../../../vercel.json", import.meta.url), "utf8"));
-  assert.deepEqual(Object.keys(config.services), ["ai-chat", "api-server"]);
+  assert.deepEqual(Object.keys(config.services), ["ai-chat", "api-server", "mockup-sandbox"]);
   assert.deepEqual(config.rewrites, [
+    { source: "/api", destination: { service: "api-server" } },
     { source: "/api/:path*", destination: { service: "api-server" } },
     { source: "/(.*)", destination: { service: "ai-chat" } },
   ]);
@@ -56,11 +57,17 @@ test("Vercel services route browser API calls before the static frontend", async
   const backend = config.services["api-server"];
   assert.equal(frontend.root, "artifacts/ai-chat");
   assert.equal(frontend.outputDirectory, "dist/public");
-  assert.deepEqual(frontend.rewrites, [{ source: "/(.*)", destination: "/index.html" }]);
+  assert.equal(frontend.rewrites, undefined);
+  assert.equal(frontend.routes, undefined);
   assert.equal(backend.entrypoint, "src/app.ts");
   assert.ok(backend.buildCommand.length > 0);
   assert.equal(backend.functions["src/app.ts"].supportsCancellation, true);
   assert.equal(backend.functions["src/app.ts"].maxDuration, 180);
+  const sandbox = config.services["mockup-sandbox"];
+  assert.equal(sandbox.root, "artifacts/mockup-sandbox");
+  assert.equal(sandbox.framework, "vite");
+  assert.equal(sandbox.buildCommand.includes("BASE_PATH=/ "), true);
+  assert.equal(sandbox.outputDirectory, "dist");
   for (const forbidden of ["functions", "installCommand", "buildCommand", "outputDirectory", "framework", "routes"]) {
     assert.ok(!(forbidden in config), `${forbidden} must not be top-level in services mode`);
   }

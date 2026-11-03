@@ -15,12 +15,36 @@ server-only. Prefer same-origin chat routing so deployment does not introduce
 cross-origin browser credential handling. Preserve the standalone server entry
 point alongside the serverless entry point.
 
-Deploy only the chatbot and API to Vercel, not the design sandbox. Keep one public
-website address and do not add private bindings for browser-to-API calls.
+Include all three discovered services in the Vercel project, but expose only the
+chatbot at `/` and API at `/api`. Keep the design sandbox internal unless the
+user explicitly asks to publish that development tool.
 
-**Why:** The user confirmed the chatbot/public-API arrangement and sandbox
-exclusion, explaining they simply want to access and use it in a web browser.
+**Why:** The user's later supplied configuration includes the mockup sandbox as
+a service. Their goal is browser access to the actual chatbot, not public access
+to development tools.
 
 **How to apply:** Runtime-only Vercel bindings belong to actual server-to-server
-callers, not a static Vite SPA. Do not add a server proxy solely to create a
-binding where the browser can already call the same-origin public API.
+callers, not a static Vite SPA. The browser calls the same-origin public API;
+declaring a service does not require exposing it through a public rewrite.
+
+Keep Replit-only caches and tooling excluded through `.vercelignore`, not only
+`.gitignore`.
+
+**Why:** Vercel's local Services scanner included the workspace's large ignored
+pnpm/tooling caches as static build matches, stalling the combined router even
+though the individual service servers were healthy.
+
+**How to apply:** Retain explicit exclusions for local tooling/cache directories
+when adjusting Vercel packaging; do not upload them or treat them as services.
+
+Validate frontend asset content types through the combined Vercel router, not
+just HTTP status codes or nonempty responses.
+
+**Why:** A service-level HTML fallback returned successful HTML responses for
+JavaScript, PNG, and code-runner requests. Status-only checks missed the broken
+asset routing. The current app only needs a homepage, so forcing an SPA fallback
+adds no useful route coverage.
+
+**How to apply:** Preserve normal Vite file routing unless real client routes
+require a fallback. Check actual JavaScript and image content types whenever
+changing Vercel rewrites or service-level routing.

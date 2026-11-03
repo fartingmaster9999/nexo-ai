@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { once } from "node:events";
 // This is the same source entry point Vercel's Express service compiles.
 import app from "../artifacts/api-server/src/app.ts";
@@ -37,7 +37,12 @@ try {
   assert.match(html, /<div id="root">/);
   assert.ok((await readFile(new URL("nexo-logo.png", publicDir))).length > 0);
   assert.ok((await readFile(new URL("code-runner.html", publicDir))).length > 0);
-  console.log("Vercel service smoke checks passed: API entry point, validation, missing-key recovery, 404s, frontend and code-runner assets.");
+  const sandboxDir = new URL("../artifacts/mockup-sandbox/dist/", import.meta.url);
+  const sandboxHtml = await readFile(new URL("index.html", sandboxDir), "utf8");
+  assert.match(sandboxHtml, /(?:src|href)="\/assets\//);
+  const sandboxAssets = await readdir(new URL("assets/", sandboxDir));
+  assert.ok(sandboxAssets.some(file => file.startsWith("index-") && file.endsWith(".js")));
+  console.log("Vercel service smoke checks passed: API entry point, validation, missing-key recovery, 404s, frontend, code-runner and sandbox assets.");
 } finally {
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }
