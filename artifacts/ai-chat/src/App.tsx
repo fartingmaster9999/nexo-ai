@@ -1,10 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Brain, MessageSquare, PanelLeft, Plus, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Brain, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { SettingsDialog } from '@/components/settings-dialog';
+import { HomeLanding } from '@/components/home-landing';
 import NotFound from '@/pages/not-found';
 import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type StreamEvent } from '@/lib/chat-stream';
@@ -50,6 +52,7 @@ function Home() {
   const setSidebarOpen = sidebar.setOpen;
   const closeIfMobile = () => { if (isMobile()) setSidebarOpen(false); };
   const theme = useThemeSettings();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
@@ -142,6 +145,20 @@ function Home() {
     closeIfMobile();
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   }, [removePendingAssistant]);
+
+  const returnHome = () => {
+    flushRef.current?.();
+    flushRef.current = null;
+    removePendingAssistant(activeStreamId.current);
+    abortRef.current?.abort();
+    abortRef.current = null;
+    activeStreamId.current = null;
+    setStreaming(false);
+    setVisibleReply(null);
+    setActiveId(null);
+    setError('');
+    closeIfMobile();
+  };
 
   const selectConversation = (id: string) => {
     setActiveId(id);
@@ -399,91 +416,120 @@ function Home() {
 
   return (
     <div className="app-shell">
-      <aside id="history-sidebar" className={`sidebar ${sidebarOpen ? 'is-open' : 'is-collapsed'}`} style={{ ['--sb-w' as string]: `${sidebar.width}px` }} aria-label="Conversation history">
-        <div className="brand">
-          <img className="brand-mark" src={logoUrl} alt="Nexo AI logo" data-testid="img-logo" />
-          <div className="brand-name">Nexo AI</div>
-          <button className="icon-btn new-chat" type="button" onClick={createConversation} aria-label="New conversation" title="New conversation" data-testid="button-new-chat">
-            <Plus size={18} aria-hidden="true" />
+      {activeId && (
+        <aside id="history-sidebar" className={`sidebar ${sidebarOpen ? 'is-open' : 'is-collapsed'}`} style={{ ['--sb-w' as string]: `${sidebar.width}px` }} aria-label="Conversation history">
+          <div className="brand">
+            <button className="brand-home" type="button" onClick={returnHome} aria-label="Go to Nexo AI home" title="Home" data-testid="button-home">
+              <img className="brand-mark" src={logoUrl} alt="" aria-hidden="true" data-testid="img-logo" />
+              <span className="brand-name">Nexo AI</span>
+            </button>
+            <button className="icon-btn new-chat" type="button" onClick={createConversation} aria-label="New conversation" title="New conversation" data-testid="button-new-chat">
+              <Plus size={18} aria-hidden="true" />
+            </button>
+            <button type="button" className="icon-btn sb-close-mobile" onClick={() => setSidebarOpen(false)} aria-label="Close history sidebar" data-testid="button-close-sidebar"><X size={16} /></button>
+          </div>
+          <div className="thread-heading" aria-hidden="true">Recent</div>
+          <div className="thread-list" role="list" aria-label="Saved conversations" data-testid="list-conversations">
+            {conversations.length === 0 ? (
+              <div className="thread-empty" data-testid="empty-conversations">No conversations yet.</div>
+            ) : conversations.map((conversation) => (
+              <div className="thread-item" role="listitem" key={conversation.id} data-testid={`conversation-${conversation.id}`}>
+                <button
+                  type="button"
+                  className={`thread-select ${conversation.id === activeId ? 'is-active' : ''}`}
+                  onClick={() => selectConversation(conversation.id)}
+                  aria-current={conversation.id === activeId ? 'page' : undefined}
+                  title={conversation.title}
+                  data-testid={`select-conversation-${conversation.id}`}
+                >
+                  <MessageSquare className="thread-icon" size={14} />
+                  <span className="thread-title">{conversation.title}</span>
+                </button>
+                <button
+                  className="thread-delete"
+                  type="button"
+                  aria-label={`Delete ${conversation.title}`}
+                  title="Delete conversation"
+                  onClick={() => deleteConversation(conversation)}
+                  data-testid={`delete-conversation-${conversation.id}`}
+                ><Trash2 size={14} /></button>
+              </div>
+            ))}
+          </div>
+          <button className="sidebar-settings" type="button" onClick={() => setSettingsOpen(true)} data-testid="button-open-settings">
+            <Settings2 size={16} aria-hidden="true" />
+            <span>Appearance</span>
           </button>
-          <button type="button" className="icon-btn sb-close-mobile" onClick={() => setSidebarOpen(false)} aria-label="Close history sidebar" data-testid="button-close-sidebar"><X size={16} /></button>
-        </div>
-        <div className="thread-heading" aria-hidden="true">Recent</div>
-        <div className="thread-list" role="list" aria-label="Saved conversations" data-testid="list-conversations">
-          {conversations.length === 0 ? (
-            <div className="thread-empty" data-testid="empty-conversations">No conversations yet.</div>
-          ) : conversations.map((conversation) => (
-            <div className="thread-item" role="listitem" key={conversation.id} data-testid={`conversation-${conversation.id}`}>
-              <button
-                type="button"
-                className={`thread-select ${conversation.id === activeId ? 'is-active' : ''}`}
-                onClick={() => selectConversation(conversation.id)}
-                aria-current={conversation.id === activeId ? 'page' : undefined}
-                title={conversation.title}
-                data-testid={`select-conversation-${conversation.id}`}
-              >
-                <MessageSquare className="thread-icon" size={14} />
-                <span className="thread-title">{conversation.title}</span>
-              </button>
-              <button
-                className="thread-delete"
-                type="button"
-                aria-label={`Delete ${conversation.title}`}
-                title="Delete conversation"
-                onClick={() => deleteConversation(conversation)}
-                data-testid={`delete-conversation-${conversation.id}`}
-              ><Trash2 size={14} /></button>
-            </div>
-          ))}
-        </div>
-      </aside>
-      {sidebarOpen && (
+        </aside>
+      )}
+      {activeId && sidebarOpen && (
         <div className="sb-sep" role="separator" aria-orientation="vertical" aria-label="Resize conversation history" tabIndex={0}
           aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} aria-valuenow={sidebar.width} {...sidebar.separatorProps} data-testid="separator-sidebar" />
       )}
-      <button
-        className={`scrim ${sidebarOpen ? 'is-visible' : ''}`}
-        type="button"
-        aria-label="Close conversation menu"
-        onClick={() => setSidebarOpen(false)}
-        tabIndex={sidebarOpen ? 0 : -1}
-        data-testid="button-close-menu-overlay"
-      />
+      {activeId && (
+        <button
+          className={`scrim ${sidebarOpen ? 'is-visible' : ''}`}
+          type="button"
+          aria-label="Close conversation menu"
+          onClick={() => setSidebarOpen(false)}
+          tabIndex={sidebarOpen ? 0 : -1}
+          data-testid="button-close-menu-overlay"
+        />
+      )}
       <main className="main-pane">
-        <header className="topbar">
+        <header className={`topbar ${activeId ? '' : 'is-home'}`}>
           <div className="topbar-left">
-            <button className="icon-btn" type="button" onClick={() => setSidebarOpen((v) => !v)} aria-label={sidebarOpen ? 'Close history sidebar' : 'Open history sidebar'} aria-expanded={sidebarOpen} aria-controls="history-sidebar" data-testid="button-toggle-sidebar">
-              <PanelLeft size={18} />
+            <button className="icon-btn topbar-home" type="button" onClick={returnHome} aria-label="Go to Nexo AI home" title="Home" data-testid="button-topbar-home">
+              <img src={logoUrl} alt="" aria-hidden="true" />
             </button>
-            <div className="context-title" title={activeConversation?.title ?? 'New conversation'}>
-              {activeConversation?.title ?? 'New conversation'}
+            {activeId && (
+              <button className="icon-btn" type="button" onClick={() => setSidebarOpen((v) => !v)} aria-label={sidebarOpen ? 'Close history sidebar' : 'Open history sidebar'} aria-expanded={sidebarOpen} aria-controls="history-sidebar" data-testid="button-toggle-sidebar">
+                <PanelLeft size={18} />
+              </button>
+            )}
+            <div className="context-title" title={activeConversation?.title ?? (activeId ? 'New conversation' : 'Home')}>
+              {activeConversation?.title ?? (activeId ? 'New conversation' : 'Home')}
             </div>
           </div>
+          {!activeId && (
+            <button className="icon-btn home-settings" type="button" onClick={() => setSettingsOpen(true)} aria-label="Appearance" title="Appearance" data-testid="button-home-settings">
+              <Settings2 size={17} aria-hidden="true" />
+            </button>
+          )}
         </header>
 
-        <section className="chat-region" aria-label="AI conversation">
+        <section className={`chat-region ${activeId ? '' : 'home-region'}`} aria-label={activeId ? 'AI conversation' : 'Nexo AI home'}>
           <div className="messages" aria-live="polite" aria-relevant="additions text" data-testid="chat-messages">
             {currentMessages.length === 0 ? (
-              <div className="welcome" data-testid="welcome-screen">
-                <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
-                <h1>Ask anything.<br /><em className="hero-accent">Build it right here.</em></h1>
-                <p>Get a clear answer, shape an idea, or start building. Code opens in a workspace beside the chat.</p>
-                <div className="suggestions" aria-label="Ideas to get started">
-                  {suggestions.map((suggestion) => (
-                    <button
-                      className="suggestion"
-                      type="button"
-                      key={suggestion.label}
-                      onClick={() => void sendMessage(undefined, suggestion.text)}
-                      disabled={streaming}
-                      data-testid={`suggestion-${suggestion.label.toLowerCase().replace(/\s+/g, '-')}`}
-                    >
-                      <span className="suggestion-label">{suggestion.label}<ArrowUpRight size={14} className="suggestion-arrow" aria-hidden="true" /></span>
-                      <span className="suggestion-text">{suggestion.text}</span>
-                    </button>
-                  ))}
+              activeId ? (
+                <div className="welcome" data-testid="welcome-screen">
+                  <img className="welcome-logo" src={logoUrl} alt="" aria-hidden="true" />
+                  <h1>What are we<br /><em className="hero-accent">working on?</em></h1>
+                  <p>Your conversation is ready. Ask a question, shape an idea, or start building.</p>
+                  <div className="suggestions" aria-label="Ideas to get started">
+                    {suggestions.map((suggestion) => (
+                      <button
+                        className="suggestion"
+                        type="button"
+                        key={suggestion.label}
+                        onClick={() => void sendMessage(undefined, suggestion.text)}
+                        disabled={streaming}
+                        data-testid={`suggestion-${suggestion.label.toLowerCase().replace(/\s+/g, '-')}`}
+                      >
+                        <span className="suggestion-label">{suggestion.label}<ArrowUpRight size={14} className="suggestion-arrow" aria-hidden="true" /></span>
+                        <span className="suggestion-text">{suggestion.text}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <HomeLanding
+                  logoUrl={logoUrl}
+                  prompts={suggestions}
+                  onStart={createConversation}
+                  onPrompt={(text) => void sendMessage(undefined, text)}
+                />
+              )
             ) : (
               <div className="conversation-flow" data-testid={`active-conversation-${activeConversation?.id ?? 'none'}`}>
                 {currentMessages.map((message, index) => {
@@ -564,6 +610,8 @@ function Home() {
           isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} />
         </Suspense>
       )}
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId={theme.themeId} accentId={theme.accentId}
+        setTheme={theme.setTheme} setAccent={theme.setAccent} />
     </div>
   );
 }

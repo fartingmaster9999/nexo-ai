@@ -2,6 +2,6 @@
 - [Search policy](search-policy.md) — Web retrieval must be outside Groq and selective; 2024 is a user-selected search threshold, not a verified training cutoff.
 - [Code execution boundary](code-execution-boundary.md) — Generated code runs in an isolated browser sandbox, never in the app server with its credentials.
 - [Connector runtime access](connector-runtime-access.md) — A ready connection can still be unavailable to the running app; verify access from the app itself.
-- [Interface behavior](interface-behavior.md) — The IDE opens when code is generated, with no manual open button; new conversation stays icon-only in the sidebar.
+- [Interface behavior](interface-behavior.md) — Home is sidebar-free, the Nexo brand returns there, and new chat opens its separate welcome.
 - [Chat reliability](chat-reliability.md) — Preserve legacy history and partial replies; prune complete context turns without silent prompt truncation or automatic regeneration.
 - [Hosting portability](hosting-portability.md) — Support independent Vercel hosting while preserving Replit development and Groq-only inference.

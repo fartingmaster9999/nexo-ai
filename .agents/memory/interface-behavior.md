@@ -9,6 +9,12 @@ The IDE should open automatically when Nexo generates code, with no physical but
 
 **How to apply:** Open the IDE when a newly generated supported code block arrives, without reopening it on every streaming update after dismissal. Do not show a manual open button. Retain an accessible label and tooltip on the icon-only conversation button.
 
+The first app load should show a distinct home landing page with no sidebar; starting a new conversation should open the focused blank-chat welcome screen. Clicking the Nexo brand returns to the sidebar-free home landing.
+
+**Why:** The user explicitly requested a separate first-load home page, a logo path back to it, and no sidebar at all on that welcome screen.
+
+**How to apply:** Keep the landing page as the no-selection state with no sidebar, history list, resize handle, or sidebar scrim. Provide a Nexo home control in the header. The landing CTA creates an empty conversation, landing prompts start actual conversations, and new chat stays icon-only.
+
 Show the full provider-returned reasoning trace in the Thinking panel, rather than replacing it with activity summaries. Do not show the “Current date and time included” activity entry.
 
 **Why:** The user explicitly requested the model's full available reasoning history and removal of the clock status line.
