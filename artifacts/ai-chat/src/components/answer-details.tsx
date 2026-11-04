@@ -58,7 +58,7 @@ function NormalFigure() {
 }
 
 /** Single status indicator: search takes precedence, then deepthink, then normal. */
-export function ReplyStatus({ mode, label, compact = false }: { mode: ReplyMode; label?: string; compact?: boolean }) {
+export const ReplyStatus = memo(function ReplyStatus({ mode, label, compact = false }: { mode: ReplyMode; label?: string; compact?: boolean }) {
   const text = label ?? (mode === 'search' ? 'Searching the web' : mode === 'deep' ? 'Deepthink is working' : 'Working on it');
   return (
     <span className={`reply-status rs-${mode}-mode${compact ? ' is-compact' : ''}`} role="status" aria-label={text} data-mode={mode} data-testid={mode === 'search' ? 'status-searching' : 'status-thinking'}>
@@ -66,7 +66,7 @@ export function ReplyStatus({ mode, label, compact = false }: { mode: ReplyMode;
       {!compact && <span className="rs-label">{text}</span>}
     </span>
   );
-}
+});
 
 /** Backwards-compatible wrapper. */
 export function BrainThinking({ deep }: { deep: boolean }) {

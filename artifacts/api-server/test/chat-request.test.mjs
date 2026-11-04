@@ -66,10 +66,10 @@ test("public sources are deduplicated and unsafe links rejected", () => {
 });
 
 test("search is selective, honors the 2024 policy and does not waste searches on clock or coding", () => {
-  for (const prompt of ["Hi", "Explain Newton's laws", "What happened in 1999?", "Search the web about the 1969 moon landing", "What is the current date and time?", "Write Python code to sort a list", "My current code has a bug"]) {
+  for (const prompt of ["Hi", "Explain Newton's laws", "Explain binary search", "Implement binary search in Python", "What happened in 1999?", "Search the web about the 1969 moon landing", "What is the current date and time?", "Write Python code to sort a list", "My current code has a bug"]) {
     assert.equal(needsWebSearch(prompt), false, prompt);
   }
-  for (const prompt of ["What happened at the 2024 Olympics?", "Latest NASA news", "Who is the president of the USA?", "What is today's weather in Chicago?", "Latest Python version"]) {
+  for (const prompt of ["What happened at the 2024 Olympics?", "Latest NASA news", "Who is the president of the USA?", "What is today's weather in Chicago?", "Latest Python version", "What is the current Python version?", "Newest NumPy release", "Search the web for Python numpy examples", "Look up JavaScript promises online", "Check online whether this Python library is maintained", "What is happening in Chicago right now?"]) {
     assert.equal(needsWebSearch(prompt), true, prompt);
   }
   assert.equal(isCodingRequest("Generate Python code using numpy"), true);

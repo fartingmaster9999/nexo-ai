@@ -6,14 +6,17 @@ export function isCodingRequest(text: string): boolean {
 
 /** 2024 is the user's search policy, not a claim about a model's training cutoff. */
 export function needsWebSearch(text: string): boolean {
-  const current = /\b(latest|current(?:ly)?|recent|news|today|tonight|tomorrow|yesterday|this (?:week|month|year)|breaking|weather|forecast|stock price|exchange rate|live score|who won|who (?:is|are).{0,60}(?:president|prime minister|ceo|governor))\b/i;
+  const current = /\b(latest|newest|up[- ]to[- ]date|right now|current(?:ly)?|recent|news|today|tonight|tomorrow|yesterday|this (?:week|month|year)|breaking|weather|forecast|stock price|exchange rate|live score|who won|who (?:is|are).{0,60}(?:president|prime minister|ceo|governor))\b/i;
   const years = [...text.matchAll(/\b(?:19|20)\d{2}\b/g)].map((m) => Number(m[0]));
   if (years.length && years.every((year) => year < 2024) && !current.test(text)) return false;
   if (/\b(time|date|day)\b/i.test(text) && /\b(now|today|current)\b|what time is it|what (?:day|date) is it/i.test(text)
     && !/\b(news|weather|event|match|game|release|price|meeting)\b/i.test(text)) return false;
-  if (isCodingRequest(text) && !/\b(latest|new (?:api|version)|released?|documentation|202[4-9]|20[3-9]\d)\b/i.test(text)) return false;
-  return years.some((year) => year >= 2024) || current.test(text)
-    || /\b(search|look up|browse|find.{0,20}(?:online|web|internet))\b/i.test(text);
+  // Explicit lookups must not be swallowed by the ordinary-coding guard.
+  // Requiring web intent also avoids mistaking "binary search" for browsing.
+  const explicitWeb = /\b(?:search|browse)(?:\s+the)?\s+(?:web|internet)\b|\b(?:search|check|verify|research|find|read|browse)\b[^\n.!?]{0,80}\b(?:online|on the web|on the internet)\b|\blook\s+up\b/i.test(text);
+  if (explicitWeb) return true;
+  if (isCodingRequest(text) && !/\b(latest|newest|up[- ]to[- ]date|new (?:api|version)|released?|documentation|202[4-9]|20[3-9]\d)\b|\bcurrent\b.{0,40}\b(?:version|release|api)\b|\b(?:version|release|api)\b.{0,40}\bcurrent\b/i.test(text)) return false;
+  return years.some((year) => year >= 2024) || current.test(text);
 }
 
 export function buildSearchQuery(messages: InputMessage[]): string {
