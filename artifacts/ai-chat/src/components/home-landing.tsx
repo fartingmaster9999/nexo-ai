@@ -1,4 +1,5 @@
-import { ArrowRight, ArrowUpRight, Code2, Compass, Lightbulb, Sparkles } from 'lucide-react';
+import { useEffect, useState, type Ref } from 'react';
+import { ArrowRight, ArrowUpRight, Code2, Compass, Lightbulb } from 'lucide-react';
 
 type Prompt = { label: string; text: string };
 
@@ -7,77 +8,114 @@ type Props = {
   prompts: Prompt[];
   onStart: () => void;
   onPrompt: (text: string) => void;
+  headingRef?: Ref<HTMLHeadingElement>;
 };
 
 const startingPoints = [
-  { title: 'Make a clear plan', note: 'Turn a big week into a plan you can use.', prompt: 0, Icon: Compass },
-  { title: 'Understand an idea', note: 'Get the clear version without jargon.', prompt: 1, Icon: Lightbulb },
-  { title: 'Start building', note: 'Begin with a working code example.', prompt: 3, Icon: Code2 },
+  { title: 'Make a clear plan', note: 'Turn a crowded week into steps you can keep.', prompt: 0, Icon: Compass, tag: 'Plan' },
+  { title: 'Understand an idea', note: 'The plain version, with one good example.', prompt: 1, Icon: Lightbulb, tag: 'Learn' },
+  { title: 'Start building', note: 'Working code that opens in the workspace.', prompt: 3, Icon: Code2, tag: 'Build' },
 ];
 
-export function HomeLanding({ logoUrl, prompts, onStart, onPrompt }: Props) {
+const examples = [
+  { ask: 'I have six things due and no idea where to start.', steps: ['Sort by what blocks others', 'Pick one to finish today', 'Park the rest with a date'] },
+  { ask: 'Why does compound interest feel so slow, then so fast?', steps: ['Growth earns on growth', 'Early years look flat', 'The curve bends later'] },
+  { ask: 'Plot a damped sine wave in Python.', steps: ['import numpy, matplotlib', 'y = e^(-t/4) · sin(2πt)', 'Run it in the workspace'] },
+];
+
+export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, headingRef }: Props) {
+  const [active, setActive] = useState(0);
+
+  useEffect(() => {
+    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let timer: number | undefined;
+    const sync = () => {
+      window.clearInterval(timer);
+      timer = undefined;
+      if (!preference.matches && document.visibilityState === 'visible') {
+        timer = window.setInterval(() => setActive((i) => (i + 1) % examples.length), 5200);
+      }
+    };
+    sync();
+    preference.addEventListener('change', sync);
+    document.addEventListener('visibilitychange', sync);
+    return () => {
+      window.clearInterval(timer);
+      preference.removeEventListener('change', sync);
+      document.removeEventListener('visibilitychange', sync);
+    };
+  }, []);
+
+  const example = examples[active];
+
   return (
     <div className="home-landing" data-testid="home-landing">
-      <div className="landing-topline">
+      <div className="landing-topline lx-in" style={{ ['--d' as string]: '0ms' }}>
         <span className="landing-wordmark"><img src={logoUrl} alt="" aria-hidden="true" /> NEXO AI</span>
+        <span className="landing-status"><i aria-hidden="true" /> Ready when you are</span>
       </div>
 
       <div className="landing-hero">
         <div className="landing-copy">
-          <h1>Think clearly.<br /><span>Build boldly.</span></h1>
-          <p className="landing-intro">
-            Bring a question, a half-formed idea, or a line of code. Nexo helps you work through it and take the next step.
+          <h1 ref={headingRef} tabIndex={-1} className="lx-in" style={{ ['--d' as string]: '60ms' }}>
+            <span className="lx-line">Bring the half-idea.</span>
+            <span className="lx-line lx-accent">Leave with the next step.</span>
+          </h1>
+          <p className="landing-intro lx-in" style={{ ['--d' as string]: '140ms' }}>
+            A question, a tangle of thoughts, a stubborn bug. Nexo thinks it through with you, and when the answer is code, a workspace opens so you can run it.
           </p>
-          <div className="landing-actions">
+          <div className="landing-actions lx-in" style={{ ['--d' as string]: '220ms' }}>
             <button className="landing-primary" type="button" onClick={onStart} data-testid="button-start-from-home">
-              Start a conversation <ArrowRight size={17} aria-hidden="true" />
+              <span>Start a conversation</span>
+              <span className="landing-primary-icon"><ArrowRight size={16} aria-hidden="true" /></span>
             </button>
-            <span className="landing-action-note">Your chat opens in a focused workspace.</span>
+            <span className="landing-action-note">or type straight into the box below</span>
           </div>
         </div>
 
-        <div className="landing-visual" aria-hidden="true">
-          <div className="landing-orbit landing-orbit-outer" />
-          <div className="landing-orbit landing-orbit-inner" />
+        <div className="landing-visual lx-in" style={{ ['--d' as string]: '180ms' }} aria-hidden="true">
+          <div className="lx-orbit lx-orbit-a"><i /></div>
+          <div className="lx-orbit lx-orbit-b"><i /></div>
           <div className="landing-glow" />
           <div className="landing-sphere"><img src={logoUrl} alt="" /></div>
+
           <div className="landing-preview">
             <div className="landing-preview-head">
               <span className="landing-window-dots"><i /><i /><i /></span>
-              <span>IDEA → NEXT STEP</span>
+              <span>EXAMPLE</span>
+              <span className="lx-pager">{examples.map((_, i) => <b key={i} className={i === active ? 'is-on' : ''} />)}</span>
             </div>
-            <div className="landing-preview-question">How do I make room for focused work?</div>
-            <div className="landing-preview-answer">
-              <span className="landing-answer-mark"><Sparkles size={13} /></span>
-              <span className="landing-answer-lines"><i /><i /><i /></span>
+            <div className="lx-swap" key={active}>
+              <div className="landing-preview-question">{example.ask}</div>
+              <ol className="lx-steps">
+                {example.steps.map((s, i) => (
+                  <li key={s} style={{ ['--i' as string]: i }}><span>{String(i + 1).padStart(2, '0')}</span>{s}</li>
+                ))}
+              </ol>
             </div>
-            <div className="landing-preview-code"><span>01</span> <b>make_space</b>(<em>one thing at a time</em>)</div>
-          </div>
-          <div className="landing-float-card">
-            <span className="landing-float-icon"><Code2 size={15} /></span>
-            <span><b>From thought</b><small>to something real</small></span>
-            <ArrowUpRight size={14} className="landing-float-arrow" />
+            <div className="lx-caption">Illustrative example, not a live reply</div>
           </div>
         </div>
       </div>
 
-      <div className="landing-start-heading">
-        <div><h2>What’s on your mind?</h2></div>
-        <span className="landing-start-hint">Choose a prompt or write your own below.</span>
+      <div className="landing-start-heading lx-in" style={{ ['--d' as string]: '300ms' }}>
+        <h2>Pick a door</h2>
+        <span className="landing-start-hint">Each one sends a real prompt to Nexo.</span>
       </div>
       <div className="landing-prompts">
-        {startingPoints.map(({ title, note, prompt, Icon }) => {
+        {startingPoints.map(({ title, note, prompt, Icon, tag }, i) => {
           const suggestion = prompts[prompt];
           return (
             <button
-              className="landing-prompt"
+              className="landing-prompt lx-in"
+              style={{ ['--d' as string]: `${360 + i * 70}ms` }}
               type="button"
               key={title}
               onClick={() => suggestion && onPrompt(suggestion.text)}
               data-testid={`home-prompt-${prompt}`}
             >
               <span className="landing-prompt-icon"><Icon size={17} aria-hidden="true" /></span>
-              <span className="landing-prompt-copy"><b>{title}</b><small>{note}</small></span>
+              <span className="landing-prompt-copy"><em>{tag}</em><b>{title}</b><small>{note}</small></span>
               <ArrowUpRight size={15} className="landing-prompt-arrow" aria-hidden="true" />
             </button>
           );

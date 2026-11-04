@@ -58,6 +58,7 @@ function Home() {
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const homeHeadingRef = useRef<HTMLHeadingElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const activeStreamId = useRef<string | null>(null);
@@ -158,6 +159,7 @@ function Home() {
     setActiveId(null);
     setError('');
     closeIfMobile();
+    window.requestAnimationFrame(() => homeHeadingRef.current?.focus({ preventScroll: true }));
   };
 
   const selectConversation = (id: string) => {
@@ -524,6 +526,7 @@ function Home() {
                 </div>
               ) : (
                 <HomeLanding
+                  headingRef={homeHeadingRef}
                   logoUrl={logoUrl}
                   prompts={suggestions}
                   onStart={createConversation}
