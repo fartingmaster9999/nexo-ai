@@ -43,6 +43,13 @@ test("Groq browser tools stay disabled while provider-exposed reasoning is reque
   assert.equal(result.include_reasoning, true);
 });
 
+test("coding instructions require imports and describe packages as on demand", () => {
+  const request = buildChatRequest({ messages }, new Date(), { coding: true });
+  assert.match(request.messages[0].content, /available on demand when imported/);
+  assert.match(request.messages[0].content, /aliases are not preloaded/);
+  assert.match(request.messages[0].content, /Import every library you use explicitly/);
+});
+
 test("fresh UTC and local clock context comes from the server, not model memory", () => {
   const now = new Date("2026-11-02T18:30:00Z");
   const result = buildChatRequest({ messages, timeZone: "America/Chicago" }, now);

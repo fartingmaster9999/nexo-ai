@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
-import { python } from '@codemirror/lang-python';
-import { javascript } from '@codemirror/lang-javascript';
-import { html } from '@codemirror/lang-html';
 import { Play, Square, Wrench, X, RotateCcw, Download, Terminal } from 'lucide-react';
 import { executeCode, type RunLanguage, type RunOutput } from '@/lib/code-runner';
 import { LANG_LABEL, STARTERS, type Snippet } from '@/lib/code-extract';
+import { CopyCodeButton } from './copy-code-button';
+import { useEditorLanguage } from '@/hooks/use-editor-language';
+import { useWorkspaceSize } from '@/hooks/use-workspace-size';
+import './code-workspace.css';
 
 type Draft = { language: RunLanguage; code: string; edited: boolean };
 const DRAFT_KEY = 'nexo-code-drafts-v1';
@@ -65,7 +66,8 @@ export function CodeWorkspace({ conversationId, snippets, onClose, onAskFix, can
   useEffect(() => { consoleRef.current?.scrollTo({ top: consoleRef.current.scrollHeight }); }, [outputs, runError]);
 
   const setDraft = (patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [key]: { ...draft, ...patch, edited: true } }));
-  const extensions = useMemo(() => [draft.language === 'python' ? python() : draft.language === 'javascript' ? javascript() : html()], [draft.language]);
+  const editorLanguage = useEditorLanguage(draft.language);
+  const workspaceSize = useWorkspaceSize();
   const differs = !!generated && draft.edited && (generated.code !== draft.code || generated.language !== draft.language);
 
   const run = async () => {
@@ -98,7 +100,11 @@ export function CodeWorkspace({ conversationId, snippets, onClose, onAskFix, can
   };
 
   return (
-    <aside className="workspace" aria-label="Code workspace" data-testid="panel-workspace">
+    <aside id="code-workspace" className="workspace workspace-resizable" style={{ ['--workspace-width' as string]: `${workspaceSize.width}px` }} aria-label="Code workspace" data-testid="panel-workspace">
+      <div className="workspace-resizer" role="separator" aria-orientation="vertical" aria-label="Resize code workspace"
+        aria-controls="code-workspace" tabIndex={0} aria-valuemin={workspaceSize.bounds.min} aria-valuemax={workspaceSize.bounds.max}
+        aria-valuenow={workspaceSize.width} aria-valuetext={`${workspaceSize.width} pixels wide`}
+        {...workspaceSize.separatorProps} data-testid="separator-workspace" />
       <header className="ws-head">
         <Terminal size={15} aria-hidden="true" className="ws-icon" />
         <span className="ws-title">Workspace</span>
@@ -113,6 +119,11 @@ export function CodeWorkspace({ conversationId, snippets, onClose, onAskFix, can
         <button type="button" className="icon-btn" onClick={onClose} aria-label="Close workspace" data-testid="button-close-workspace"><X size={16} /></button>
       </header>
       {storageError && <div className="ws-banner" role="alert">{storageError}</div>}
+      {editorLanguage.loading && <div className="ws-language-status" role="status">Loading {LANG_LABEL[draft.language]} highlighting… You can keep editing.</div>}
+      {editorLanguage.error && <div className="ws-language-status" role="status">
+        Highlighting could not load. Plain-text editing is still available.
+        <button type="button" onClick={editorLanguage.retry}>Retry highlighting</button>
+      </div>}
 
       {snippets.length > 1 && (
         <div className="ws-snippets" role="tablist" aria-label="Generated snippets">
@@ -131,7 +142,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, onAskFix, can
       )}
 
       <div className="ws-editor">
-        <CodeMirror value={draft.code} height="100%" theme={isLight ? 'light' : 'dark'} extensions={extensions}
+        <CodeMirror value={draft.code} height="100%" theme={isLight ? 'light' : 'dark'} extensions={editorLanguage.extensions}
           onChange={(v) => { if (v !== draft.code) setDraft({ code: v }); }} aria-label="Code editor" data-testid="editor-code" />
       </div>
 
@@ -139,6 +150,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, onAskFix, can
         <div className="ws-out-head">
           <span>{draft.language === 'html' ? 'Preview' : 'Console'}</span>
           <span className="ws-out-actions">
+            <CopyCodeButton text={draft.code} label="Copy workspace code" />
             <button type="button" className="ws-mini" onClick={() => setDraft({ code: STARTERS[draft.language] })} title="Replace with starter" data-testid="button-reset-code"><RotateCcw size={11} /> Starter</button>
             <button type="button" className="ws-mini accent" disabled={!canAsk} onClick={askFix} title={canAsk ? 'Send code and output to Nexo' : 'Wait for the current reply to finish'} data-testid="button-ask-fix"><Wrench size={11} /> Ask Nexo to fix</button>
           </span>
@@ -147,7 +159,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, onAskFix, can
           <iframe className="ws-preview" sandbox="allow-scripts" srcDoc={preview} title="HTML preview" data-testid="frame-preview" />
         ) : (
           <div className="ws-console" ref={consoleRef} role="log" aria-live="polite" data-testid="console-output">
-            {!hasRun && <p className="c-status">Runs Python, JavaScript and HTML/CSS only, inside a sandbox in your browser. Nothing runs on the server. Python loads on the first run, which can take a few seconds.</p>}
+            {!hasRun && <p className="c-status">Runs Python, JavaScript and HTML/CSS only, inside a sandbox in your browser. Nothing runs on the server. Python loads when you run it; supported packages load only when imported by your code.</p>}
             {outputs.map((o, i) => o.kind === 'image' && o.dataUrl
               ? <img key={i} src={o.dataUrl} alt={`Plot output ${i + 1}`} className="c-img" />
               : <pre key={i} className={`c-${o.kind}`}>{o.text}</pre>)}
