@@ -122,11 +122,12 @@ function Home() {
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape' && isMobile() && !document.querySelector('[role="dialog"]')) setSidebarOpen(false);
+      if (event.key !== 'Escape' || document.querySelector('[role="dialog"]') || workspaceOpen) return;
+      if (isMobile()) setSidebarOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [setSidebarOpen, workspaceOpen]);
 
   const updateConversation = useCallback((id: string, updater: (conversation: Conversation) => Conversation) => {
     setConversations((items) => items.map((conversation) => conversation.id === id ? updater(conversation) : conversation));

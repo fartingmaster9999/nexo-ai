@@ -77,6 +77,19 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     window.requestAnimationFrame(returnFocus);
   };
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      if (event.target instanceof HTMLElement && event.target.closest('.cm-editor')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose, returnFocus]);
+
   const run = async () => {
     abortRef.current?.abort();
     const ctrl = new AbortController();

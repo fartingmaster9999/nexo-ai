@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { CodeWorkspace } from '../src/components/code-workspace';
 import { MessageMarkdown } from '../src/components/message-markdown';
+import { SettingsDialog } from '../src/components/settings-dialog';
 import { executeCode } from '../src/lib/code-runner';
 import type { RunLanguage } from '../src/lib/code-runner';
 import '../src/index.css';
@@ -14,6 +15,7 @@ const markdown = `Inline \`not a block\`.\n\n\`\`\`python\r\n${raw}\`\`\`\n\n~~~
 
 function Fixture() {
   const [open, setOpen] = useState(new URLSearchParams(location.search).has('open'));
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [language, setLanguage] = useState<RunLanguage>('python');
   const [code, setCode] = useState('print("hello")\n');
   const [conversation, setConversation] = useState('workspace-fixture');
@@ -22,6 +24,7 @@ function Fixture() {
     __workspaceFixture: {
       raw,
       open: (value: boolean) => flushSync(() => setOpen(value)),
+      openSettings: () => flushSync(() => setSettingsOpen(true)),
       generated: (value: RunLanguage, text: string) => flushSync(() => { setLanguage(value); setCode(text); }),
       conversation: (value: string) => flushSync(() => setConversation(value)),
       execute: executeCode,
@@ -38,6 +41,8 @@ function Fixture() {
       onClose={() => setOpen(false)}
       returnFocus={() => conversationControlRef.current?.focus({ preventScroll: true })}
       onAskFix={() => {}} canAsk isLight={false} />}
+    <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId="midnight" accentId="blue"
+      setTheme={() => {}} setAccent={() => {}} />
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<Fixture />);
