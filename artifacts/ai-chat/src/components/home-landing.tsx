@@ -52,7 +52,6 @@ export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, headingRef }:
     <div className="home-landing" data-testid="home-landing">
       <div className="landing-topline lx-in" style={{ ['--d' as string]: '0ms' }}>
         <span className="landing-wordmark"><img src={logoUrl} alt="" aria-hidden="true" /> NEXO AI</span>
-        <span className="landing-status"><i aria-hidden="true" /> Ready when you are</span>
       </div>
 
       <div className="landing-hero">
