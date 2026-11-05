@@ -18,12 +18,13 @@ type Props = {
   conversationId: string | null;
   snippets: Snippet[];
   onClose: () => void;
+  returnFocus: () => void;
   onAskFix: (prompt: string) => void;
   canAsk: boolean;
   isLight: boolean;
 };
 
-export function CodeWorkspace({ conversationId, snippets, onClose, onAskFix, canAsk, isLight }: Props) {
+export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, onAskFix, canAsk, isLight }: Props) {
   const key = conversationId ?? '__scratch';
   const [drafts, setDrafts] = useState<Record<string, Draft>>(readDrafts);
   const [sel, setSel] = useState(0);
@@ -69,6 +70,10 @@ export function CodeWorkspace({ conversationId, snippets, onClose, onAskFix, can
   const editorLanguage = useEditorLanguage(draft.language);
   const workspaceSize = useWorkspaceSize();
   const differs = !!generated && draft.edited && (generated.code !== draft.code || generated.language !== draft.language);
+  const close = () => {
+    onClose();
+    window.requestAnimationFrame(returnFocus);
+  };
 
   const run = async () => {
     abortRef.current?.abort();
@@ -116,7 +121,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, onAskFix, can
         ) : (
           <button type="button" className="ws-btn run" onClick={() => void run()} disabled={!draft.code.trim()} data-testid="button-run-code"><Play size={13} /> Run</button>
         )}
-        <button type="button" className="icon-btn" onClick={onClose} aria-label="Close workspace" data-testid="button-close-workspace"><X size={16} /></button>
+        <button type="button" className="icon-btn" onClick={close} aria-label="Close workspace" data-testid="button-close-workspace"><X size={16} /></button>
       </header>
       {storageError && <div className="ws-banner" role="alert">{storageError}</div>}
       {editorLanguage.loading && <div className="ws-language-status" role="status">Loading {LANG_LABEL[draft.language]} highlighting… You can keep editing.</div>}

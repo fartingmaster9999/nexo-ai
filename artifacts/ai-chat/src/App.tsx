@@ -53,6 +53,8 @@ function Home() {
   const sidebar = useSidebar();
   const sidebarOpen = sidebar.open;
   const setSidebarOpen = sidebar.setOpen;
+  const sidebarToggleRef = useRef<HTMLButtonElement>(null);
+  const sidebarWasOpen = useRef(sidebarOpen);
   const closeIfMobile = () => { if (isMobile()) setSidebarOpen(false); };
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -66,6 +68,11 @@ function Home() {
   const abortRef = useRef<AbortController | null>(null);
   const activeStreamId = useRef<string | null>(null);
   const flushRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (sidebarWasOpen.current && !sidebarOpen) sidebarToggleRef.current?.focus({ preventScroll: true });
+    sidebarWasOpen.current = sidebarOpen;
+  }, [sidebarOpen]);
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeId) ?? null;
   const currentMessages = activeConversation?.messages ?? [];
@@ -501,7 +508,7 @@ function Home() {
               <img src={logoUrl} alt="" aria-hidden="true" />
             </button>
             {activeId && (
-              <button className="icon-btn" type="button" onClick={() => setSidebarOpen((v) => !v)} aria-label={sidebarOpen ? 'Close history sidebar' : 'Open history sidebar'} aria-expanded={sidebarOpen} aria-controls="history-sidebar" data-testid="button-toggle-sidebar">
+              <button ref={sidebarToggleRef} className="icon-btn" type="button" onClick={() => setSidebarOpen((v) => !v)} aria-label={sidebarOpen ? 'Close history sidebar' : 'Open history sidebar'} aria-expanded={sidebarOpen} aria-controls="history-sidebar" data-testid="button-toggle-sidebar">
                 <PanelLeft size={18} />
               </button>
             )}
@@ -624,7 +631,8 @@ function Home() {
       </main>
       {workspaceOpen && (
         <Suspense fallback={null}>
-        <CodeWorkspace conversationId={activeId} snippets={snippets} onClose={() => setWorkspaceOpen(false)} canAsk={!streaming}
+        <CodeWorkspace conversationId={activeId} snippets={snippets} onClose={() => setWorkspaceOpen(false)}
+          returnFocus={() => textareaRef.current?.focus({ preventScroll: true })} canAsk={!streaming}
           isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} />
         </Suspense>
       )}

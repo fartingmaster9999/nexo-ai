@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { CodeWorkspace } from '../src/components/code-workspace';
@@ -17,6 +17,7 @@ function Fixture() {
   const [language, setLanguage] = useState<RunLanguage>('python');
   const [code, setCode] = useState('print("hello")\n');
   const [conversation, setConversation] = useState('workspace-fixture');
+  const conversationControlRef = useRef<HTMLButtonElement>(null);
   Object.assign(window, {
     __workspaceFixture: {
       raw,
@@ -27,10 +28,16 @@ function Fixture() {
     },
   });
   return <div className="app-shell">
-    <main className="main-pane"><div className="markdown" style={{ padding: 28 }}><h1>Workspace checks</h1><MessageMarkdown content={markdown} /></div></main>
+    <main className="main-pane"><div className="markdown" style={{ padding: 28 }}>
+      <h1>Workspace checks</h1>
+      <button ref={conversationControlRef} type="button" onClick={() => setOpen(true)} data-testid="button-conversation-control">Conversation</button>
+      <MessageMarkdown content={markdown} />
+    </div></main>
     {open && <CodeWorkspace conversationId={conversation}
       snippets={[{ language, code, label: 'Test code', complete: true }]}
-      onClose={() => setOpen(false)} onAskFix={() => {}} canAsk isLight={false} />}
+      onClose={() => setOpen(false)}
+      returnFocus={() => conversationControlRef.current?.focus({ preventScroll: true })}
+      onAskFix={() => {}} canAsk isLight={false} />}
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<Fixture />);

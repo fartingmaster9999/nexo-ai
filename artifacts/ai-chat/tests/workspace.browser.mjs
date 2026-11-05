@@ -48,6 +48,11 @@ async function evaluate(expression, timeout) {
   return response.result?.value;
 }
 const click = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+async function pressKey(selector, key, code, windowsVirtualKeyCode) {
+  if (selector) await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, text: key === 'Enter' ? '\r' : undefined });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode });
+}
 const width = () => evaluate(`document.querySelector('[data-testid="panel-workspace"]').getBoundingClientRect().width`);
 const changeLanguage = (language) => evaluate(`(() => {
   const select = document.querySelector('[data-testid="select-language"]');
@@ -128,8 +133,11 @@ try {
   await changeLanguage('html');
   await waitFor(() => evaluate(`!document.querySelector('.ws-language-status') && document.querySelector('select').value === 'html'`), 'rapid mode switch');
   assert.ok(requests.some((url) => /codemirror_lang-html/.test(url)));
-  await click('[data-testid="button-close-workspace"]');
-  await evaluate(`window.__workspaceFixture.open(true)`);
+  await pressKey('[data-testid="button-close-workspace"]', 'Enter', 'Enter', 13);
+  await waitFor(() => evaluate(`!document.querySelector('[data-testid="panel-workspace"]')`), 'desktop workspace close');
+  await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-conversation-control'`), 'desktop workspace focus return');
+  assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-conversation-control', 'Workspace close returns focus to the conversation control on desktop');
+  await pressKey('[data-testid="button-conversation-control"]', 'Enter', 'Enter', 13);
   await waitFor(() => evaluate(`!!document.querySelector('.cm-content')`), 'workspace reopen');
   assert.equal(await width(), expanded, 'Saved width survives remount');
   assert.ok(await evaluate(`document.querySelector('.cm-content').textContent.includes('edited')`), 'Edited draft survives remount');
@@ -137,6 +145,13 @@ try {
   await waitFor(async () => await width() === 390, 'phone width');
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.workspace-resizer')).display`), 'none');
   assert.ok(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), 'No phone overflow');
+  await pressKey('[data-testid="button-close-workspace"]', 'Enter', 'Enter', 13);
+  await waitFor(() => evaluate(`!document.querySelector('[data-testid="panel-workspace"]')`), 'mobile workspace close');
+  await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-conversation-control'`), 'mobile workspace focus return');
+  assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-conversation-control', 'Workspace close returns focus to the conversation control on mobile');
+  await pressKey('[data-testid="button-conversation-control"]', 'Enter', 'Enter', 13);
+  await waitFor(() => evaluate(`!!document.querySelector('[data-testid="panel-workspace"]')`), 'mobile workspace reopen');
+  assert.equal(await width(), 390, 'Workspace reopens at phone width');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   const runPython = (code) => evaluate(`window.__workspaceFixture.execute({language:'python', code:${JSON.stringify(code)}})`, 120000);
   const plain = await runPython('import sys\nprint("simple:", 2+3)\nprint("scientific:", any(name in sys.modules for name in ("numpy","scipy","matplotlib")))');
@@ -150,7 +165,27 @@ try {
   assert.ok(plot.outputs.some((item) => item.kind === 'image' && item.dataUrl?.startsWith('data:image/png;base64,')), 'Conditional plot capture');
   const cancelled = await evaluate(`(async()=>{ const ctrl=new AbortController(); setTimeout(()=>ctrl.abort(),50); try { await window.__workspaceFixture.execute({language:'python',code:'while True: pass',signal:ctrl.signal}); return false; } catch(error) { return error.name==='AbortError' && !document.querySelector('iframe[hidden]'); } })()`);
   assert.equal(cancelled, true);
-  console.log('Workspace browser checks passed: raw/edited copy, denial, mouse/touch/keyboard sizing, drafts, lazy modes, mobile, plain Python, NumPy/SciPy, plots and cancellation.');
+  await evaluate(`localStorage.setItem('nexo-conversation-v2:focus-check', ${JSON.stringify(JSON.stringify({
+    conversation: { id: 'focus-check', title: 'Focus check', messages: [{ id: 'focus-message', role: 'user', content: 'Test keyboard focus.' }], createdAt: 1, updatedAt: 2 },
+    updatedAt: 2,
+  }))})`);
+  await cdp('Page.navigate', { url: `http://127.0.0.1:${port}/` });
+  await waitFor(() => evaluate(`!!document.querySelector('[data-testid="button-start-from-home"]')`), 'chat home');
+  await pressKey('[data-testid="button-start-from-home"]', 'Enter', 'Enter', 13);
+  await waitFor(() => evaluate(`!!document.querySelector('[data-testid="button-toggle-sidebar"]')`), 'conversation page');
+  assert.equal(await evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]').getAttribute('aria-expanded')`), 'true');
+  await pressKey('[data-testid="button-toggle-sidebar"]', 'Enter', 'Enter', 13);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]')?.getAttribute('aria-expanded') === 'false'`), 'desktop sidebar close');
+  await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-toggle-sidebar'`), 'desktop sidebar focus return');
+  assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-toggle-sidebar', 'Sidebar close returns focus to its toggle on desktop');
+  await pressKey('[data-testid="button-toggle-sidebar"]', 'Enter', 'Enter', 13);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]')?.getAttribute('aria-expanded') === 'true'`), 'desktop sidebar reopen');
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 700, deviceScaleFactor: 1, mobile: true });
+  await pressKey(null, 'Escape', 'Escape', 27);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]')?.getAttribute('aria-expanded') === 'false'`), 'mobile sidebar close');
+  await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-toggle-sidebar'`), 'mobile sidebar focus return');
+  assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-toggle-sidebar', 'Sidebar close returns focus to its toggle on mobile');
+  console.log('Workspace browser checks passed: copy, denial, resize, drafts, lazy modes, keyboard focus restoration on desktop and mobile, Python, plots, and cancellation.');
 } finally {
   socket?.close();
   for (const child of [browser, vite]) child.kill('SIGTERM');
