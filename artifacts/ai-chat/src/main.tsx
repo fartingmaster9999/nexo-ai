@@ -7,6 +7,7 @@ import './index.css';
 import './nexo.css';
 import './refine.css';
 import './landing.css';
+import './ux-polish.css';
 
 createRoot(document.getElementById('root')!, {
   // Keeps caught errors off reportError(), which would raise the dev overlay.
