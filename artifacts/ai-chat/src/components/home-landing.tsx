@@ -100,7 +100,6 @@ export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, headingRef }:
 
       <div className="landing-start-heading lx-in" style={{ ['--d' as string]: '300ms' }}>
         <h2>Pick a door</h2>
-        <span className="landing-start-hint">Each one sends a real prompt to Nexo.</span>
       </div>
       <div className="landing-prompts">
         {startingPoints.map(({ title, note, prompt, Icon, tag }, i) => {
