@@ -82,6 +82,8 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
   await settled();
   await waitFor(() => exists('[data-testid="chart-math"] .recharts-line-curve'), 'calculated plot');
   assert.match(await text('[data-testid="chart-math"] [data-testid="text-chart-provenance"]'), /Calculated/);
+  assert.match(await text('[data-testid="chart-math"] [data-testid="list-chart-calculations"]'), /sin\(x/);
+  assert.match(await text('[data-testid="chart-math"] [data-testid="list-chart-calculations"]'), /computed locally/);
   await click('[data-testid="chart-math"] summary');
   assert.equal(await evaluate(`document.querySelectorAll('[data-testid="chart-math"] tbody tr').length`), 61);
   for (const kind of ['bar', 'scatter', 'donut']) {

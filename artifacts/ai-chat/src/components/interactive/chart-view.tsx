@@ -200,6 +200,16 @@ export default function ChartView({ widget }: { widget: ChartWidget }) {
       <figcaption className={`nx-prov is-${provenance.kind}`} data-testid="text-chart-provenance">
         <span className="nx-prov-kind">{KIND[provenance.kind]}</span>
         <span className="nx-prov-detail">{provenance.detail}</span>
+        {provenance.kind === 'calculated' && (
+          <ul className="nx-prov-calculations" data-testid="list-chart-calculations">
+            {series.map((s) => s.calculation && (
+              <li key={s.id}>
+                <span>{s.name}: y = {s.calculation.expression}</span>
+                <span>x ∈ [{nf.format(s.calculation.min)}, {nf.format(s.calculation.max)}], {s.calculation.samples} samples; computed locally</span>
+              </li>
+            ))}
+          </ul>
+        )}
         {provenance.sources.length > 0 && (
           <ul className="nx-prov-sources">
             {provenance.sources.map((s, i) => (

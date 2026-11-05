@@ -79,6 +79,9 @@
 .nx-prov-kind { font-family: var(--app-font-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; background: hsl(var(--primary) / .1); color: hsl(var(--primary)); }
 .nx-prov.is-illustrative .nx-prov-kind { background: #E98E2E1f; color: #E98E2E; }
 .nx-prov-detail { flex: 1 1 200px; }
+.nx-prov-calculations { list-style: none; display: grid; gap: 4px; width: 100%; margin: 2px 0 0; padding: 0; }
+.nx-prov-calculations li { display: flex; flex-wrap: wrap; gap: 2px 12px; overflow-wrap: anywhere; }
+.nx-prov-calculations li span:first-child { font-family: var(--app-font-mono); color: hsl(var(--foreground) / .82); }
 .nx-prov-sources { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; width: 100%; }
 .nx-prov-sources a { display: inline-flex; align-items: center; gap: 4px; color: hsl(var(--primary)); text-decoration: none; overflow-wrap: anywhere; }
 .nx-prov-sources a:hover { text-decoration: underline; }

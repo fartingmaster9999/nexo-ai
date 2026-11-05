@@ -15,10 +15,53 @@ test('all chart types and biology quiz validate into bounded declarative data', 
   assert.ok(Math.abs(parsed.series[0].points.at(-1).y - Math.sin(3)) < 1e-12);
 });
 
+test('version 2 mathematical expressions are parsed and calculated deterministically', () => {
+  const expressionWidget = (expression, min, max, samples) => ({
+    ...math, version: 2, id: 'expression', title: 'Expression plot',
+    series: [{ id: 'curve', name: expression, formula: { expression, min, max, samples } }],
+  });
+  const sinc = validateWidget(expressionWidget('sin(x)/x', -2, 2, 5));
+  assert.equal(sinc.status, 'valid');
+  assert.deepEqual(sinc.widget.series[0].points.map((point) => point.y), [Math.sin(-2) / -2, Math.sin(-1) / -1, null, Math.sin(1), Math.sin(2) / 2]);
+  assert.deepEqual(sinc.widget.series[0].calculation, { expression: 'sin(x)/x', min: -2, max: 2, samples: 5 });
+
+  const logarithm = validateWidget(expressionWidget('log(x)', -2, 2, 5));
+  assert.equal(logarithm.status, 'valid');
+  assert.deepEqual(logarithm.widget.series[0].points.map((point) => point.y), [null, null, null, 0, Math.log(2)]);
+  assert.equal(logarithm.widget.version, 2);
+
+  const tangent = validateWidget(expressionWidget('tan(x)', 0, 3, 2));
+  assert.equal(tangent.status, 'valid');
+  assert.deepEqual(tangent.widget.series[0].points.map((point) => point.y), [0, null, Math.tan(3)]);
+  const sampledTangent = validateWidget(expressionWidget('tan(x)', 0, 3, 81));
+  assert.equal(sampledTangent.status, 'valid');
+  assert.ok(sampledTangent.widget.series[0].points.some((point) => point.y === null));
+  assert.equal(validateWidget({ ...expressionWidget('x^2', -2, 2, 5), version: 1 }).status, 'invalid');
+});
+
+test('expression parser rejects malformed, excessive, and unsafe expressions', () => {
+  const expressionWidget = (expression, min = -2, max = 2, samples = 5) => ({
+    ...math, version: 2, id: 'expression',
+    series: [{ id: 'curve', name: 'curve', formula: { expression, min, max, samples } }],
+  });
+  for (const expression of [
+    'x +', 'sin(x', 'unknown(x)', 'x; alert(1)', 'globalThis.process', '2x', 'sqrt(-1) +',
+    '(' .repeat(25) + 'x' + ')'.repeat(25),
+    Array.from({ length: 49 }, () => 'x').join('+'),
+  ]) assert.equal(validateWidget(expressionWidget(expression)).status, 'invalid', expression);
+  for (const formula of [
+    { expression: 'x', min: 1, max: 1, samples: 5 },
+    { expression: 'x', min: -1e7, max: 1e7, samples: 5 },
+    { expression: 'x', min: -1, max: 1, samples: 401 },
+  ]) {
+    assert.equal(validateWidget({ ...math, version: 2, series: [{ id: 'curve', name: 'curve', formula }] }).status, 'invalid');
+  }
+});
+
 test('malformed, oversized, unknown and invalid numerical output fail without throwing', () => {
   for (const value of ['{', '{}', 'null', JSON.stringify({ ...quiz, type: 'html' }), 'x'.repeat(60001), '"' + '✓'.repeat(21000) + '"']) assert.equal(parseWidget(value).status, 'invalid');
   for (const change of [
-    { version: 2 }, { id: '__proto__' }, { questions: [] },
+    { version: 3 }, { id: '__proto__' }, { questions: [] },
     { questions: [{ ...quiz.questions[0], answerId: 'missing' }] },
     { questions: [quiz.questions[0], quiz.questions[0]] },
   ]) assert.equal(validateWidget({ ...quiz, ...change }).status, 'invalid');
