@@ -3,7 +3,7 @@ import { withFixture, waitFor } from './browser-harness.mjs';
 
 const themes = ['midnight', 'graphite', 'abyss', 'paper', 'dune'];
 
-await withFixture('tests/theme.html', async ({ cdp, evaluate }) => {
+await withFixture('tests/theme.html', async ({ cdp, evaluate, navigate }) => {
   await waitFor(() => evaluate(`!!document.querySelector('[data-testid="dialog-settings"]') && !!document.querySelector('.cm-content')`), 'theme fixture and code editor');
 
   const readContrast = (selector, foregroundProperty, backgroundSelector, pseudo = '') => evaluate(`(() => {
@@ -111,4 +111,25 @@ await withFixture('tests/theme.html', async ({ cdp, evaluate }) => {
   await evaluate(`document.querySelector('.top-btn').click()`);
   await waitFor(() => evaluate(`!!document.querySelector('[data-testid="dialog-settings"]')`), 'appearance dialog for selected state');
   assert.deepEqual(await evaluate(`document.querySelectorAll('[role="radio"][aria-checked="true"]').length`), 2, 'One theme and one accent remain selected');
+
+  const remoteAppearance = JSON.stringify({ theme: 'abyss', accent: 'rose' });
+  await evaluate(`(() => {
+    localStorage.setItem('nexo-theme-v1', ${JSON.stringify(remoteAppearance)});
+    const originalSetItem = Storage.prototype.setItem;
+    window.__themeStorageWrites = 0;
+    Storage.prototype.setItem = function(key, value) {
+      if (key === 'nexo-theme-v1') window.__themeStorageWrites++;
+      return originalSetItem.call(this, key, value);
+    };
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'nexo-theme-v1', newValue: ${JSON.stringify(remoteAppearance)}, storageArea: localStorage
+    }));
+  })()`);
+  await waitFor(() => evaluate(`document.documentElement.dataset.theme === 'abyss'`), 'appearance update from another tab');
+  assert.equal(await evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--primary').trim()`), '346 78% 60%', 'Remote accent is applied');
+  assert.equal(await evaluate(`window.__themeStorageWrites`), 0, 'Remote appearance changes do not write back to storage');
+
+  await navigate();
+  await waitFor(() => evaluate(`document.documentElement.dataset.theme === 'abyss'`), 'appearance remains selected after reload');
+  assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem('nexo-theme-v1'))`), { theme: 'abyss', accent: 'rose' }, 'Remote appearance remains saved after reload');
 });

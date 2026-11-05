@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type ThemeId = 'midnight' | 'graphite' | 'abyss' | 'paper' | 'dune';
 export type AccentId = 'blue' | 'cyan' | 'violet' | 'emerald' | 'amber' | 'rose';
@@ -73,20 +73,50 @@ function primaryForeground(accentHsl: string) {
 
 const KEY = 'nexo-theme-v1';
 type Saved = { theme: ThemeId; accent: AccentId };
+const DEFAULT_SAVED: Saved = { theme: 'midnight', accent: 'blue' };
 
-function read(): Saved {
+function parseSaved(raw: string | null): Saved | null {
+  if (raw === null) return null;
   try {
-    const v = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Saved>;
+    const v = JSON.parse(raw) as Partial<Saved>;
     return {
       theme: THEMES.some((t) => t.id === v.theme) ? v.theme as ThemeId : 'midnight',
       accent: ACCENTS.some((a) => a.id === v.accent) ? v.accent as AccentId : 'blue',
     };
-  } catch { return { theme: 'midnight', accent: 'blue' }; }
+  } catch { return null; }
+}
+
+function read(): Saved {
+  try { return parseSaved(localStorage.getItem(KEY)) ?? DEFAULT_SAVED; }
+  catch { return DEFAULT_SAVED; }
 }
 
 export function useThemeSettings() {
   const [saved, setSaved] = useState<Saved>(read);
+  const lastPersisted = useRef<string | null>(null);
   const theme = THEMES.find((t) => t.id === saved.theme)!;
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== KEY || event.storageArea !== localStorage || event.newValue === null) return;
+      const incoming = parseSaved(event.newValue);
+      if (!incoming) return;
+      lastPersisted.current = JSON.stringify(incoming);
+      setSaved(incoming);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  useEffect(() => {
+    const serialized = JSON.stringify(saved);
+    if (lastPersisted.current === serialized) return;
+    try {
+      localStorage.setItem(KEY, serialized);
+      lastPersisted.current = serialized;
+    } catch { /* ignore */ }
+  }, [saved]);
+
   useEffect(() => {
     const root = document.documentElement;
     const accent = ACCENTS.find((a) => a.id === saved.accent)!;
@@ -98,7 +128,6 @@ export function useThemeSettings() {
     root.style.setProperty('--primary-foreground', primaryForeground(accent.hsl));
     root.classList.toggle('dark', !theme.light);
     root.dataset.theme = theme.id;
-    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch { /* ignore */ }
   }, [saved, theme]);
   return {
     themeId: saved.theme, accentId: saved.accent, isLight: theme.light,
