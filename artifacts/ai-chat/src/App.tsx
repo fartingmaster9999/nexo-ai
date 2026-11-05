@@ -558,9 +558,6 @@ function Home() {
                   const replyDeepthink = message.deepthink ?? deepthink;
                   return (
                     <article className={`message-row ${message.role}`} key={`${activeConversation?.id}-${index}`} data-testid={`message-${message.role}-${index}`}>
-                      <div className={`avatar ${message.role === 'user' ? 'user-avatar is-blank' : ''}`} aria-hidden="true">
-                        {message.role === 'assistant' && <img src={logoUrl} alt="" />}
-                      </div>
                       <div className="message-content">
                         {message.role === 'assistant' && <NoticeBanner notices={message.notices} index={index} />}
                         {message.role === 'assistant' && <ThinkingPanel message={message} live={isLive} index={index} />}

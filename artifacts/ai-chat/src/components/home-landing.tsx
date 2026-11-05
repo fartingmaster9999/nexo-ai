@@ -73,14 +73,8 @@ export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, headingRef }:
         </div>
 
         <div className="landing-visual lx-in" style={{ ['--d' as string]: '180ms' }} aria-hidden="true">
-          <div className="lx-orbit lx-orbit-a"><i /></div>
-          <div className="lx-orbit lx-orbit-b"><i /></div>
-          <div className="landing-glow" />
-          <div className="landing-sphere"><img src={logoUrl} alt="" /></div>
-
           <div className="landing-preview">
             <div className="landing-preview-head">
-              <span className="landing-window-dots"><i /><i /><i /></span>
               <span className="lx-pager">{examples.map((_, i) => <b key={i} className={i === active ? 'is-on' : ''} />)}</span>
             </div>
             <div className="lx-swap" key={active}>
