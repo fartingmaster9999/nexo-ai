@@ -50,6 +50,19 @@ test("coding instructions require imports and describe packages as on demand", (
   assert.match(request.messages[0].content, /Import every library you use explicitly/);
 });
 
+test("inline widget contract is selective, Groq-only and disabled for explicit runnable code", () => {
+  const prompt = (content) => buildChatRequest({ messages: [{ role: 'user', content }] }).messages[0].content;
+  for (const content of ['Quiz me on biology', 'Quiz me on Python', 'Plot y = x squared', 'Graph the supplied data']) {
+    assert.match(prompt(content), /nexo-widget/);
+    assert.match(prompt(content), /never invented URLs or unsourced measurements/);
+  }
+  for (const content of ['Hello', 'Explain ATP', 'Write Python code to plot a sine wave']) assert.doesNotMatch(prompt(content), /nexo-widget/);
+  const result = buildChatRequest({ messages: [{ role: 'user', content: 'Graph sin function' }] }, new Date(), { coding: true });
+  assert.match(result.messages[0].content, /nexo-widget/);
+  assert.doesNotMatch(result.messages[0].content, /For coding requests, provide complete runnable code/);
+  assert.equal(result.model, 'openai/gpt-oss-120b');
+});
+
 test("fresh UTC and local clock context comes from the server, not model memory", () => {
   const now = new Date("2026-11-02T18:30:00Z");
   const result = buildChatRequest({ messages, timeZone: "America/Chicago" }, now);

@@ -15,7 +15,8 @@ import type { Conversation } from '@/lib/conversation-storage';
 import { prepareRequestMessages } from '@/lib/request-context';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
-import { extractSnippets } from '@/lib/code-extract';
+import { extractSnippets, type Snippet } from '@/lib/code-extract';
+import type { QuizProgress } from '@/lib/interactive-widgets';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
 const logoUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/nexo-logo.png`;
@@ -23,6 +24,8 @@ const prefersReducedMotion = () => typeof window !== 'undefined' && window.match
 const CodeWorkspace = lazy(() => import('@/components/code-workspace').then(module => ({ default: module.CodeWorkspace })));
 const DEEPTHINK_KEY = 'nexo-deepthink';
 const queryClient = new QueryClient();
+const snippetCache = new WeakMap<ChatMessage, Snippet[]>();
+const noSnippets: Snippet[] = [];
 
 const suggestions = [
   { label: 'Make a plan', text: 'Help me make a realistic plan for a calmer, more focused week.' },
@@ -67,14 +70,20 @@ function Home() {
   const activeConversation = conversations.find((conversation) => conversation.id === activeId) ?? null;
   const currentMessages = activeConversation?.messages ?? [];
   const lastAssistantIndex = currentMessages.map((m) => m.role).lastIndexOf('assistant');
-  const codeSource = (() => {
+  const codeSource = useMemo(() => {
     for (let i = currentMessages.length - 1; i >= 0; i--) {
       const m = currentMessages[i];
-      if (m.role === 'assistant' && m.content.includes('```')) return { index: i, text: m.content };
+      if (m.role !== 'assistant') continue;
+      let found = snippetCache.get(m);
+      if (!found) {
+        found = extractSnippets(m.content);
+        snippetCache.set(m, found);
+      }
+      if (found.length) return { index: i, snippets: found };
     }
     return null;
-  })();
-  const snippets = useMemo(() => codeSource ? extractSnippets(codeSource.text) : [], [codeSource?.text]);
+  }, [currentMessages]);
+  const snippets = codeSource?.snippets ?? noSnippets;
 
   useEffect(() => { setWorkspaceOpen(false); }, [activeId]);
   useEffect(() => {
@@ -113,6 +122,13 @@ function Home() {
   const updateConversation = useCallback((id: string, updater: (conversation: Conversation) => Conversation) => {
     setConversations((items) => items.map((conversation) => conversation.id === id ? updater(conversation) : conversation));
   }, []);
+  const updateQuizProgress = useCallback((conversationId: string, messageId: string, widgetKey: string, progress: QuizProgress) => {
+    updateConversation(conversationId, (conversation) => ({
+      ...conversation, updatedAt: Date.now(),
+      messages: conversation.messages.map((message, index) => (message.id ?? `legacy-${index}`) === messageId && message.role === 'assistant'
+        ? { ...message, quizProgress: { ...message.quizProgress, [widgetKey]: progress } } : message),
+    }));
+  }, [updateConversation]);
 
   const removePendingAssistant = useCallback((id: string | null) => {
     if (!id) return;
@@ -219,10 +235,10 @@ function Home() {
     }
 
     const conversationId = conversation.id;
-    const userMessage: ChatMessage = { role: 'user', content: prompt };
+    const userMessage: ChatMessage = { id: makeId(), role: 'user', content: prompt };
     const fullMessages = [...conversation.messages.filter((m) => m.content.trim()), userMessage];
     const requestMessages = prepareRequestMessages(fullMessages);
-    const assistantMessage: ChatMessage = { role: 'assistant', content: '', deepthink: requestDeepthink };
+    const assistantMessage: ChatMessage = { id: makeId(), role: 'assistant', content: '', deepthink: requestDeepthink };
     setConversations((items) => {
       const exists = items.some((item) => item.id === conversationId);
       const updated: Conversation = {
@@ -255,7 +271,7 @@ function Home() {
       updateConversation(conversationId, (item) => ({
       ...item,
       messages: item.messages.map((message, index) =>
-        index === item.messages.length - 1 && message.role === 'assistant' ? snapshot : message),
+        index === item.messages.length - 1 && message.role === 'assistant' ? { ...snapshot, quizProgress: message.quizProgress } : message),
       updatedAt: Date.now(),
       }));
     };
@@ -550,7 +566,9 @@ function Home() {
                         {message.role === 'assistant' && <ThinkingPanel message={message} live={isLive} index={index} />}
                         <div className={`message-text ${message.role === 'assistant' ? 'markdown' : ''}`} data-testid={`message-content-${index}`}>
                           {isPending ? (isSearching(message, isLive) ? null : <ReplyStatus mode={replyDeepthink ? 'deep' : 'normal'} />) : message.role === 'assistant' ? (
-                            <MessageMarkdown content={displayContent} />
+                            <MessageMarkdown content={displayContent} live={isLive} conversationId={activeConversation!.id}
+                              messageId={message.id ?? `legacy-${index}`} quizProgress={message.quizProgress}
+                              onQuizProgress={updateQuizProgress} sources={message.sources} />
                           ) : message.content}
                           {isLive && displayContent && replyDeepthink && !isSearching(message, isLive) && <ReplyStatus mode="deep" compact />}
                           {isLive && displayContent && <span className="typing-caret" aria-hidden="true" />}

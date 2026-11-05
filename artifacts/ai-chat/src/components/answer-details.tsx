@@ -1,11 +1,13 @@
 import { memo, useState } from 'react';
 import { AlertTriangle, Brain, ChevronDown, Info } from 'lucide-react';
 import { splitReasoning } from '../lib/reasoning-sections';
+import type { QuizProgress } from '../lib/interactive-widgets';
 
 export type Activity = { id: string; label: string; kind?: 'search' | 'thinking' | 'info'; status?: 'running' | 'complete' | 'error' };
 export type Source = { title: string; url: string };
 export type Notice = { id: string; message: string; model?: string };
 export type ChatMessage = {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
   reasoning?: string;
@@ -14,6 +16,7 @@ export type ChatMessage = {
   sources?: Source[];
   notices?: Notice[];
   model?: string;
+  quizProgress?: Record<string, QuizProgress>;
 };
 
 export type ReplyMode = 'search' | 'deep' | 'normal';

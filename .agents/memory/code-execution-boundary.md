@@ -14,3 +14,9 @@ Load only the editor language in use and Python packages needed by the executed 
 **Why:** The user explicitly requested not to load every language or every Python library. Earlier requests to make scientific libraries available do not mean they should all be downloaded and imported on each run.
 
 **How to apply:** Keep supported packages available on demand, require accurate imports in generated examples, and avoid claiming scientific aliases are preloaded.
+
+Inline quizzes and charts must remain bounded declarative data, not model-authored JavaScript, HTML, or chart option functions executed in the trusted chat page.
+
+**Why:** The user wants interactive answers without opening the IDE. That does not relax the isolation boundary for arbitrary generated code; safe built-in widget renderers can meet this requirement without granting execution privileges.
+
+**How to apply:** Extend validated schemas and built-in renderers for new widget types. Compute supported mathematical formulas through fixed application logic; never evaluate model expressions. Keep quiz state attached to its owning conversation/message, and require retrieved source provenance for charts claiming verified web data.

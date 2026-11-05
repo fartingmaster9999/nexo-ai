@@ -1,4 +1,5 @@
 import type { RunLanguage } from '@/lib/code-runner';
+import { fencedBlocks } from './fenced-blocks.ts';
 
 export type Snippet = { language: RunLanguage; code: string; label: string; complete: boolean };
 
@@ -10,16 +11,13 @@ const MAP: Record<string, RunLanguage> = {
 
 export function extractSnippets(text: string): Snippet[] {
   const out: Snippet[] = [];
-  const re = /```([\w+#.-]*)[^\n]*\n([\s\S]*?)(```|$)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    const tag = m[1].toLowerCase();
+  for (const block of fencedBlocks(text)) {
+    const tag = block.tag;
     const lang = MAP[tag];
-    if (!lang) { if (!m[3]) break; continue; }
-    let code = m[2].replace(/\n$/, '');
+    if (!lang) continue;
+    let code = block.code.replace(/\r?\n$/, '');
     if (tag === 'css') code = `<style>\n${code}\n</style>`;
-    if (code.trim()) out.push({ language: lang, code, complete: !!m[3], label: `${tag} block ${out.length + 1}` });
-    if (!m[3]) break;
+    if (code.trim()) out.push({ language: lang, code, complete: block.complete, label: `${tag} block ${out.length + 1}` });
   }
   return out;
 }

@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../components/answer-details';
+import { parseQuizStates } from './interactive-widgets.ts';
 
 export type Conversation = { id: string; title: string; messages: ChatMessage[]; createdAt: number; updatedAt: number };
 export const LEGACY_KEY = 'still-chat-conversations-v1';
@@ -13,7 +14,9 @@ export function parseConversation(value: unknown): Conversation | null {
   if (!c.messages.every(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')) return null;
   // Ignore malformed optional metadata without discarding the user's actual text.
   return { ...c, messages: c.messages.map(m => ({
+    ...(typeof m.id === 'string' && m.id.length <= 100 ? { id: m.id } : {}),
     role: m.role, content: m.content,
+    ...(m.role === 'assistant' ? { quizProgress: parseQuizStates(m.quizProgress) } : {}),
     ...(typeof m.reasoning === 'string' ? { reasoning: m.reasoning } : {}),
     ...(typeof m.deepthink === 'boolean' ? { deepthink: m.deepthink } : {}),
     ...(typeof m.model === 'string' ? { model: m.model } : {}),
