@@ -53,6 +53,11 @@ async function pressKey(selector, key, code, windowsVirtualKeyCode) {
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, text: key === 'Enter' ? '\r' : undefined });
   await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode });
 }
+async function pressTab(shift = false) {
+  const modifiers = shift ? 8 : 0;
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', modifiers, key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', modifiers, key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+}
 const width = () => evaluate(`document.querySelector('[data-testid="panel-workspace"]').getBoundingClientRect().width`);
 const changeLanguage = (language) => evaluate(`(() => {
   const select = document.querySelector('[data-testid="select-language"]');
@@ -145,6 +150,14 @@ try {
   await waitFor(async () => await width() === 390, 'phone width');
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.workspace-resizer')).display`), 'none');
   assert.ok(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), 'No phone overflow');
+  await waitFor(() => evaluate(`document.activeElement?.closest('[data-testid="panel-workspace"]') === document.querySelector('[data-testid="panel-workspace"]')`), 'mobile workspace initial focus');
+  assert.equal(await evaluate(`document.activeElement?.getAttribute('aria-label')`), 'Language', 'Workspace opening focuses its first control on mobile');
+  await pressTab(true);
+  assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-ask-fix', 'Shift+Tab wraps to the last workspace control on mobile');
+  await pressTab();
+  assert.equal(await evaluate(`document.activeElement?.getAttribute('aria-label')`), 'Language', 'Tab wraps to the first workspace control on mobile');
+  await evaluate(`document.querySelector('[data-testid="button-conversation-control"]').focus()`);
+  assert.ok(await evaluate(`Boolean(document.activeElement?.closest('[data-testid="panel-workspace"]'))`), 'Programmatic focus cannot escape the mobile workspace');
   await pressKey('[data-testid="button-close-workspace"]', 'Enter', 'Enter', 13);
   await waitFor(() => evaluate(`!document.querySelector('[data-testid="panel-workspace"]')`), 'mobile workspace close');
   await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-conversation-control'`), 'mobile workspace focus return');
@@ -180,12 +193,21 @@ try {
   assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-toggle-sidebar', 'Sidebar close returns focus to its toggle on desktop');
   await pressKey('[data-testid="button-toggle-sidebar"]', 'Enter', 'Enter', 13);
   await waitFor(() => evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]')?.getAttribute('aria-expanded') === 'true'`), 'desktop sidebar reopen');
+  await pressKey('[data-testid="button-open-settings"]', 'Tab', 'Tab', 9);
+  assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'separator-sidebar', 'Desktop sidebar keeps the normal tab order instead of trapping focus');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 700, deviceScaleFactor: 1, mobile: true });
+  await waitFor(() => evaluate(`Boolean(document.activeElement?.closest('#history-sidebar'))`), 'mobile sidebar initial focus');
+  await pressTab(true);
+  assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-open-settings', 'Shift+Tab wraps to the last sidebar control on mobile');
+  await pressTab();
+  assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-home', 'Tab wraps to the first sidebar control on mobile');
+  await evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]').focus()`);
+  assert.ok(await evaluate(`Boolean(document.activeElement?.closest('#history-sidebar'))`), 'Programmatic focus cannot escape the mobile sidebar');
   await pressKey(null, 'Escape', 'Escape', 27);
   await waitFor(() => evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]')?.getAttribute('aria-expanded') === 'false'`), 'mobile sidebar close');
   await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-toggle-sidebar'`), 'mobile sidebar focus return');
   assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-toggle-sidebar', 'Sidebar close returns focus to its toggle on mobile');
-  console.log('Workspace browser checks passed: copy, denial, resize, drafts, lazy modes, keyboard focus restoration on desktop and mobile, Python, plots, and cancellation.');
+  console.log('Workspace browser checks passed: copy, denial, resize, drafts, lazy modes, desktop tab order, mobile panel focus traps and restoration, Python, plots, and cancellation.');
 } finally {
   socket?.close();
   for (const child of [browser, vite]) child.kill('SIGTERM');

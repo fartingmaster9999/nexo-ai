@@ -6,6 +6,7 @@ import { LANG_LABEL, STARTERS, type Snippet } from '@/lib/code-extract';
 import { CopyCodeButton } from './copy-code-button';
 import { useEditorLanguage } from '@/hooks/use-editor-language';
 import { useWorkspaceSize } from '@/hooks/use-workspace-size';
+import { useFocusTrap } from '@/hooks/use-focus-trap';
 import './code-workspace.css';
 
 type Draft = { language: RunLanguage; code: string; edited: boolean };
@@ -36,6 +37,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const [storageError, setStorageError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const consoleRef = useRef<HTMLDivElement>(null);
+  const panelRef = useFocusTrap<HTMLElement>(true);
 
   const snippetCount = snippets.length;
   useEffect(() => { setSel(Math.max(0, snippetCount - 1)); }, [key, snippetCount]);
@@ -105,7 +107,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   };
 
   return (
-    <aside id="code-workspace" className="workspace workspace-resizable" style={{ ['--workspace-width' as string]: `${workspaceSize.width}px` }} aria-label="Code workspace" data-testid="panel-workspace">
+    <aside ref={panelRef} id="code-workspace" className="workspace workspace-resizable" style={{ ['--workspace-width' as string]: `${workspaceSize.width}px` }} aria-label="Code workspace" data-testid="panel-workspace" tabIndex={-1}>
       <div className="workspace-resizer" role="separator" aria-orientation="vertical" aria-label="Resize code workspace"
         aria-controls="code-workspace" tabIndex={0} aria-valuemin={workspaceSize.bounds.min} aria-valuemax={workspaceSize.bounds.max}
         aria-valuenow={workspaceSize.width} aria-valuetext={`${workspaceSize.width} pixels wide`}

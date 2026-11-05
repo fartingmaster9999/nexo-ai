@@ -15,6 +15,7 @@ import type { Conversation } from '@/lib/conversation-storage';
 import { prepareRequestMessages } from '@/lib/request-context';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
+import { useFocusTrap } from '@/hooks/use-focus-trap';
 import { extractSnippets, type Snippet } from '@/lib/code-extract';
 import type { QuizProgress } from '@/lib/interactive-widgets';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
@@ -59,6 +60,7 @@ function Home() {
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean(activeId && sidebarOpen && !workspaceOpen && !settingsOpen));
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
@@ -442,7 +444,7 @@ function Home() {
   return (
     <div className="app-shell">
       {activeId && (
-        <aside id="history-sidebar" className={`sidebar ${sidebarOpen ? 'is-open' : 'is-collapsed'}`} style={{ ['--sb-w' as string]: `${sidebar.width}px` }} aria-label="Conversation history">
+        <aside ref={sidebarPanelRef} id="history-sidebar" className={`sidebar ${sidebarOpen ? 'is-open' : 'is-collapsed'}`} style={{ ['--sb-w' as string]: `${sidebar.width}px` }} aria-label="Conversation history" tabIndex={-1}>
           <div className="brand">
             <button className="brand-home" type="button" onClick={returnHome} aria-label="Go to Nexo AI home" title="Home" data-testid="button-home">
               <img className="brand-mark" src={logoUrl} alt="" aria-hidden="true" data-testid="img-logo" />
@@ -497,7 +499,7 @@ function Home() {
           type="button"
           aria-label="Close conversation menu"
           onClick={() => setSidebarOpen(false)}
-          tabIndex={sidebarOpen ? 0 : -1}
+          tabIndex={-1}
           data-testid="button-close-menu-overlay"
         />
       )}
