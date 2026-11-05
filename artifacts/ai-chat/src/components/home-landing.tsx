@@ -81,7 +81,6 @@ export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, headingRef }:
           <div className="landing-preview">
             <div className="landing-preview-head">
               <span className="landing-window-dots"><i /><i /><i /></span>
-              <span>EXAMPLE</span>
               <span className="lx-pager">{examples.map((_, i) => <b key={i} className={i === active ? 'is-on' : ''} />)}</span>
             </div>
             <div className="lx-swap" key={active}>
