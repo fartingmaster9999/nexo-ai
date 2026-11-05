@@ -96,9 +96,6 @@ export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, headingRef }:
         </div>
       </div>
 
-      <div className="landing-start-heading lx-in" style={{ ['--d' as string]: '300ms' }}>
-        <h2>Pick a door</h2>
-      </div>
       <div className="landing-prompts">
         {startingPoints.map(({ title, note, prompt, Icon, tag }, i) => {
           const suggestion = prompts[prompt];
