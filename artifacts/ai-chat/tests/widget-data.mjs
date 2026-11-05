@@ -24,6 +24,11 @@ export const math = {
     { id: 'square', name: 'x²', formula: { fn: 'quadratic', min: -3, max: 3, samples: 61 } },
   ],
 };
+export const expression = {
+  ...math, version: 2, id: 'expression', title: 'Sinc expression plot',
+  provenance: { kind: 'calculated', detail: 'Version 2 expression evaluated locally.' },
+  series: [{ id: 'sinc', name: 'sin(x)/x', formula: { expression: 'sin(x)/x', min: -2, max: 2, samples: 5 } }],
+};
 export const bar = { ...chart, id: 'bar', chartType: 'bar', x: { label: 'Group', type: 'category' },
   series: [{ id: 'count', name: 'Count', points: [{ x: 'A', y: 5 }, { x: 'B', y: 8 }] }] };
 export const scatter = { ...chart, id: 'scatter', chartType: 'scatter' };

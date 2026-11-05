@@ -86,6 +86,19 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
   assert.match(await text('[data-testid="chart-math"] [data-testid="list-chart-calculations"]'), /computed locally/);
   await click('[data-testid="chart-math"] summary');
   assert.equal(await evaluate(`document.querySelectorAll('[data-testid="chart-math"] tbody tr').length`), 61);
+  await send('Expression plot');
+  await waitFor(() => exists('.widget-fallback'), 'streaming expression widget placeholder');
+  await settled();
+  await waitFor(() => exists('[data-testid="chart-expression"] .recharts-line-curve'), 'version 2 expression plot');
+  const expressionCurve = await evaluate(`document.querySelector('[data-testid="chart-expression"] .recharts-line-curve').getAttribute('d')`);
+  assert.equal((expressionCurve.match(/M/g) ?? []).length, 2, 'The curve has separate segments on either side of the singularity');
+  assert.match(await text('[data-testid="chart-expression"] [data-testid="text-chart-provenance"]'), /Calculated.*Version 2 expression evaluated locally/);
+  const expressionDetails = await text('[data-testid="chart-expression"] [data-testid="list-chart-calculations"]');
+  assert.match(expressionDetails, /sin\(x\)\/x/);
+  assert.match(expressionDetails, /-2.*2.*5 samples; computed locally/);
+  await click('[data-testid="chart-expression"] summary');
+  assert.equal(await evaluate(`document.querySelectorAll('[data-testid="chart-expression"] tbody tr').length`), 5);
+  assert.match(await text('[data-testid="chart-expression"] table'), /—/, 'The singularity is retained as a missing table value');
   for (const kind of ['bar', 'scatter', 'donut']) {
     await send(kind);
     await settled();

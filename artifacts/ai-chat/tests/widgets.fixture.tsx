@@ -1,7 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import App from '../src/App';
 import { MessageMarkdown } from '../src/components/message-markdown';
-import { quiz, chart, math, bar, scatter, donut, fence } from './widget-data.mjs';
+import { quiz, chart, math, expression, bar, scatter, donut, fence } from './widget-data.mjs';
 import '../src/index.css';
 import '../src/nexo.css';
 import '../src/refine.css';
@@ -19,6 +19,7 @@ window.fetch = async (input, init) => {
   (window as unknown as { __widgetRequests: unknown[] }).__widgetRequests.push(request);
   let content = 'A normal **Markdown** answer, with no interactive widget.';
   if (prompt.includes('quiz')) content = 'Try these biology questions.\n\n' + fence(quiz);
+  else if (prompt.includes('expression plot')) content = fence(expression);
   else if (prompt.includes('math')) content = fence(math);
   else if (prompt.includes('scatter')) content = fence(scatter);
   else if (prompt.includes('donut')) content = fence(donut);
