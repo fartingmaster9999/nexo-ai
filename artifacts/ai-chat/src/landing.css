@@ -68,7 +68,7 @@
 .landing-start-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: clamp(18px, 3vh, 32px) 0 12px; }
 .landing-start-heading h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.025em; }
 .landing-start-hint { color: hsl(var(--muted-foreground)); font-size: 11px; text-align: right; }
-.landing-prompts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.landing-prompts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: clamp(10px, 1.4vw, 16px); }
 .landing-prompt { position: relative; display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 76px; padding: 12px 13px; overflow: hidden; border: 1px solid hsl(var(--foreground) / .09); border-radius: 14px; background: hsl(var(--foreground) / .02); color: hsl(var(--foreground)); text-align: left; cursor: pointer; transition: transform .3s var(--ease-spring), border-color .2s, background .2s; }
 .landing-prompt::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: hsl(var(--primary)); transform: scaleX(0); transform-origin: left; transition: transform .4s var(--ease-out); }
 .landing-prompt:hover { transform: translateY(-3px); border-color: hsl(var(--primary) / .36); background: hsl(var(--primary) / .055); }
