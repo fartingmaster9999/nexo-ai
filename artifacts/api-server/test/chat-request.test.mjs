@@ -53,6 +53,13 @@ test("fresh UTC and local clock context comes from the server, not model memory"
   assert.equal(isValidTimeZone("not/a/timezone"), false);
 });
 
+test("failed web retrieval is disclosed and cannot be represented as verified current facts", () => {
+  const result = buildChatRequest({ messages }, new Date("2026-11-04T12:00:00Z"), { searchFailed: true });
+  assert.match(result.messages[0].content, /External web search failed for this request/);
+  assert.match(result.messages[0].content, /Tell the user you could not verify the current information/);
+  assert.match(result.messages[0].content, /Do not invent recent facts or sources/);
+});
+
 test("public sources are deduplicated and unsafe links rejected", () => {
   assert.deepEqual(extractSearchSources([{
     type: "browser_search",

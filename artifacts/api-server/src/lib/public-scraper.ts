@@ -7,6 +7,10 @@ import { load } from "cheerio";
 
 export type ScrapedPage = { title: string; url: string; description?: string; markdown?: string };
 const USER_AGENT = "NexoAI/1.0 (public information retrieval)";
+type ScraperDependencies = {
+  lookupImpl?: typeof lookup;
+  fetchImpl?: typeof fetch;
+};
 
 export function isPublicAddress(address: string): boolean {
   try { return ipaddr.process(address).range() === "unicast"; } catch { return false; }
@@ -24,19 +28,23 @@ export function isPublicUrl(raw: string): boolean {
 }
 
 /** Resolve and pin public IPs on every redirect, with strict byte/time limits. */
-async function publicText(raw: string, maxBytes = 350000): Promise<{ text: string; status: number }> {
+async function publicText(
+  raw: string,
+  maxBytes = 350000,
+  { lookupImpl = lookup, fetchImpl = fetch }: ScraperDependencies = {},
+): Promise<{ text: string; status: number }> {
   let url = raw;
   for (let redirect = 0; redirect < 3; redirect++) {
     if (!isPublicUrl(url)) throw new Error("Only public HTTPS pages can be scraped");
     const parsed = new URL(url);
-    const addresses = await lookup(parsed.hostname.replace(/^\[|\]$/g, ""), { all: true });
+    const addresses = await lookupImpl(parsed.hostname.replace(/^\[|\]$/g, ""), { all: true });
     if (!addresses.length || addresses.some((entry) => !isPublicAddress(entry.address))) throw new Error("Private network access is blocked");
     const agent = new Agent({ connect: {
       autoSelectFamily: false,
       lookup: (_host, _options, callback) => callback(null, addresses[0]!.address, addresses[0]!.family),
     } });
     try {
-      const response = await fetch(url, {
+      const response = await fetchImpl(url, {
         dispatcher: agent, redirect: "manual", signal: AbortSignal.timeout(4500),
         headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain,application/xhtml+xml" },
       });
@@ -66,13 +74,13 @@ async function publicText(raw: string, maxBytes = 350000): Promise<{ text: strin
   throw new Error("Too many redirects");
 }
 
-async function scrapePage(page: ScrapedPage): Promise<ScrapedPage> {
+async function scrapePage(page: ScrapedPage, dependencies: ScraperDependencies): Promise<ScrapedPage> {
   try {
     const robotsUrl = new URL("/robots.txt", page.url).href;
-    const robots = await publicText(robotsUrl, 80000);
+    const robots = await publicText(robotsUrl, 80000, dependencies);
     if (robots.status === 401 || robots.status === 403) return page;
     if (robots.status === 200 && robotsParser(robotsUrl, robots.text).isAllowed(page.url, "NexoAI") === false) return page;
-    const response = await publicText(page.url);
+    const response = await publicText(page.url, 350000, dependencies);
     if (response.status !== 200) return page;
     const $ = load(response.text);
     $("script,style,nav,header,footer,form,aside,noscript,svg").remove();
@@ -82,25 +90,29 @@ async function scrapePage(page: ScrapedPage): Promise<ScrapedPage> {
   } catch { return page; } // Retain explicitly labelled search excerpts, never bypass a site's restrictions.
 }
 
-export async function scrapePublicSearch(query: string): Promise<ScrapedPage[]> {
-  const url = `https://html.duckduckgo.com/html/?kl=us-en&q=${encodeURIComponent(query)}`;
-  const response = await publicText(url);
-  if (response.status !== 200 || /anomaly\.js|bots use DuckDuckGo/i.test(response.text)) throw new Error("Public search is unavailable");
-  const $ = load(response.text);
-  const pages: ScrapedPage[] = [];
-  $(".result").each((_i, element) => {
-    if (pages.length >= 3) return;
-    const anchor = $(element).find(".result__a").first();
-    const href = anchor.attr("href");
-    if (!href) return;
-    const link = new URL(href, url);
-    const target = link.searchParams.get("uddg") ?? link.href;
-    if (!isPublicUrl(target) || pages.some((page) => page.url === target)) return;
-    pages.push({
-      title: anchor.text().trim().slice(0, 200), url: target,
-      description: $(element).find(".result__snippet").text().trim().slice(0, 1200),
+export function createPublicScraper(dependencies: ScraperDependencies = {}) {
+  return async function scrapePublicSearch(query: string): Promise<ScrapedPage[]> {
+    const url = `https://html.duckduckgo.com/html/?kl=us-en&q=${encodeURIComponent(query)}`;
+    const response = await publicText(url, 350000, dependencies);
+    if (response.status !== 200 || /anomaly\.js|bots use DuckDuckGo/i.test(response.text)) throw new Error("Public search is unavailable");
+    const $ = load(response.text);
+    const pages: ScrapedPage[] = [];
+    $(".result").each((_i, element) => {
+      if (pages.length >= 3) return;
+      const anchor = $(element).find(".result__a").first();
+      const href = anchor.attr("href");
+      if (!href) return;
+      const link = new URL(href, url);
+      const target = link.searchParams.get("uddg") ?? link.href;
+      if (!isPublicUrl(target) || pages.some((page) => page.url === target)) return;
+      pages.push({
+        title: anchor.text().trim().slice(0, 200), url: target,
+        description: $(element).find(".result__snippet").text().trim().slice(0, 1200),
+      });
     });
-  });
-  if (!pages.length) throw new Error("No usable public search results");
-  return Promise.all(pages.map(scrapePage));
+    if (!pages.length) throw new Error("No usable public search results");
+    return Promise.all(pages.map((page) => scrapePage(page, dependencies)));
+  };
 }
+
+export const scrapePublicSearch = createPublicScraper();
