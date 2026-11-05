@@ -39,13 +39,41 @@ test('version 2 mathematical expressions are parsed and calculated deterministic
   assert.equal(validateWidget({ ...expressionWidget('x^2', -2, 2, 5), version: 1 }).status, 'invalid');
 });
 
+test('implicit multiplication and piecewise rules evaluate safely with boundary gaps', () => {
+  const expressionWidget = (expression, min = 1, max = 3, samples = 3) => ({
+    ...math, version: 2, id: 'expression', title: 'Expression plot',
+    series: [{ id: 'curve', name: expression, formula: { expression, min, max, samples } }],
+  });
+  for (const [expression, expected] of [
+    ['2x', 4],
+    ['2(x+1)', 6],
+    ['(x+1)(x-1)', 3],
+    ['2sin(x)', 2 * Math.sin(2)],
+    ['3pi', 3 * Math.PI],
+  ]) {
+    const result = validateWidget(expressionWidget(expression));
+    assert.equal(result.status, 'valid', expression);
+    assert.ok(Math.abs(result.widget.series[0].points[1].y - expected) < 1e-12, expression);
+  }
+
+  const exactBoundary = validateWidget(expressionWidget('piecewise(x^2: x < 0; x: x >= 0)', -2, 2, 5));
+  assert.equal(exactBoundary.status, 'valid');
+  assert.deepEqual(exactBoundary.widget.series[0].points.map((point) => point.y), [4, 1, null, 1, 2]);
+  const betweenSamples = validateWidget(expressionWidget('piecewise(x^2: x < 0; x: x >= 0)', -2, 2, 4));
+  assert.equal(betweenSamples.status, 'valid');
+  assert.ok(betweenSamples.widget.series[0].points.some((point) => point.y === null && Math.abs(point.x) < 1e-10));
+  const unmatchedDomain = validateWidget(expressionWidget('piecewise(sqrt(x): x > 0)', -2, 2, 5));
+  assert.equal(unmatchedDomain.status, 'valid');
+  assert.deepEqual(unmatchedDomain.widget.series[0].points.map((point) => point.y), [null, null, null, Math.sqrt(1), Math.sqrt(2)]);
+});
+
 test('expression parser rejects malformed, excessive, and unsafe expressions', () => {
   const expressionWidget = (expression, min = -2, max = 2, samples = 5) => ({
     ...math, version: 2, id: 'expression',
     series: [{ id: 'curve', name: 'curve', formula: { expression, min, max, samples } }],
   });
   for (const expression of [
-    'x +', 'sin(x', 'unknown(x)', 'x; alert(1)', 'globalThis.process', '2x', 'sqrt(-1) +',
+    'x +', 'sin(x', 'unknown(x)', 'x; alert(1)', 'globalThis.process', 'piecewise(x^2 x < 0)', 'sqrt(-1) +',
     '(' .repeat(25) + 'x' + ')'.repeat(25),
     Array.from({ length: 49 }, () => 'x').join('+'),
   ]) assert.equal(validateWidget(expressionWidget(expression)).status, 'invalid', expression);
