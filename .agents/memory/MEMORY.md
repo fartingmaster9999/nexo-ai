@@ -3,5 +3,6 @@
 - [Code execution boundary](code-execution-boundary.md) — Generated code runs in an isolated browser sandbox, never in the app server with its credentials.
 - [Connector runtime access](connector-runtime-access.md) — A ready connection can still be unavailable to the running app; verify access from the app itself.
 - [Interface behavior](interface-behavior.md) — Home is sidebar-free, the Nexo brand returns there, and new chat opens its separate welcome.
+- [Theme contrast](theme-contrast.md) — Theme checks must measure rendered text, control, border, and focus colors across palettes.
 - [Chat reliability](chat-reliability.md) — Preserve legacy history and partial replies; prune complete context turns without silent prompt truncation or automatic regeneration.
 - [Hosting portability](hosting-portability.md) — Support independent Vercel hosting while preserving Replit development and Groq-only inference.

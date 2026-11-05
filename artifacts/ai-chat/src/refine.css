@@ -1,5 +1,5 @@
 /* Nexo refinement: single, consolidated presentation layer (loads last). */
-:root { --ease-out: cubic-bezier(.22,1,.36,1); --hair: hsl(var(--foreground) / .07); --hair-strong: hsl(var(--foreground) / .13); }
+:root { --ease-out: cubic-bezier(.22,1,.36,1); --hair: hsl(var(--border)); --hair-strong: hsl(var(--border)); }
 
 body::before { background: radial-gradient(50% 32% at 70% -14%, hsl(var(--primary) / .05), transparent 72%); }
 html, body { overflow: hidden; }
@@ -26,9 +26,9 @@ body::-webkit-scrollbar,
 .brand-name { font-size: 15px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; }
 .new-chat { margin-left: auto; color: hsl(var(--foreground) / .8); }
 .new-chat:hover { color: hsl(var(--primary)); background: hsl(var(--primary) / .1); }
-.thread-heading { margin: 20px 10px 6px; font-family: var(--app-font-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: hsl(var(--muted-foreground) / .75); }
+.thread-heading { margin: 20px 10px 6px; font-family: var(--app-font-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
 .sidebar .thread-list { margin: 0 -4px 0 0; padding-right: 4px; gap: 1px; scrollbar-width: thin; scrollbar-color: hsl(var(--foreground) / .12) transparent; }
-.thread-select { padding: 8px 10px; font-size: 13px; color: hsl(var(--foreground) / .72); border-radius: 8px; font-weight: 400; transition: background .15s, color .15s; }
+.thread-select { padding: 8px 10px; font-size: 13px; color: hsl(var(--muted-foreground)); border-radius: 8px; font-weight: 400; transition: background .15s, color .15s; }
 .thread-select:hover { background: hsl(var(--foreground) / .04); color: hsl(var(--foreground)); }
 .thread-select.is-active { background: hsl(var(--primary) / .1); color: hsl(var(--foreground)); font-weight: 500; }
 .thread-select.is-active .thread-icon { color: hsl(var(--primary)); }
@@ -64,7 +64,7 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 .welcome-logo { width: 44px; height: 44px; margin: 0 0 22px; }
 .welcome h1 { font-family: var(--app-font-sans); font-size: clamp(32px, 5vw, 50px); font-weight: 600; line-height: 1.04; letter-spacing: -.045em; margin: 0 0 14px; }
 .welcome h1 em, .welcome h1 .hero-accent { font-style: normal; font-weight: 600; color: hsl(var(--primary)); background: none; -webkit-text-fill-color: currentColor; }
-.welcome p { margin: 0; max-width: 500px; font-size: 14.5px; line-height: 1.6; color: hsl(var(--foreground) / .6); }
+.welcome p { margin: 0; max-width: 500px; font-size: 14.5px; line-height: 1.6; color: hsl(var(--muted-foreground)); }
 .suggestions { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; max-width: none; margin: 32px 0 0; }
 .suggestion { min-height: 0; gap: 4px; padding: 12px 14px; border: 1px solid var(--hair); border-radius: 12px; background: hsl(var(--foreground) / .015); box-shadow: none; transition: border-color .15s, background .15s; }
 .suggestion:hover:not(:disabled) { transform: none; border-color: hsl(var(--primary) / .35); background: hsl(var(--primary) / .05); box-shadow: none; }
@@ -72,7 +72,7 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 .suggestion-label { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; margin: 0; font-size: 13px; font-weight: 500; color: hsl(var(--foreground)); }
 .suggestion-arrow { opacity: .35; transition: opacity .15s, transform .2s var(--ease-out), color .15s; }
 .suggestion:hover:not(:disabled) .suggestion-arrow, .suggestion:focus-visible .suggestion-arrow { opacity: 1; color: hsl(var(--primary)); transform: translate(1px,-1px); }
-.suggestion-text { font-size: 12.5px; line-height: 1.45; color: hsl(var(--foreground) / .52); }
+.suggestion-text { font-size: 12.5px; line-height: 1.45; color: hsl(var(--muted-foreground)); }
 
 /* Messages */
 .message-row { gap: 14px; margin: 0 0 28px; animation: msgIn .3s var(--ease-out) both; }
@@ -104,7 +104,7 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 
 /* Composer: no glow, no blue ring */
 .composer-wrap { border: 1px solid var(--hair-strong); border-radius: 20px; background: hsl(var(--card)); padding: 12px 10px 10px 16px; box-shadow: 0 12px 32px -24px hsl(222 60% 2% / .9); transition: border-color .15s; }
-.composer-wrap:focus-within, .composer-wrap.is-deep, .composer-wrap.is-deep:focus-within { border-color: hsl(var(--foreground) / .2); box-shadow: 0 12px 32px -24px hsl(222 60% 2% / .9); }
+.composer-wrap:focus-within, .composer-wrap.is-deep, .composer-wrap.is-deep:focus-within { border-color: hsl(var(--primary) / .7); box-shadow: 0 12px 32px -24px hsl(222 60% 2% / .9); }
 .composer textarea { min-height: 44px; max-height: 180px; padding: 4px 2px 8px; font-size: 15px; line-height: 1.55; outline: none; }
 .composer textarea:focus-visible { outline: none; }
 .composer textarea::placeholder { color: hsl(var(--foreground) / .38); }
@@ -180,13 +180,13 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 }
 
 /* Shared finishing details: quiet surfaces, readable text, and clear controls. */
-.app-shell { --surface-line: hsl(var(--foreground) / .09); }
+.app-shell { --surface-line: hsl(var(--border)); }
 .topbar, .ws-head { border-color: var(--surface-line); }
 .sidebar-settings {
   min-height: 40px;
   margin: 8px 0 0;
   padding: 8px 10px;
-  color: hsl(var(--foreground) / .68);
+  color: hsl(var(--muted-foreground));
   text-align: left;
   transition: background .15s, color .15s;
 }

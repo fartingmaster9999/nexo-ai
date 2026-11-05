@@ -59,6 +59,8 @@
   --app-font-mono: 'Geist Mono', 'IBM Plex Mono', monospace;
   --radius: 0.75rem;
   --code-bg: 224 32% 4%;
+  --code-foreground: 210 20% 88%;
+  --code-muted-foreground: 215 16% 68%;
   --sidebar: 222 30% 4%;
   --sidebar-foreground: 214 30% 92%;
   --sidebar-border: 220 22% 12%;

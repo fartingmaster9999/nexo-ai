@@ -36,6 +36,41 @@ export const ACCENTS: { id: AccentId; name: string; hsl: string }[] = [
   { id: 'rose', name: 'Rose', hsl: '346 78% 60%' },
 ];
 
+function relativeLuminanceFromHsl(value: string) {
+  const [hue, saturation, lightness] = value.split(/\s+/).map((part) => Number.parseFloat(part));
+  const h = ((hue % 360) + 360) % 360;
+  const s = saturation / 100;
+  const l = lightness / 100;
+  const chroma = (1 - Math.abs(2 * l - 1)) * s;
+  const x = chroma * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - chroma / 2;
+  const [r, g, b] = h < 60 ? [chroma, x, 0]
+    : h < 120 ? [x, chroma, 0]
+      : h < 180 ? [0, chroma, x]
+        : h < 240 ? [0, x, chroma]
+          : h < 300 ? [x, 0, chroma]
+            : [chroma, 0, x];
+  const linear = (channel: number) => {
+    const srgb = channel + m;
+    return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+function contrastRatio(a: number, b: number) {
+  const [lighter, darker] = a > b ? [a, b] : [b, a];
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function primaryForeground(accentHsl: string) {
+  const accentLuminance = relativeLuminanceFromHsl(accentHsl);
+  const lightForeground = relativeLuminanceFromHsl('0 0% 99%');
+  const darkForeground = relativeLuminanceFromHsl('222 40% 6%');
+  return contrastRatio(lightForeground, accentLuminance) >= contrastRatio(darkForeground, accentLuminance)
+    ? '0 0% 99%'
+    : '222 40% 6%';
+}
+
 const KEY = 'nexo-theme-v1';
 type Saved = { theme: ThemeId; accent: AccentId };
 
@@ -60,7 +95,7 @@ export function useThemeSettings() {
     root.style.setProperty('--popover', theme.vars.card);
     ['card-foreground', 'popover-foreground', 'secondary-foreground', 'sidebar-foreground'].forEach((k) => root.style.setProperty(`--${k}`, theme.vars.foreground));
     ['primary', 'ring', 'sidebar-primary', 'sidebar-ring'].forEach((k) => root.style.setProperty(`--${k}`, accent.hsl));
-    root.style.setProperty('--primary-foreground', theme.light ? '0 0% 99%' : '222 40% 6%');
+    root.style.setProperty('--primary-foreground', primaryForeground(accent.hsl));
     root.classList.toggle('dark', !theme.light);
     root.dataset.theme = theme.id;
     try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch { /* ignore */ }

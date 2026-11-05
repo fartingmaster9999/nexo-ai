@@ -70,29 +70,10 @@
   position: relative;
 }
 
-/* Keep the requested quiet composer treatment; show focus as a small accent, not a blue box. */
+/* Keep the composer restrained, but make keyboard and input focus clear in every palette. */
 .composer-wrap:focus-within {
-  border-color: hsl(var(--border));
-  box-shadow: 0 10px 30px -23px rgba(0, 0, 0, 0.52);
-}
-
-.composer-wrap::after {
-  position: absolute;
-  inset: auto auto -1px 50%;
-  width: 34px;
-  height: 2px;
-  border-radius: 2px;
-  background: hsl(var(--primary));
-  content: "";
-  opacity: 0;
-  transform: translateX(-50%) scaleX(0.7);
-  transition: opacity 160ms ease, transform 160ms ease;
-  pointer-events: none;
-}
-
-.composer-wrap:focus-within::after {
-  opacity: 0.72;
-  transform: translateX(-50%) scaleX(1);
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.18), 0 10px 30px -23px rgba(0, 0, 0, 0.52);
 }
 
 .composer textarea::placeholder {

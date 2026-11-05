@@ -11,7 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:reply-status": "node tests/reply-status.visual.mjs",
     "test:workspace": "node --test tests/workspace.test.mjs && node tests/workspace.browser.mjs",
-    "test:widgets": "node --test tests/widgets.test.mjs && node tests/widgets.browser.mjs"
+    "test:widgets": "node --test tests/widgets.test.mjs && node tests/widgets.browser.mjs",
+    "test:themes": "node tests/theme.browser.mjs"
   },
   "devDependencies": {
     "@codemirror/lang-html": "^6.4.12",
