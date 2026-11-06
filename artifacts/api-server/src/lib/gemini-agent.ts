@@ -3,12 +3,11 @@ import { boundedHistory } from "./chat-request";
 import { GeminiSseDecoder } from "./gemini-image";
 
 export const GEMINI_AGENT_MODEL = "gemini-3.8-flash";
+export const GEMINI_AGENT_FALLBACK_MODEL = "gemini-3.6-flash";
 export const MAX_AGENT_TOOL_CALLS = 6;
 export const MAX_AGENT_CODE_CHARS = 20_000;
 export const MAX_AGENT_RESULT_CHARS = 8_000;
 const MAX_AGENT_RESPONSE_CHARS = 120_000;
-const GEMINI_AGENT_URL =
-  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_AGENT_MODEL}:streamGenerateContent?alt=sse`;
 
 export class GeminiAgentApiError extends Error {
   constructor(readonly status: number) {
@@ -174,8 +173,10 @@ export async function requestGeminiAgentStream(
   request: ReturnType<typeof buildGeminiAgentRequest>,
   signal: AbortSignal,
   fetchImpl: typeof fetch = fetch,
+  model = GEMINI_AGENT_MODEL,
 ): Promise<Response> {
-  return fetchImpl(GEMINI_AGENT_URL, {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
+  return fetchImpl(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify(request),

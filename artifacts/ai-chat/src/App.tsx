@@ -833,10 +833,6 @@ function Home() {
                   {pendingImage && (
                     <div className="image-attachment-preview" data-testid="image-attachment-preview">
                       <img src={pendingImage.previewUrl} alt="Preview of attached image" />
-                      <div className="image-attachment-copy">
-                        <span>Sent to Gemini · not saved in chat history</span>
-                        <small>Gemini usage may be billed to the key owner.</small>
-                      </div>
                       <button type="button" aria-label="Remove attached image" title="Remove image" onClick={() => setPendingImage(null)} disabled={streaming} data-testid="button-remove-image">
                         <X size={14} aria-hidden="true" />
                       </button>

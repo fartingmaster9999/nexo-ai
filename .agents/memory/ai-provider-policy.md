@@ -38,3 +38,9 @@ A successful fallback should be described as a model switch that allows continue
 **Why:** The user reported a contradictory usage-limit warning while answers were still arriving from the fallback model.
 
 **How to apply:** Announce the fallback only after the provider accepts its stream, use a neutral informational notice, and reserve the blocking usage-limit error for failure of every eligible model. Normalize older saved fallback notices when displaying them.
+
+For Nexo Agent only, transient Gemini 3.8 failures may fall back to Gemini 3.6. Keep the fallback within Gemini, announce it, and preserve the selected thinking level. Do not switch models after a tool has run; retry the same model first so opaque tool signatures remain with their originating model.
+
+**Why:** Gemini 3.8 intermittently returned 429/503 errors or stalled during live requests, while 3.6 supported the same function-calling and thinking features. Tool signatures may not be portable across model versions.
+
+**How to apply:** Limit cross-model fallback to the start of an Agent run. For stalled continuations, retry the selected model once and report a clear failure if it still does not respond.

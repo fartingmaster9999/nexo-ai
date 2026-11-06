@@ -4,9 +4,10 @@ import { isValidTimeZone } from "../lib/chat-request";
 import { GeminiSseDecoder } from "../lib/gemini-image";
 import { isPublicUrl } from "../lib/public-scraper";
 import { searchWeb, type SearchResult } from "../lib/web-search";
+import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry";
 import {
   buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError, geminiAgentErrorMessage,
-  GEMINI_AGENT_MODEL, MAX_AGENT_CODE_CHARS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
+  GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_MODEL, MAX_AGENT_CODE_CHARS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
   requestGeminiAgentStream, validateAgentHistory,
 } from "../lib/gemini-agent";
 import { CHAT_DEADLINE_MS, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
@@ -16,6 +17,7 @@ type AgentRouterOptions = {
   fetchImpl?: typeof fetch;
   search?: typeof searchWeb;
   now?: () => Date;
+  providerIdleMs?: number;
 };
 
 class AgentPublicError extends Error {
@@ -49,6 +51,7 @@ export function createAgentRouter({
   fetchImpl = fetch,
   search = searchWeb,
   now = () => new Date(),
+  providerIdleMs = PROVIDER_IDLE_MS,
 }: AgentRouterOptions = {}): IRouter {
   const router: IRouter = Router();
 
@@ -80,19 +83,13 @@ export function createAgentRouter({
     const controller = new AbortController();
     const startedAt = Date.now();
     let timedOut = false;
+    let activeModel = GEMINI_AGENT_MODEL;
     let idle: ReturnType<typeof setTimeout> | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     const deadline = setTimeout(() => {
       timedOut = true;
       controller.abort(new Error("Gemini Agent request deadline exceeded"));
     }, CHAT_DEADLINE_MS);
-    const resetIdle = () => {
-      clearTimeout(idle);
-      idle = setTimeout(() => {
-        timedOut = true;
-        controller.abort(new Error("Gemini Agent stream stalled"));
-      }, PROVIDER_IDLE_MS);
-    };
     const abortOnDisconnect = () => {
       if (!res.writableEnded) controller.abort(new Error("Client disconnected"));
     };
@@ -113,6 +110,26 @@ export function createAgentRouter({
 
       let answer = "";
       let toolCalls = history.length;
+      const switchToFallback = async (status?: number) => {
+        if (activeModel !== GEMINI_AGENT_MODEL || toolCalls !== 0) return false;
+        activeModel = GEMINI_AGENT_FALLBACK_MODEL;
+        req.log.warn({
+          provider: "gemini",
+          model: GEMINI_AGENT_MODEL,
+          fallbackModel: activeModel,
+          ...(status !== undefined ? { status } : {}),
+        }, "Gemini Agent primary model unavailable; retrying with fallback");
+        await emit({ model: activeModel });
+        await emit({
+          notice: {
+            id: "gemini-agent-model-fallback",
+            message: "Gemini 3.8 Flash is unavailable right now. Nexo Agent switched to Gemini 3.6 Flash.",
+            model: activeModel,
+          },
+        });
+        return true;
+      };
+      let modelIdleRetries = 0;
       while (true) {
         controller.signal.throwIfAborted();
         const allowTools = toolCalls < MAX_AGENT_TOOL_CALLS;
@@ -120,44 +137,79 @@ export function createAgentRouter({
           ...parsed.data,
           agentHistory: history,
         }, now(), allowTools);
-        resetIdle();
-        const upstream = await requestGeminiAgentStream(apiKey, request, controller.signal, fetchImpl);
-        if (!upstream.ok) {
-          req.log.warn({ provider: "gemini", model: GEMINI_AGENT_MODEL, status: upstream.status }, "Gemini Agent request rejected");
-          await upstream.body?.cancel().catch(() => {});
-          throw new GeminiAgentApiError(upstream.status);
-        }
-        if (!upstream.body) throw new AgentPublicError("Gemini returned an empty Agent response. Please try again.");
-
-        const decoder = new GeminiSseDecoder();
-        const reader = upstream.body.getReader();
-        const events: unknown[] = [];
-        let eventChars = 0;
+        const attemptController = new AbortController();
+        const abortAttempt = () => attemptController.abort(controller.signal.reason);
+        if (controller.signal.aborted) abortAttempt();
+        else controller.signal.addEventListener("abort", abortAttempt, { once: true });
+        let attemptTimedOut = false;
+        const resetIdle = () => {
+          clearTimeout(idle);
+          idle = setTimeout(() => {
+            attemptTimedOut = true;
+            attemptController.abort(new Error("Gemini Agent stream stalled"));
+          }, providerIdleMs);
+        };
+        let modelResponse: ReturnType<typeof collectAgentResponse> | null = null;
         try {
-          while (true) {
-            controller.signal.throwIfAborted();
-            const { value, done } = await reader.read();
-            if (controller.signal.aborted) throw controller.signal.reason;
-            if (done) break;
-            resetIdle();
-            const decoded = decoder.push(value);
-            for (const item of decoded) {
+          resetIdle();
+          const upstream = await requestGeminiWithRetry(
+            () => requestGeminiAgentStream(apiKey, request, attemptController.signal, fetchImpl, activeModel),
+            attemptController.signal,
+          );
+          if (!upstream.ok) {
+            await upstream.body?.cancel().catch(() => {});
+            if ((upstream.status === 429 || upstream.status >= 500) && await switchToFallback(upstream.status)) continue;
+            req.log.warn({ provider: "gemini", model: activeModel, status: upstream.status }, "Gemini Agent request rejected");
+            throw new GeminiAgentApiError(upstream.status);
+          }
+          if (!upstream.body) throw new AgentPublicError("Gemini returned an empty Agent response. Please try again.");
+
+          const decoder = new GeminiSseDecoder();
+          const reader = upstream.body.getReader();
+          const events: unknown[] = [];
+          let eventChars = 0;
+          try {
+            while (true) {
+              attemptController.signal.throwIfAborted();
+              const { value, done } = await reader.read();
+              if (attemptController.signal.aborted) throw attemptController.signal.reason;
+              if (done) break;
+              resetIdle();
+              const decoded = decoder.push(value);
+              for (const item of decoded) {
+                eventChars += JSON.stringify(item).length;
+                if (eventChars > 160_000) throw new AgentPublicError("Gemini's Agent response exceeded the safe output limit.");
+                events.push(item);
+              }
+            }
+            for (const item of decoder.push()) {
               eventChars += JSON.stringify(item).length;
               if (eventChars > 160_000) throw new AgentPublicError("Gemini's Agent response exceeded the safe output limit.");
               events.push(item);
             }
+          } finally {
+            await reader.cancel().catch(() => {});
+            reader.releaseLock();
           }
-          for (const item of decoder.push()) {
-            eventChars += JSON.stringify(item).length;
-            if (eventChars > 160_000) throw new AgentPublicError("Gemini's Agent response exceeded the safe output limit.");
-            events.push(item);
+          modelResponse = collectAgentResponse(events);
+        } catch (error) {
+          if (attemptTimedOut && await switchToFallback()) continue;
+          if (attemptTimedOut && modelIdleRetries < 1 && !controller.signal.aborted) {
+            modelIdleRetries++;
+            req.log.warn({ provider: "gemini", model: activeModel, retry: modelIdleRetries }, "Gemini Agent stream stalled; retrying the same model");
+            await waitForGeminiRetry(controller.signal, 500);
+            continue;
           }
+          if (attemptTimedOut) timedOut = true;
+          throw error;
         } finally {
-          await reader.cancel().catch(() => {});
-          reader.releaseLock();
+          clearTimeout(idle);
+          controller.signal.removeEventListener("abort", abortAttempt);
+          attemptController.abort();
         }
 
-        const modelResponse = collectAgentResponse(events);
+        if (!modelResponse) throw new AgentPublicError("Gemini returned no Agent response. Please try again.");
+        modelIdleRetries = 0;
         if (modelResponse.calls.length > 1) {
           throw new AgentPublicError("Nexo Agent requested multiple tools at once. Please try a more focused request.");
         }
@@ -251,11 +303,11 @@ export function createAgentRouter({
       await emit({ activity: { id: "agent-finished", label: "Agent completed the request", kind: "info", status: "complete" } });
       await emit({ done: true });
       res.end();
-      req.log.info({ event: "agent.stream.completed", model: GEMINI_AGENT_MODEL, durationMs: Date.now() - startedAt, toolCalls }, "Agent stream completed");
+      req.log.info({ event: "agent.stream.completed", model: activeModel, durationMs: Date.now() - startedAt, toolCalls }, "Agent stream completed");
     } catch (error) {
       if (res.destroyed || res.writableEnded || (controller.signal.aborted && !timedOut)) return;
       const status = error instanceof GeminiAgentApiError ? error.status : undefined;
-      req.log.error({ event: "agent.stream.failed", provider: "gemini", model: GEMINI_AGENT_MODEL, status, timedOut, durationMs: Date.now() - startedAt }, "Agent stream failed");
+      req.log.error({ event: "agent.stream.failed", provider: "gemini", model: activeModel, status, timedOut, durationMs: Date.now() - startedAt }, "Agent stream failed");
       const message = timedOut
         ? "Nexo Agent timed out. Your partial answer is kept; please try again."
         : error instanceof AgentPublicError

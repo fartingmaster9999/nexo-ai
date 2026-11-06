@@ -104,6 +104,7 @@
 
 .thread-select,
 .deep-toggle,
+.agent-toggle,
 .icon-btn,
 .send-button,
 .code-copy-button,
@@ -114,6 +115,7 @@
 
 .thread-select { min-height: 42px; }
 .deep-toggle,
+.agent-toggle,
 .code-copy-button,
 .ws-mini { min-height: 36px; }
 
@@ -205,6 +207,7 @@
   }
 
   .deep-toggle,
+  .agent-toggle,
   .send-button,
   .icon-btn {
     min-width: 40px;
@@ -288,6 +291,7 @@
 @media (pointer: coarse) {
   .thread-select,
   .deep-toggle,
+  .agent-toggle,
   .send-button,
   .icon-btn,
   .ws-btn {
@@ -382,6 +386,8 @@
   .thread-select.is-active,
   .deep-toggle.is-on,
   .deep-toggle[aria-pressed="true"],
+  .agent-toggle.is-on,
+  .agent-toggle[aria-pressed="true"],
   .ws-snippets button.is-on {
     border-color: Highlight;
     background: Highlight;

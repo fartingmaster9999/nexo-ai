@@ -181,8 +181,6 @@ button { color: inherit; }
 .image-attach-button:disabled { opacity:.5; cursor:not-allowed; }
 .image-attachment-preview { display:flex; align-items:center; gap:9px; min-height:44px; padding:5px 7px; border:1px solid hsl(var(--border)); border-radius:10px; color:hsl(var(--muted-foreground)); font-size:10px; }
 .image-attachment-preview img { width:34px; height:34px; object-fit:cover; border-radius:6px; }
-.image-attachment-copy { display:flex; flex:1; min-width:0; flex-direction:column; gap:2px; }
-.image-attachment-copy small { color:hsl(var(--muted-foreground) / .8); font-size:9px; }
 .image-attachment-preview button { width:26px; height:26px; display:grid; place-items:center; border:0; border-radius:7px; color:hsl(var(--muted-foreground)); background:transparent; cursor:pointer; }
 .image-attachment-preview button:hover:not(:disabled) { color:hsl(var(--foreground)); background:hsl(var(--secondary)); }
 .image-attachment-preview button:disabled { opacity:.5; cursor:not-allowed; }
@@ -213,7 +211,7 @@ button { color: inherit; }
   .composer-wrap { border-radius:15px; padding-left:13px; }
   .composer-hint { gap:6px; }
   .composer-mode-buttons { gap:4px; }
-  .deep-toggle { padding:5px 8px; font-size:10px; }
+  .deep-toggle, .agent-toggle { padding:5px 8px; font-size:10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; scroll-behavior:auto !important; }

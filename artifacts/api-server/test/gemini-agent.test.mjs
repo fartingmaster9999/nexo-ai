@@ -23,7 +23,7 @@ function geminiResponse(events, status = 200) {
   return new Response(body, { status, headers: { "Content-Type": "text/event-stream" } });
 }
 
-function createSseApp({ getApiKey = () => "test-only-key", fetchImpl, search } = {}) {
+function createSseApp({ getApiKey = () => "test-only-key", fetchImpl, search, providerIdleMs } = {}) {
   const app = express();
   app.use(pinoHttp({ logger: pino({ level: "silent" }) }));
   app.use(express.json({ limit: "5mb" }));
@@ -32,6 +32,7 @@ function createSseApp({ getApiKey = () => "test-only-key", fetchImpl, search } =
     fetchImpl,
     search,
     now: () => new Date("2026-11-06T18:30:00Z"),
+    providerIdleMs,
   }));
   return app;
 }
@@ -126,6 +127,154 @@ test("Agent route reports missing Gemini configuration without making an upstrea
     assert.match((await response.json()).error, /GEMINI_API_KEY/);
   });
   assert.equal(calls, 0);
+});
+
+test("Agent retries a transient Gemini 503 once before streaming a successful answer", async () => {
+  let calls = 0;
+  await withServer(createSseApp({
+    fetchImpl: async () => {
+      calls++;
+      return calls === 1
+        ? new Response("temporary upstream failure", { status: 503, headers: { "Retry-After": "0" } })
+        : geminiResponse([modelEvent([{ text: "Gemini recovered." }])]);
+    },
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    });
+    const events = await readEvents(response);
+    assert.equal(response.status, 200);
+    assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Gemini recovered.");
+  });
+  assert.equal(calls, 2);
+});
+
+test("Agent visibly switches to the supported fallback model after repeated Gemini 5xx errors", async () => {
+  let calls = 0;
+  const urls = [];
+  let fallbackRequest;
+  await withServer(createSseApp({
+    fetchImpl: async (url, init) => {
+      calls++;
+      urls.push(String(url));
+      if (calls <= 2) {
+        return new Response("temporary upstream failure", { status: 503, headers: { "Retry-After": "0" } });
+      }
+      fallbackRequest = JSON.parse(init.body);
+      return geminiResponse([modelEvent([{ text: "Fallback answer." }])]);
+    },
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, deepthink: true }),
+    });
+    const events = await readEvents(response);
+    assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Fallback answer.");
+    assert.deepEqual(events.filter((event) => event.model).map((event) => event.model), ["gemini-3.8-flash", "gemini-3.6-flash"]);
+    assert.match(events.find((event) => event.notice)?.notice.message ?? "", /switched to Gemini 3\.6 Flash/);
+  });
+  assert.equal(calls, 3);
+  assert.match(urls[0], /models\/gemini-3\.8-flash:/);
+  assert.match(urls[2], /models\/gemini-3\.6-flash:/);
+  assert.equal(fallbackRequest.generationConfig.thinkingConfig.thinkingLevel, "high");
+});
+
+test("Agent tries the supported fallback model after the primary model is rate limited", async () => {
+  let calls = 0;
+  const urls = [];
+  await withServer(createSseApp({
+    fetchImpl: async (url) => {
+      calls++;
+      urls.push(String(url));
+      return calls <= 2
+        ? new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } })
+        : geminiResponse([modelEvent([{ text: "Recovered on fallback." }])]);
+    },
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    });
+    const events = await readEvents(response);
+    assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Recovered on fallback.");
+    assert.match(events.find((event) => event.notice)?.notice.message ?? "", /switched to Gemini 3\.6 Flash/);
+  });
+  assert.equal(calls, 3);
+  assert.match(urls[2], /models\/gemini-3\.6-flash:/);
+});
+
+test("Agent switches models when the primary stream stalls before its first event", async () => {
+  let calls = 0;
+  const urls = [];
+  await withServer(createSseApp({
+    providerIdleMs: 10,
+    fetchImpl: async (url, init) => {
+      calls++;
+      urls.push(String(url));
+      if (calls === 1) {
+        return new Response(new ReadableStream({
+          start(streamController) {
+            const onAbort = () => streamController.error(new Error("provider attempt aborted"));
+            if (init.signal.aborted) onAbort();
+            else init.signal.addEventListener("abort", onAbort, { once: true });
+          },
+        }));
+      }
+      return geminiResponse([modelEvent([{ text: "Recovered after the stall." }])]);
+    },
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    });
+    const events = await readEvents(response);
+    assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Recovered after the stall.");
+    assert.deepEqual(events.filter((event) => event.model).map((event) => event.model), ["gemini-3.8-flash", "gemini-3.6-flash"]);
+    assert.match(events.find((event) => event.notice)?.notice.message ?? "", /switched to Gemini 3\.6 Flash/);
+  });
+  assert.equal(calls, 2);
+  assert.match(urls[0], /models\/gemini-3\.8-flash:/);
+  assert.match(urls[1], /models\/gemini-3\.6-flash:/);
+});
+
+test("Agent retries the same model after a stalled tool continuation", async () => {
+  let calls = 0;
+  const urls = [];
+  await withServer(createSseApp({
+    providerIdleMs: 10,
+    fetchImpl: async (url, init) => {
+      calls++;
+      urls.push(String(url));
+      if (calls === 1) {
+        return new Response(new ReadableStream({
+          start(streamController) {
+            const onAbort = () => streamController.error(new Error("provider attempt aborted"));
+            if (init.signal.aborted) onAbort();
+            else init.signal.addEventListener("abort", onAbort, { once: true });
+          },
+        }));
+      }
+      return geminiResponse([modelEvent([{ text: "Continuation recovered." }])]);
+    },
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        agentHistory: [{
+          tool: "web_search",
+          callId: "prior-search",
+          thoughtSignature: "prior-signature",
+          arguments: { query: "official current release" },
+          result: "The official release page lists the current release.",
+        }],
+      }),
+    });
+    const events = await readEvents(response);
+    assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Continuation recovered.");
+  });
+  assert.equal(calls, 2);
+  assert.equal(urls.every((url) => url.includes("/models/gemini-3.8-flash:")), true);
 });
 
 test("Agent searches only when the model requests it and continues with bounded public sources", async () => {

@@ -53,7 +53,7 @@ try {
     await cdp("DOM.setFileInputFiles", { nodeId: input, files: [imagePath] });
     await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="image-attachment-preview"] img')?.src.startsWith("blob:"))`), "image preview");
     const previewText = await evaluate(`document.querySelector('[data-testid="image-attachment-preview"]').textContent`);
-    assert.match(previewText, /not saved in chat history/);
+    assert.equal(previewText.trim(), "");
 
     await evaluate(`document.querySelector('[data-testid="button-remove-image"]').click()`);
     await waitFor(() => evaluate(`!document.querySelector('[data-testid="image-attachment-preview"]')`), "image removal");

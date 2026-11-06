@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { StreamImageChatBody } from "@workspace/api-zod";
 import { isValidTimeZone } from "../lib/chat-request";
+import { requestGeminiWithRetry } from "../lib/gemini-retry";
 import {
   buildGeminiImageRequest, GeminiImageApiError, GeminiSseDecoder, GEMINI_IMAGE_MODEL,
   geminiImageErrorMessage, requestGeminiImageStream, visibleGeminiText,
@@ -79,7 +80,10 @@ export function createImageChatRouter({
     await emit({ activity: { id: "image-analysis", label: "Analyzing the attached image", kind: "thinking", status: "running" } });
     resetIdle();
 
-    const upstream = await requestGeminiImageStream(apiKey, request, controller.signal, fetchImpl);
+    const upstream = await requestGeminiWithRetry(
+      () => requestGeminiImageStream(apiKey, request, controller.signal, fetchImpl),
+      controller.signal,
+    );
     if (!upstream.ok) {
       req.log.warn({ provider: "gemini", model: GEMINI_IMAGE_MODEL, status: upstream.status }, "Gemini image request rejected");
       await upstream.body?.cancel().catch(() => {});
