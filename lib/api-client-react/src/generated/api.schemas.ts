@@ -41,6 +41,42 @@ export interface ChatInput {
   messages: ChatMessage[];
 }
 
+export type ImageAttachmentMimeType = typeof ImageAttachmentMimeType[keyof typeof ImageAttachmentMimeType];
+
+
+export const ImageAttachmentMimeType = {
+  'image/jpeg': 'image/jpeg',
+  'image/png': 'image/png',
+  'image/webp': 'image/webp',
+} as const;
+
+export interface ImageAttachment {
+  mimeType: ImageAttachmentMimeType;
+  /**
+     * Base64-encoded image bytes without a data URL prefix
+     * @minLength 4
+     * @maxLength 4194304
+     * @pattern ^[A-Za-z0-9+/]+={0,2}$
+     */
+  data: string;
+}
+
+export interface ImageChatInput {
+  /** Use high Gemini thinking level instead of medium */
+  deepthink?: boolean;
+  /**
+     * Browser IANA timezone, validated by the server for current-time context
+     * @maxLength 100
+     */
+  timeZone?: string;
+  /**
+     * @minItems 1
+     * @maxItems 40
+     */
+  messages: ChatMessage[];
+  image: ImageAttachment;
+}
+
 export interface ApiError {
   error: string;
 }

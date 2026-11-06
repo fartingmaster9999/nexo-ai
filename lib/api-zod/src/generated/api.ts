@@ -41,3 +41,37 @@ export const StreamChatBody = zod.object({
 export const StreamChatResponse = zod.unknown()
 
 
+/**
+ * Image-bearing prompts use the server-side Gemini API route. Text-only prompts continue through the existing Groq route.
+ * @summary Stream an image-aware AI chat response
+ */
+export const streamImageChatBodyDeepthinkDefault = false;
+export const streamImageChatBodyTimeZoneMax = 100;
+
+export const streamImageChatBodyMessagesItemContentMax = 12000;
+
+export const streamImageChatBodyMessagesMax = 40;
+
+export const streamImageChatBodyImageDataMin = 4;
+export const streamImageChatBodyImageDataMax = 4194304;
+
+
+export const streamImageChatBodyImageDataRegExp = new RegExp('^[A-Za-z0-9+/]+={0,2}$');
+
+
+export const StreamImageChatBody = zod.object({
+  "deepthink": zod.boolean().default(streamImageChatBodyDeepthinkDefault).describe('Use high Gemini thinking level instead of medium'),
+  "timeZone": zod.string().max(streamImageChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
+  "messages": zod.array(zod.object({
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string().min(1).max(streamImageChatBodyMessagesItemContentMax)
+})).min(1).max(streamImageChatBodyMessagesMax),
+  "image": zod.object({
+  "mimeType": zod.enum(['image/jpeg', 'image/png', 'image/webp']),
+  "data": zod.string().min(streamImageChatBodyImageDataMin).max(streamImageChatBodyImageDataMax).regex(streamImageChatBodyImageDataRegExp).describe('Base64-encoded image bytes without a data URL prefix')
+})
+})
+
+export const StreamImageChatResponse = zod.unknown()
+
+

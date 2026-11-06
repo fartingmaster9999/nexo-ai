@@ -32,3 +32,9 @@ The visual direction is a premium, modern SaaS chat interface inspired by DeepSe
 **Why:** The user supplied an explicit refinement brief emphasizing restrained rich-black surfaces, balanced spacing, readable hierarchy, subtle card feedback, and tactile composer controls.
 
 **How to apply:** Prefer coordinated refinements over extra decorative UI. Keep other user-selectable themes and accents functional, and preserve saved sidebar sizing when changing defaults.
+
+For scroll reports, identify the active scroll area before changing page overflow. Chat history, the code editor, and the console scroll independently inside the fixed-height app.
+
+**Why:** Broad changes to root scrolling can break the pinned composer and code workspace without fixing gestures directed at a nested editor.
+
+**How to apply:** Reproduce wheel and touch scrolling over each pane, at editor boundaries, and after closing the workspace. Add a browser regression test for the exact interaction before changing scroll ownership.

@@ -12,6 +12,7 @@
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:reply-status": "node tests/reply-status.visual.mjs",
+    "test:images": "node --test tests/image-attachment.test.mjs && node tests/image-chat.browser.mjs",
     "test:workspace": "node --test tests/workspace.test.mjs && node tests/workspace.browser.mjs",
     "test:widgets": "node --test tests/widgets.test.mjs && node tests/widgets.browser.mjs",
     "test:themes": "node tests/theme.browser.mjs"

@@ -10,6 +10,7 @@ export type ChatMessage = {
   id?: string;
   role: 'user' | 'assistant';
   content: string;
+  imageAttached?: boolean;
   reasoning?: string;
   deepthink?: boolean;
   activity?: Activity[];

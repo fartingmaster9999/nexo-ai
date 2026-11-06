@@ -11,3 +11,6 @@ export * from './chatInput';
 export * from './chatMessage';
 export * from './chatMessageRole';
 export * from './healthStatus';
+export * from './imageAttachment';
+export * from './imageAttachmentMimeType';
+export * from './imageChatInput';

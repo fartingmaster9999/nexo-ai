@@ -155,6 +155,7 @@ button { color: inherit; }
 .message-text { font-size:14px; line-height:1.75; white-space:pre-wrap; overflow-wrap:anywhere; }
 .message-row.user .message-content { max-width:min(590px, 80%); }
 .message-row.user .message-text { background:hsl(var(--secondary)); padding:12px 16px; border-radius:16px 5px 16px 16px; }
+.user-image-note { margin:5px 2px 0; color:hsl(var(--muted-foreground)); font-size:10px; text-align:right; }
 .message-row.user .message-role { text-align:right; }
 .message-row.user .avatar { order:2; }
 .message-row.assistant .message-text { color:hsl(var(--foreground)); }
@@ -165,13 +166,26 @@ button { color: inherit; }
 .composer-wrap { border:1px solid hsl(var(--border)); border-radius:17px; background:hsl(var(--card)); padding:9px 10px 9px 16px; box-shadow:0 10px 30px -23px rgba(40,59,48,.35); transition:border-color .2s ease, box-shadow .2s ease; }
 .composer-wrap:focus-within { border-color:hsl(var(--primary) / .55); box-shadow:0 0 0 3px hsl(var(--primary) / .08), 0 10px 30px -23px rgba(40,59,48,.35); }
 .composer { display:flex; align-items:flex-end; gap:12px; }
+.composer-body { display:flex; flex:1; min-width:0; flex-direction:column; gap:8px; }
 .composer textarea { resize:none; flex:1; min-height:31px; max-height:180px; padding:6px 0; border:0; outline:0; background:transparent; color:hsl(var(--foreground)); font-size:13px; line-height:1.5; }
+.composer-body textarea { width:100%; flex:0 1 auto; }
 .composer textarea::placeholder { color:hsl(var(--muted-foreground) / .82); }
 .send-button { width:36px;height:36px; flex:0 0 36px; display:grid;place-items:center; border:0;border-radius:11px; background:hsl(var(--primary)); color:hsl(var(--primary-foreground)); cursor:pointer; transition:transform .17s ease, opacity .17s ease, background .17s ease; }
 .send-button:hover:not(:disabled) { background:hsl(var(--primary) / .85); transform:translateY(-1px); }
 .send-button:disabled { opacity:.42; cursor:not-allowed; }
 .send-button.stop { background:hsl(var(--destructive)); opacity:1; }
 .composer-hint { display:flex; justify-content:space-between; gap:10px; color:hsl(var(--muted-foreground)); font-size:10px; padding:7px 2px 0; }
+.composer-mode-buttons { display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+.image-attach-button { width:29px; height:29px; display:grid; place-items:center; border:1px solid hsl(var(--border)); border-radius:50%; color:hsl(var(--muted-foreground)); background:transparent; cursor:pointer; transition:color .16s, border-color .16s, background .16s; }
+.image-attach-button:hover:not(:disabled) { color:hsl(var(--foreground)); border-color:hsl(var(--primary) / .55); background:hsl(var(--primary) / .07); }
+.image-attach-button:disabled { opacity:.5; cursor:not-allowed; }
+.image-attachment-preview { display:flex; align-items:center; gap:9px; min-height:44px; padding:5px 7px; border:1px solid hsl(var(--border)); border-radius:10px; color:hsl(var(--muted-foreground)); font-size:10px; }
+.image-attachment-preview img { width:34px; height:34px; object-fit:cover; border-radius:6px; }
+.image-attachment-copy { display:flex; flex:1; min-width:0; flex-direction:column; gap:2px; }
+.image-attachment-copy small { color:hsl(var(--muted-foreground) / .8); font-size:9px; }
+.image-attachment-preview button { width:26px; height:26px; display:grid; place-items:center; border:0; border-radius:7px; color:hsl(var(--muted-foreground)); background:transparent; cursor:pointer; }
+.image-attachment-preview button:hover:not(:disabled) { color:hsl(var(--foreground)); background:hsl(var(--secondary)); }
+.image-attachment-preview button:disabled { opacity:.5; cursor:not-allowed; }
 .privacy-note { text-align:center; color:hsl(var(--muted-foreground)); font-size:10px; margin:11px 0 0; }
 .scrim { display:none; }
 .focus-visible, button:focus-visible { outline:2px solid hsl(var(--ring)); outline-offset:3px; }
@@ -197,6 +211,9 @@ button { color: inherit; }
   .message-row.user .message-content { max-width:86%; }
   .request-error { margin-left:0; }
   .composer-wrap { border-radius:15px; padding-left:13px; }
+  .composer-hint { gap:6px; }
+  .composer-mode-buttons { gap:4px; }
+  .deep-toggle { padding:5px 8px; font-size:10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; scroll-behavior:auto !important; }

@@ -20,6 +20,7 @@ export function parseConversation(value: unknown): Conversation | null {
   return { ...c, messages: c.messages.map(m => ({
     ...(typeof m.id === 'string' && m.id.length <= 100 ? { id: m.id } : {}),
     role: m.role, content: m.content,
+    ...(m.role === 'user' && m.imageAttached === true ? { imageAttached: true } : {}),
     ...(m.role === 'assistant' ? { quizProgress: parseQuizStates(m.quizProgress) } : {}),
     ...(typeof m.reasoning === 'string' ? { reasoning: m.reasoning } : {}),
     ...(typeof m.deepthink === 'boolean' ? { deepthink: m.deepthink } : {}),

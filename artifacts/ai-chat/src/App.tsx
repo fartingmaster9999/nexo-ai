@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Brain, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Brain, ImagePlus, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -27,6 +27,7 @@ import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
 import { useFocusTrap } from '@/hooks/use-focus-trap';
 import { extractSnippets, type Snippet } from '@/lib/code-extract';
+import { imageFileToBase64, validateImageFile, type PendingImage } from '@/lib/image-attachment';
 import type { QuizProgress } from '@/lib/interactive-widgets';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
@@ -58,6 +59,7 @@ function Home() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [homeHistoryOpen, setHomeHistoryOpen] = useState(false);
   const [draft, setDraft] = useState('');
+  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
   const [error, setError] = useState('');
   const [conversations, setConversations, persistConversations] = useConversations(setError);
   const [streaming, setStreaming] = useState(false);
@@ -77,6 +79,7 @@ function Home() {
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const homeHeadingRef = useRef<HTMLHeadingElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -129,6 +132,11 @@ function Home() {
     return null;
   }, [currentMessages]);
   const snippets = codeSource?.snippets ?? noSnippets;
+
+  useEffect(() => {
+    if (!pendingImage) return;
+    return () => URL.revokeObjectURL(pendingImage.previewUrl);
+  }, [pendingImage]);
 
   useEffect(() => { setWorkspaceOpen(false); }, [activeId]);
   useEffect(() => {
@@ -197,6 +205,7 @@ function Home() {
     setStreaming(false);
     setError('');
     setDraft('');
+    setPendingImage(null);
     const conversation: Conversation = {
       id: makeId(),
       title: 'New conversation',
@@ -221,6 +230,7 @@ function Home() {
     activeStreamId.current = null;
     setStreaming(false);
     setVisibleReply(null);
+    setPendingImage(null);
     setConversations((items) => items.filter((item) => item.id !== activeId || hasSentUserMessage(item)));
     setActiveId(null);
     setHomeHistoryOpen(false);
@@ -233,6 +243,7 @@ function Home() {
   const selectConversation = (id: string) => {
     setConversations((items) => items.filter((item) => item.id !== activeId || hasSentUserMessage(item)));
     setActiveId(id);
+    setPendingImage(null);
     setHomeHistoryOpen(false);
     homeHistoryTriggerRef.current = null;
     setError('');
@@ -275,6 +286,7 @@ function Home() {
     setConversations((items) => items.filter((item) => item.id !== conversation.id));
     persistConversations();
     if (activeId === conversation.id) {
+      setPendingImage(null);
       setActiveId(null);
       setError('');
     }
@@ -297,7 +309,11 @@ function Home() {
     event?.preventDefault();
     if (abortRef.current || streaming) return;
     const prompt = (suggestedText ?? draft).trim();
-    if (!prompt) return;
+    const requestImage = pendingImage;
+    if (!prompt) {
+      if (requestImage) setError('Add a message to send with your image.');
+      return;
+    }
     if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); return; }
     shouldAutoFollowMessages.current = true;
     const requestDeepthink = deepthink;
@@ -318,7 +334,10 @@ function Home() {
     }
 
     const conversationId = conversation.id;
-    const userMessage: ChatMessage = { id: makeId(), role: 'user', content: prompt };
+    const userMessage: ChatMessage = {
+      id: makeId(), role: 'user', content: prompt,
+      ...(requestImage ? { imageAttached: true } : {}),
+    };
     const fullMessages = [...conversation.messages.filter((m) => m.content.trim()), userMessage];
     const requestMessages = prepareRequestMessages(fullMessages);
     const assistantMessage: ChatMessage = { id: makeId(), role: 'assistant', content: '', deepthink: requestDeepthink };
@@ -399,11 +418,22 @@ function Home() {
     const deadline = window.setTimeout(() => controller.abort(new Error('The response timed out. Your partial answer is kept; please try again.')), 180000);
     const connectTimeout = window.setTimeout(() => controller.abort(new Error('The server did not respond in time. Please try again.')), 30000);
     try {
-      const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/chat`, {
+      const requestBody: Record<string, unknown> = {
+        messages: requestMessages,
+        deepthink: requestDeepthink,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
+      if (requestImage) {
+        requestBody.image = {
+          mimeType: requestImage.mimeType,
+          data: await imageFileToBase64(requestImage.file),
+        };
+      }
+      const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/chat${requestImage ? '/image' : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         credentials: 'include',
-        body: JSON.stringify({ messages: requestMessages, deepthink: requestDeepthink, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
       window.clearTimeout(connectTimeout);
@@ -457,6 +487,7 @@ function Home() {
       await consumeChatStream(response.body, controller, acceptEvent);
       await drain();
       if (controller.signal.aborted) return;
+      if (received.trim() && requestImage) setPendingImage((current) => current?.file === requestImage.file ? null : current);
       if (!received.trim()) {
         setError('Nexo AI returned an empty response. Try rephrasing or sending again.');
         updateConversation(conversationId, (item) => ({
@@ -674,6 +705,11 @@ function Home() {
                           {isLive && displayContent && replyDeepthink && !isSearching(message, isLive) && <ReplyStatus mode="deep" compact />}
                           {isLive && displayContent && <span className="typing-caret" aria-hidden="true" />}
                         </div>
+                        {message.role === 'user' && message.imageAttached && (
+                          <div className="user-image-note" data-testid={`message-image-note-${index}`}>
+                            Image sent to Gemini. The image file is not saved in chat history.
+                          </div>
+                        )}
                       </div>
                     </article>
                   );
@@ -694,23 +730,59 @@ function Home() {
           <div>
             <form className={`composer-wrap ${deepthink ? 'is-deep' : ''}`} onSubmit={(event) => void sendMessage(event)} aria-label="Send a message">
               <div className="composer">
-                <textarea
-                  ref={textareaRef}
-                  rows={1}
-                  value={draft}
-                  onChange={(event) => onDraftChange(event.target.value)}
-                  onKeyDown={onComposerKeyDown}
-                  placeholder={deepthink ? 'Describe a hard problem…' : 'Ask Nexo AI anything…'}
-                  aria-label="Your message"
-                  maxLength={12000}
-                  disabled={streaming}
-                  data-testid="input-message"
-                />
+                <div className="composer-body">
+                  {pendingImage && (
+                    <div className="image-attachment-preview" data-testid="image-attachment-preview">
+                      <img src={pendingImage.previewUrl} alt="Preview of attached image" />
+                      <div className="image-attachment-copy">
+                        <span>Sent to Gemini · not saved in chat history</span>
+                        <small>Gemini usage may be billed to the key owner.</small>
+                      </div>
+                      <button type="button" aria-label="Remove attached image" title="Remove image" onClick={() => setPendingImage(null)} disabled={streaming} data-testid="button-remove-image">
+                        <X size={14} aria-hidden="true" />
+                      </button>
+                    </div>
+                  )}
+                  <textarea
+                    ref={textareaRef}
+                    rows={1}
+                    value={draft}
+                    onChange={(event) => onDraftChange(event.target.value)}
+                    onKeyDown={onComposerKeyDown}
+                    placeholder={deepthink ? 'Describe a hard problem…' : 'Ask Nexo AI anything…'}
+                    aria-label="Your message"
+                    maxLength={12000}
+                    disabled={streaming}
+                    data-testid="input-message"
+                  />
+                </div>
               </div>
               <div className="composer-hint">
-                <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
-                  <span className="deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink{deepthink ? ' on' : ''}</span>
-                </button>
+                <div className="composer-mode-buttons">
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    hidden
+                    disabled={streaming}
+                    onChange={(event) => {
+                      const file = event.currentTarget.files?.[0];
+                      event.currentTarget.value = '';
+                      if (!file) return;
+                      const validationError = validateImageFile(file);
+                      if (validationError) { setPendingImage(null); setError(validationError); return; }
+                      setError('');
+                      setPendingImage({ file, previewUrl: URL.createObjectURL(file), mimeType: file.type as PendingImage['mimeType'] });
+                    }}
+                    data-testid="input-image-file"
+                  />
+                  <button type="button" className="image-attach-button" aria-label="Attach image" title="Attach an image" onClick={() => imageInputRef.current?.click()} disabled={streaming} data-testid="button-attach-image">
+                    <ImagePlus size={15} aria-hidden="true" />
+                  </button>
+                  <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
+                    <span className="deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink{deepthink ? ' on' : ''}</span>
+                  </button>
+                </div>
                 <span className="hint-keys">Enter to send · Shift + Enter for new line</span>
                 {streaming ? (
                   <button className="send-button stop" type="button" onClick={stopResponse} aria-label="Stop response" title="Stop response" data-testid="button-stop-response">

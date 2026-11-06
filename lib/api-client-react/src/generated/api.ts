@@ -22,7 +22,8 @@ import type {
 import type {
   ApiError,
   ChatInput,
-  HealthStatus
+  HealthStatus,
+  ImageChatInput
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -216,5 +217,94 @@ export const useStreamChat = <TError = ErrorType<ApiError>,
         TContext
       > => {
       return useMutation(getStreamChatMutationOptions(options));
+    }
+
+export const getStreamImageChatUrl = () => {
+
+
+
+
+  return `/api/chat/image`
+}
+
+/**
+ * Image-bearing prompts use the server-side Gemini API route. Text-only prompts continue through the existing Groq route.
+ * @summary Stream an image-aware AI chat response
+ */
+export const streamImageChat = async (imageChatInput: ImageChatInput, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<unknown>(getStreamImageChatUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(imageChatInput)
+  }
+);}
+
+
+
+
+
+export const getStreamImageChatMutationKey = () => ['streamImageChat'] as const;
+
+export const getStreamImageChatMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamImageChat>>, TError,StreamImageChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof streamImageChat>>, TError,StreamImageChatMutationVariables, TContext> => {
+
+const mutationKey = getStreamImageChatMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof streamImageChat>>, StreamImageChatMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  streamImageChat(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StreamImageChatMutationResult = NonNullable<Awaited<ReturnType<typeof streamImageChat>>>
+    export type StreamImageChatMutationBody = BodyType<ImageChatInput>
+    export type StreamImageChatMutationError = ErrorType<ApiError>
+    export type StreamImageChatMutationVariables = {data: BodyType<ImageChatInput>}
+
+    /**
+ * @summary Stream an image-aware AI chat response
+ */
+export const useStreamImageChat = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamImageChat>>, TError,StreamImageChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof streamImageChat>>,
+        TError,
+        StreamImageChatMutationVariables,
+        TContext
+      > => {
+      return useMutation(getStreamImageChatMutationOptions(options));
     }
 
