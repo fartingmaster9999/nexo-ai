@@ -132,4 +132,81 @@ await withFixture('tests/theme.html', async ({ cdp, evaluate, navigate }) => {
   await navigate();
   await waitFor(() => evaluate(`document.documentElement.dataset.theme === 'abyss'`), 'appearance remains selected after reload');
   assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem('nexo-theme-v1'))`), { theme: 'abyss', accent: 'rose' }, 'Remote appearance remains saved after reload');
+
+  await cdp('Emulation.setEmulatedMedia', {
+    features: [
+      { name: 'prefers-reduced-motion', value: 'reduce' },
+      { name: 'forced-colors', value: 'active' },
+    ],
+  });
+  assert.equal(await evaluate(`matchMedia('(forced-colors: active)').matches`), true, 'Chromium emulates forced-colors mode');
+  const forcedColorSurfaces = await evaluate(`(() => {
+    const selectors = ['.home-landing', '.sidebar', '.composer-wrap', '.workspace', '.ws-editor', '.ws-console'];
+    return Object.fromEntries(selectors.map((selector) => {
+      const element = document.querySelector(selector);
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return [selector, {
+        visible: style.display !== 'none' && rect.width > 0 && rect.height > 0,
+        color: style.color,
+        background: style.backgroundColor,
+        forcedColorAdjust: style.forcedColorAdjust,
+      }];
+    }));
+  })()`);
+  for (const [surface, style] of Object.entries(forcedColorSurfaces)) {
+    assert.equal(style.visible, true, `Forced colors: ${surface} remains visible`);
+    assert.notEqual(style.color, 'rgba(0, 0, 0, 0)', `Forced colors: ${surface} has readable text color`);
+    assert.equal(style.forcedColorAdjust, 'auto', `Forced colors: ${surface} keeps system color adjustment enabled`);
+    const contrast = await readContrast(surface, 'color', surface);
+    assert.ok(contrast >= 4.5, `Forced colors: ${surface} text contrast ${contrast}:1 is below 4.5:1`);
+  }
+  const forcedControls = await evaluate(`(() => {
+    const selectors = ['.landing-primary', '.sidebar-settings', '.composer textarea', '.ws-select', '.ws-btn.run'];
+    return Object.fromEntries(selectors.map((selector) => {
+      const style = getComputedStyle(document.querySelector(selector));
+      return [selector, { color: style.color, background: style.backgroundColor }];
+    }));
+  })()`);
+  for (const [control, style] of Object.entries(forcedControls)) {
+    assert.notEqual(style.color, 'rgba(0, 0, 0, 0)', `Forced colors: ${control} retains text`);
+    assert.notEqual(style.background, 'rgba(0, 0, 0, 0)', `Forced colors: ${control} retains its fallback surface`);
+  }
+  for (const [control, background] of [
+    ['.landing-primary', '.landing-primary'],
+    ['.sidebar-settings', '.sidebar'],
+    ['.composer textarea', '.composer textarea'],
+    ['.ws-select', '.ws-select'],
+    ['.ws-btn.run', '.ws-btn.run'],
+  ]) {
+    const contrast = await readContrast(control, 'color', background);
+    assert.ok(contrast >= 4.5, `Forced colors: ${control} text contrast ${contrast}:1 is below 4.5:1`);
+  }
+
+  // A narrower CSS viewport reproduces the reflow users see at 200% desktop zoom.
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 720, height: 640, deviceScaleFactor: 1, mobile: false });
+  await waitFor(() => evaluate(`document.querySelector('.ws-btn.run')?.getBoundingClientRect().width > 0`), 'workspace controls at zoomed viewport');
+  await evaluate(`document.querySelector('.ws-select').focus()`);
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  const zoomedFocus = await evaluate(`(() => {
+    const button = document.activeElement;
+    const style = getComputedStyle(button);
+    const rect = button.getBoundingClientRect();
+    return {
+      isRunButton: button.matches('.ws-btn.run'),
+      visible: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth,
+      focusVisible: button.matches(':focus-visible'),
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+      outlineColor: style.outlineColor,
+    };
+  })()`);
+  assert.equal(zoomedFocus.isRunButton, true, 'Keyboard Tab reaches the workspace run control at zoomed viewport width');
+  assert.equal(zoomedFocus.visible, true, 'The focused workspace control remains inside the zoomed viewport');
+  assert.equal(zoomedFocus.focusVisible, true, 'Keyboard focus remains visibly indicated at zoomed viewport width');
+  assert.ok(Number.parseFloat(zoomedFocus.outlineWidth) >= 2, 'Zoomed keyboard focus outline is at least 2 CSS pixels');
+  assert.equal(zoomedFocus.outlineStyle, 'solid', 'Zoomed keyboard focus outline remains solid');
+  const forcedFocusContrast = await readContrast('.ws-btn.run', 'outlineColor', '.ws-btn.run');
+  assert.ok(forcedFocusContrast >= 3, `Forced colors: zoomed focus outline contrast ${forcedFocusContrast}:1 is below 3:1`);
 });

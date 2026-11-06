@@ -294,3 +294,103 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Use system colors instead of theme-only decoration in Windows high contrast. */
+@media (forced-colors: active) {
+  body::before,
+  .landing-primary::before {
+    display: none;
+  }
+
+  body,
+  .app-shell,
+  .main-pane,
+  .home-region,
+  .home-landing,
+  .chat-region,
+  .messages {
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .sidebar,
+  .topbar,
+  .composer-wrap,
+  .workspace,
+  .ws-head,
+  .ws-editor,
+  .ws-out,
+  .ws-console,
+  .landing-preview,
+  .landing-prompt,
+  .suggestion,
+  .message-row.user .message-text {
+    background: Canvas;
+    color: CanvasText;
+    border-color: CanvasText;
+  }
+
+  .landing-wordmark,
+  .landing-intro,
+  .landing-action-note,
+  .landing-prompt-copy small,
+  .landing-prompt-arrow,
+  .landing-prompt-copy em,
+  .context-title,
+  .thread-heading,
+  .thread-select,
+  .thread-empty,
+  .sidebar-settings,
+  .composer-hint,
+  .hint-keys,
+  .ws-title,
+  .ws-out-head,
+  .ws-language-status,
+  .ws-console,
+  .ws-editor .cm-content {
+    color: CanvasText;
+    opacity: 1;
+  }
+
+  .landing-primary,
+  .send-button,
+  .ws-btn.run,
+  .ws-btn.stop {
+    border: 1px solid ButtonText;
+    background: ButtonFace;
+    color: ButtonText;
+    box-shadow: none;
+  }
+
+  .ws-select,
+  .composer textarea {
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .thread-select.is-active,
+  .deep-toggle.is-on,
+  .deep-toggle[aria-pressed="true"],
+  .ws-snippets button.is-on {
+    border-color: Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .composer-wrap:focus-within {
+    border-color: Highlight;
+    outline: 2px solid Highlight;
+    outline-offset: 3px;
+    box-shadow: none;
+  }
+
+  :is(button, a, select, textarea, [role="button"], [role="separator"]):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 3px;
+  }
+
+  :disabled {
+    color: GrayText;
+    border-color: GrayText;
+  }
+}
