@@ -869,11 +869,11 @@ function Home() {
                   <button type="button" className="image-attach-button" aria-label="Attach image" title="Attach an image" onClick={() => imageInputRef.current?.click()} disabled={streaming} data-testid="button-attach-image">
                     <ImagePlus size={15} aria-hidden="true" />
                   </button>
-                  <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
-                    <span className="deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink{deepthink ? ' on' : ''}</span>
+                  <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
+                    <span className="mode-toggle-icon deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink{deepthink ? ' on' : ''}</span>
                   </button>
-                  <button type="button" aria-pressed={agentMode} aria-label={`Agent mode ${agentMode ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`agent-toggle ${agentMode ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original route' : agentMode ? 'Agent is on: Gemini may search the web or run code in the browser' : 'Turn on Agent mode for Gemini-assisted web search and browser code'} onClick={() => setAgentMode((value) => !value)} data-testid="toggle-agent">
-                    <span className="agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent{agentMode ? ' on' : ''}</span>
+                  <button type="button" aria-pressed={agentMode} aria-label={`Agent mode ${agentMode ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original route' : agentMode ? 'Agent is on: Gemini may search the web or run code in the browser' : 'Turn on Agent mode for Gemini-assisted web search and browser code'} onClick={() => setAgentMode((value) => !value)} data-testid="toggle-agent">
+                    <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent{agentMode ? ' on' : ''}</span>
                   </button>
                 </div>
                 <span className="hint-keys">Enter to send · Shift + Enter for new line</span>

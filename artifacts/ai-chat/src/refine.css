@@ -119,15 +119,14 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 .composer textarea:disabled { opacity: .6; }
 .composer-hint { display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 2px 0 0; font-size: 11px; }
 .hint-keys { margin-left: auto; color: hsl(var(--foreground) / .34); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.deep-toggle, .agent-toggle { display: inline-flex; align-items: center; height: 32px; padding: 0 12px 0 5px; gap: 6px; border: 1px solid var(--hair-strong); border-radius: 999px; background: transparent; color: hsl(var(--foreground) / .6); font-size: 12.5px; font-weight: 500; box-shadow: none; white-space: nowrap; flex: 0 0 auto; transition: color .15s, border-color .15s, background .15s; }
-.deep-icon { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: hsl(var(--foreground) / .06); transform: none; }
-.agent-icon { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: hsl(var(--foreground) / .06); }
-.deep-toggle:hover:not(:disabled), .agent-toggle:hover:not(:disabled) { color: hsl(var(--foreground)); border-color: hsl(var(--foreground) / .22); background: transparent; }
-.deep-toggle:disabled, .agent-toggle:disabled { opacity: .5; cursor: not-allowed; }
-.deep-toggle.is-on, .deep-toggle[aria-pressed="true"], .agent-toggle.is-on, .agent-toggle[aria-pressed="true"] { color: hsl(var(--primary)); border-color: hsl(var(--primary) / .4); background: hsl(var(--primary) / .08); box-shadow: none; }
-.deep-toggle.is-on:hover:not(:disabled), .agent-toggle.is-on:hover:not(:disabled) { color: hsl(var(--primary)); border-color: hsl(var(--primary) / .6); background: hsl(var(--primary) / .12); filter: none; }
-.deep-toggle.is-on .deep-icon, .agent-toggle.is-on .agent-icon { background: hsl(var(--primary) / .16); color: hsl(var(--primary)); }
-.deep-toggle[aria-pressed="true"] svg, .agent-toggle[aria-pressed="true"] svg { color: currentColor; }
+.mode-toggle { display: inline-flex; align-items: center; height: 32px; padding: 0 12px 0 5px; gap: 6px; border: 1px solid var(--hair-strong); border-radius: 999px; background: transparent; color: hsl(var(--foreground) / .6); font-size: 12.5px; font-weight: 500; box-shadow: none; white-space: nowrap; flex: 0 0 auto; transition: color .15s, border-color .15s, background .15s; }
+.mode-toggle-icon { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: hsl(var(--foreground) / .06); }
+.mode-toggle:hover:not(:disabled) { color: hsl(var(--foreground)); border-color: hsl(var(--foreground) / .22); background: transparent; }
+.mode-toggle:disabled { opacity: .5; cursor: not-allowed; }
+.mode-toggle.is-on, .mode-toggle[aria-pressed="true"] { color: hsl(var(--primary)); border-color: hsl(var(--primary) / .4); background: hsl(var(--primary) / .08); box-shadow: none; }
+.mode-toggle.is-on:hover:not(:disabled) { color: hsl(var(--primary)); border-color: hsl(var(--primary) / .6); background: hsl(var(--primary) / .12); filter: none; }
+.mode-toggle.is-on .mode-toggle-icon { background: hsl(var(--primary) / .16); color: hsl(var(--primary)); }
+.mode-toggle[aria-pressed="true"] svg { color: currentColor; }
 .send-button { width: 34px; height: 34px; flex: 0 0 34px; margin-left: auto; border-radius: 10px; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); box-shadow: none; transition: background .15s, opacity .15s, transform .15s var(--ease-out); }
 .hint-keys + .send-button { margin-left: 0; }
 .send-button:not(:disabled):hover { transform: none; filter: brightness(1.08); }
@@ -186,7 +185,7 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 @media (max-height: 520px) { .suggestions { display: none; } .composer textarea { max-height: 96px; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .welcome > *, .message-row, .workspace, .sidebar, .send-button, .suggestion, .suggestion-arrow, .deep-toggle, .composer-wrap, .typing-caret { animation: none !important; transition: none !important; }
+  .welcome > *, .message-row, .workspace, .sidebar, .send-button, .suggestion, .suggestion-arrow, .mode-toggle, .composer-wrap, .typing-caret { animation: none !important; transition: none !important; }
 }
 
 /* Shared finishing details: quiet surfaces, readable text, and clear controls. */
@@ -208,7 +207,7 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
   border-color: hsl(var(--primary) / .48);
   box-shadow: 0 0 0 3px hsl(var(--primary) / .1), 0 12px 32px -24px hsl(222 60% 2% / .9);
 }
-.deep-toggle { min-height: 36px; }
+.mode-toggle { min-height: 36px; }
 .send-button { width: 40px; height: 40px; flex-basis: 40px; }
 .term-head { min-height: 40px; }
 .request-error button { min-width: 32px; min-height: 32px; }
@@ -236,7 +235,7 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
   .thread-select { min-height: 42px; }
   .thread-delete { width: 40px; height: 40px; opacity: .7; }
   .composer-hint { gap: 7px; }
-  .deep-toggle { min-height: 40px; }
+  .mode-toggle { min-height: 40px; }
   .send-button { width: 42px; height: 42px; flex-basis: 42px; }
   .workspace { inset: 0; width: 100%; border: 0; }
   .ws-head { height: auto; min-height: 58px; padding: 0 8px 0 12px; gap: 6px; }

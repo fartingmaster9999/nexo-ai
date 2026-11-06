@@ -50,8 +50,18 @@
   min-width: 0;
   max-width: 100%;
   overflow: auto;
-  overscroll-behavior: contain;
   scrollbar-gutter: stable;
+}
+
+/* Inline code must hand vertical gestures back to the conversation. */
+.message-text.markdown .code-block pre {
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
+}
+
+.ws-editor,
+.ws-console {
+  overscroll-behavior: contain;
 }
 
 .message-text.markdown .code-block pre code,
@@ -103,8 +113,7 @@
 }
 
 .thread-select,
-.deep-toggle,
-.agent-toggle,
+.mode-toggle,
 .icon-btn,
 .send-button,
 .code-copy-button,
@@ -114,8 +123,7 @@
 }
 
 .thread-select { min-height: 42px; }
-.deep-toggle,
-.agent-toggle,
+.mode-toggle,
 .code-copy-button,
 .ws-mini { min-height: 36px; }
 
@@ -206,8 +214,7 @@
     gap: 8px;
   }
 
-  .deep-toggle,
-  .agent-toggle,
+  .mode-toggle,
   .send-button,
   .icon-btn {
     min-width: 40px;
@@ -290,8 +297,7 @@
 
 @media (pointer: coarse) {
   .thread-select,
-  .deep-toggle,
-  .agent-toggle,
+  .mode-toggle,
   .send-button,
   .icon-btn,
   .ws-btn {
@@ -384,10 +390,8 @@
   }
 
   .thread-select.is-active,
-  .deep-toggle.is-on,
-  .deep-toggle[aria-pressed="true"],
-  .agent-toggle.is-on,
-  .agent-toggle[aria-pressed="true"],
+  .mode-toggle.is-on,
+  .mode-toggle[aria-pressed="true"],
   .ws-snippets button.is-on {
     border-color: Highlight;
     background: Highlight;

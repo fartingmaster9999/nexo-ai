@@ -38,3 +38,9 @@ For scroll reports, identify the active scroll area before changing page overflo
 **Why:** Broad changes to root scrolling can break the pinned composer and code workspace without fixing gestures directed at a nested editor.
 
 **How to apply:** Reproduce wheel and touch scrolling over each pane, at editor boundaries, and after closing the workspace. Add a browser regression test for the exact interaction before changing scroll ownership.
+
+Scroll regression fixtures must reproduce the production CSS ancestry and place gesture coordinates inside the visible intersection of the target and its scroll pane.
+
+**Why:** Earlier scroll checks passed because the fixture omitted the chat wrapper that activates descendant CSS rules; a separate touch failure came from targeting code below the pane's visible bounds. Programmatic scrollTop changes alone cannot detect gesture containment.
+
+**How to apply:** Confirm the element under the gesture point, include the production styles and wrappers, and compare the original behavior against the fix before concluding that a scroll regression is covered.

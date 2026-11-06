@@ -38,7 +38,7 @@ function Fixture() {
       <div className="markdown" style={{ padding: 28 }}>
         <h1>Workspace checks</h1>
         <button ref={conversationControlRef} type="button" onClick={() => setOpen(true)} data-testid="button-conversation-control">Conversation</button>
-        <MessageMarkdown content={markdown} />
+        <div className="message-text markdown"><MessageMarkdown content={markdown} /></div>
         <div aria-hidden="true" style={{ height: 1000 }} />
       </div>
     </div></main>
