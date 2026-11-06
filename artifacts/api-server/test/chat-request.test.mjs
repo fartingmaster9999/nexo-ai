@@ -45,9 +45,24 @@ test("Groq browser tools stay disabled while provider-exposed reasoning is reque
 
 test("coding instructions require imports and describe packages as on demand", () => {
   const request = buildChatRequest({ messages }, new Date(), { coding: true });
-  assert.match(request.messages[0].content, /available on demand when imported/);
-  assert.match(request.messages[0].content, /aliases are not preloaded/);
-  assert.match(request.messages[0].content, /Import every library you use explicitly/);
+  assert.match(request.messages[0].content, /load only when imported/);
+  assert.match(request.messages[0].content, /NumPy, SciPy, Matplotlib, pandas and SymPy load only when imported/);
+  assert.match(request.messages[0].content, /Import every library explicitly in Python/);
+  assert.match(request.messages[0].content, /Nexo's browser-based IDE/);
+  assert.match(request.messages[0].content, /Do not assume Windows, PowerShell, shell access, persistent local files or arbitrary installed packages/);
+  assert.match(request.messages[0].content, /Do not add comments unless requested/);
+  assert.match(request.messages[0].content, /preserve its existing comments/);
+  assert.match(request.messages[0].content, /Keep explanations brief and outside fenced code/);
+  assert.match(request.messages[0].content, /Never claim generated code was executed or tested unless actual execution results/);
+});
+
+test("answer instructions use Markdown math delimiters and preserve code", () => {
+  const prompt = buildChatRequest({ messages }).messages[0].content;
+  assert.ok(prompt.includes("$...$"), "Inline math should use Markdown delimiters.");
+  assert.ok(prompt.includes("$$...$$"), "Display math should use Markdown delimiters.");
+  assert.ok(prompt.includes("\\(...\\)"));
+  assert.ok(prompt.includes("\\[...\\]"));
+  assert.match(prompt, /Keep math delimiters out of code and preserve literal code exactly/);
 });
 
 test("inline widget contract is selective, Groq-only and disabled for explicit runnable code", () => {

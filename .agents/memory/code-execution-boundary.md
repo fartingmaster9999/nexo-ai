@@ -20,3 +20,9 @@ Inline quizzes and charts must remain bounded declarative data, not model-author
 **Why:** The user wants interactive answers without opening the IDE. That does not relax the isolation boundary for arbitrary generated code; safe built-in widget renderers can meet this requirement without granting execution privileges.
 
 **How to apply:** Extend validated schemas and built-in renderers for new widget types. Compute supported mathematical formulas through fixed application logic; never evaluate model expressions. Keep quiz state attached to its owning conversation/message, and require retrieved source provenance for charts claiming verified web data.
+
+Math preprocessing must leave inline and fenced code source untouched. If a renderer normalizes Markdown delimiters before parsing, code copy and widget positions must use the same normalized source.
+
+**Why:** Markdown node offsets describe the exact input text. Changing delimiters before code blocks can shift those offsets and silently select different copied code or widget data.
+
+**How to apply:** Limit math normalization to prose, keep parser/copy/widget source aligned, and test dollar and backslash delimiters inside both inline and fenced code.

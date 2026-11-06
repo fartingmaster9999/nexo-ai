@@ -131,6 +131,20 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
     assert.ok(!await exists('[data-testid="panel-workspace"]'));
     assert.match(body, /malformed|Unsupported|not completed|could not be verified/);
   }
+  await send('render math');
+  await settled();
+  const renderedMath = await evaluate(`(() => { const row=Array.from(document.querySelectorAll('.message-row.assistant')).at(-1); return {math:row.querySelectorAll('.katex').length, display:row.querySelectorAll('.katex-display').length, code:row.querySelector('code')?.textContent, codeMath:!!row.querySelector('code .katex')}; })()`);
+  assert.ok(renderedMath.math >= 4, 'Inline, display, and parenthesized math render with KaTeX');
+  assert.ok(renderedMath.display >= 2, 'Dollar and bracketed display math render in responsive blocks');
+  assert.equal(renderedMath.code, '$literal math$ and \\(literal\\)', 'Inline code containing math delimiters stays literal');
+  assert.equal(renderedMath.codeMath, false, 'Math rendering does not enter inline code');
+  assert.match(await evaluate(`Array.from(document.querySelectorAll('.message-row.assistant')).at(-1).textContent`), /Ordinary text keeps its spacing/);
+  await send('broken math notation');
+  await settled();
+  const brokenMath = await evaluate(`(() => { const row=Array.from(document.querySelectorAll('.message-row.assistant')).at(-1); return {error:row.querySelector('.katex-error')?.textContent, unsupported:row.querySelector('.katex-html')?.textContent, text:row.textContent}; })()`);
+  assert.match(brokenMath.unsupported ?? brokenMath.error ?? '', /definitelyUndefinedNexoCommand/, 'Unsupported TeX stays readable');
+  assert.match(brokenMath.text, /\$x\+1/, 'An unmatched math delimiter stays visible as text');
+
   await evaluate(`document.querySelector('.conversation-flow').style.minHeight = '1400px'`);
   await send('ordinary question');
   await evaluate(`const m=document.querySelector('[data-testid="chat-messages"]'); m.scrollTop=0; m.dispatchEvent(new Event('scroll',{bubbles:true}))`);
@@ -142,8 +156,11 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
   await send('code');
   await settled();
   await waitFor(() => exists('[data-testid="panel-workspace"]'), 'normal generated code workspace');
+  assert.equal(await evaluate(`!!Array.from(document.querySelectorAll('.message-row.assistant')).at(-1).querySelector('.katex')`), true, 'Math before a code fence renders without shifting copied code');
+  assert.equal(await exists('.code-block .katex'), false, 'Math delimiters inside fenced code are not rendered');
   await click('.code-block button');
-  await waitFor(() => evaluate(`window.__copied === "print('plain')\\n"`), 'raw code copy preserved');
+  const expectedCode = 'print(r"$x^2$ and \\(literal\\)")\n';
+  await waitFor(() => evaluate(`window.__copied === ${JSON.stringify(expectedCode)}`), 'raw code copy preserves literal math delimiters');
   await click('[data-testid="button-close-workspace"]');
   await click('[data-testid="button-new-chat"]');
   await waitFor(() => exists('[data-testid="welcome-screen"]'), 'unsent conversation');
@@ -160,6 +177,10 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await cdp('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
   if (await evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]')?.getAttribute('aria-expanded') === 'true'`)) await click('[data-testid="button-toggle-sidebar"]');
+  await send('render math');
+  await settled();
+  await waitFor(() => evaluate(`!!Array.from(document.querySelectorAll('.message-row.assistant')).at(-1)?.querySelector('.katex-display')`), 'phone display math');
+  assert.ok(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), 'Rendered equations do not cause phone-width overflow');
   await send('Quiz me on biology again');
   await settled();
   await waitFor(() => exists('[data-testid="message-assistant-19"] .nx-quiz, .nx-quiz'), 'phone quiz');
@@ -171,5 +192,5 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
   assert.ok(await evaluate(`matchMedia('(prefers-reduced-motion: reduce)').matches`));
   const sentMetadata = await evaluate(`window.__widgetRequests.some(r=>r.messages.some(m=>'quizProgress' in m || 'id' in m))`);
   assert.equal(sentMetadata, false, 'No quiz state or client identity sent to model');
-  console.log('Inline widget browser checks passed: streamed/final answers, quiz keyboard/touch/score/retry, reload, independent chats/deletion, all chart forms, series/value/table controls, malformed/partial/unknown/source rejection, Markdown/raw code/IDE and lazy loading.');
+  console.log('Chat render browser checks passed: math (inline/display/error/mobile), literal code, streaming, quiz keyboard/touch/score/retry, reload, independent chats/deletion, charts and IDE.');
 });

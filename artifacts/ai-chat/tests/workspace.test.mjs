@@ -29,6 +29,7 @@ test('clipboard denial and unavailable APIs are explicit failures', async () => 
 test('fenced code keeps indentation, CRLF, blank lines and unknown language bytes', () => {
   for (const [source, expected] of [
     ['```python\n\tprint("hi")  \n\n```', '\tprint("hi")  \n\n'],
+    ['```python\nprint(r"$x^2$ and \\(literal\\)")\n```', 'print(r"$x^2$ and \\(literal\\)")\n'],
     ['~~~rust\r\n  let x = 2;\r\n~~~', '  let x = 2;\r\n'],
     ['```\nx\n```', 'x\n'],
     ['```js\npartial', 'partial'],

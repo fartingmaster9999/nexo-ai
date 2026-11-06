@@ -134,3 +134,9 @@ test('widget fences never become runnable code, including code-like strings and 
   assert.deepEqual(extractSnippets(text).map((s) => s.language), ['python', 'javascript']);
   assert.equal(fencedBlocks('```nexo-widget\n{"version":1')[0].complete, false);
 });
+
+test('math-like text inside executable fences is preserved literally', () => {
+  const source = '```python\nprint(r"$x^2$ and \\(literal\\)")\n```';
+  assert.equal(fencedBlocks(source)[0].code, 'print(r"$x^2$ and \\(literal\\)")\n');
+  assert.equal(extractSnippets(source)[0].code, 'print(r"$x^2$ and \\(literal\\)")');
+});

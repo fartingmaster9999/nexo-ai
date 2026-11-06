@@ -1,6 +1,9 @@
 import { createContext, lazy, memo, Suspense, useContext, useMemo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { CopyCodeButton } from './copy-code-button';
 import { rawCodeFromSource } from '@/lib/code-clipboard';
 import { fencedBlocks, type FencedBlock } from '@/lib/fenced-blocks';
@@ -62,11 +65,116 @@ const components: Components = {
   a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer nofollow" />,
   table: ({ node: _node, ...props }) => <div className="table-wrap"><table {...props} /></div>,
 };
-const plugins = [remarkGfm];
+const remarkPlugins = [remarkGfm, remarkMath];
+
+type MarkdownNode = { type: string; value?: string; children?: MarkdownNode[] };
+const INLINE_OPEN = '\\(';
+const INLINE_CLOSE = '\\)';
+const DISPLAY_OPEN = '\\[';
+const DISPLAY_CLOSE = '\\]';
+
+function isEscapedAt(source: string, index: number) {
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor--) slashes++;
+  return slashes % 2 === 1;
+}
+
+function findUnescaped(source: string, token: string, from: number) {
+  let index = source.indexOf(token, from);
+  while (index >= 0 && isEscapedAt(source, index)) index = source.indexOf(token, index + token.length);
+  return index;
+}
+
+function findCodeSpanEnd(source: string, start: number, ticks: number) {
+  const marker = '`'.repeat(ticks);
+  let end = source.indexOf(marker, start + ticks);
+  while (end >= 0) {
+    const isLongerRun = source[end - 1] === '`' || source[end + ticks] === '`';
+    if (!isLongerRun) return end + ticks;
+    end = source.indexOf(marker, end + ticks);
+  }
+  return -1;
+}
+
+function findMathOpening(source: string, from: number) {
+  for (let cursor = from; cursor < source.length;) {
+    if (source[cursor] === '`') {
+      let ticks = 1;
+      while (source[cursor + ticks] === '`') ticks++;
+      const codeEnd = findCodeSpanEnd(source, cursor, ticks);
+      if (codeEnd >= 0) {
+        cursor = codeEnd;
+        continue;
+      }
+    }
+    if (!isEscapedAt(source, cursor)) {
+      if (source.startsWith(INLINE_OPEN, cursor)) return { start: cursor, isDisplay: false };
+      if (source.startsWith(DISPLAY_OPEN, cursor)) return { start: cursor, isDisplay: true };
+    }
+    cursor++;
+  }
+  return null;
+}
+
+/** Convert common TeX delimiters without touching fenced or inline code source. */
+function normalizeMathSegment(source: string) {
+  let output = '';
+  let cursor = 0;
+  while (cursor < source.length) {
+    if (source[cursor] === '`') {
+      let ticks = 1;
+      while (source[cursor + ticks] === '`') ticks++;
+      const end = findCodeSpanEnd(source, cursor, ticks);
+      if (end >= 0) {
+        output += source.slice(cursor, end);
+        cursor = end;
+        continue;
+      }
+    }
+
+    const opening = findMathOpening(source, cursor);
+    if (!opening) {
+      output += source.slice(cursor);
+      break;
+    }
+
+    const { start, isDisplay } = opening;
+    const open = isDisplay ? DISPLAY_OPEN : INLINE_OPEN;
+    const close = isDisplay ? DISPLAY_CLOSE : INLINE_CLOSE;
+    const end = findUnescaped(source, close, start + open.length);
+    const expression = end >= 0 ? source.slice(start + open.length, end).trim() : '';
+    if (end < 0 || !expression) {
+      output += source.slice(cursor, start + open.length);
+      cursor = start + open.length;
+      continue;
+    }
+
+    output += source.slice(cursor, start);
+    output += isDisplay ? `\n\n$$\n${expression}\n$$\n\n` : `$${expression}$`;
+    cursor = end + close.length;
+  }
+  return output;
+}
+
+function normalizeMathDelimiters(source: string) {
+  if (!source.includes(INLINE_OPEN) && !source.includes(DISPLAY_OPEN)) return source;
+  const codeBlocks = fencedBlocks(source);
+  if (codeBlocks.length === 0) return normalizeMathSegment(source);
+
+  let result = '';
+  let cursor = 0;
+  for (const block of codeBlocks) {
+    result += normalizeMathSegment(source.slice(cursor, block.start));
+    result += source.slice(block.start, block.end);
+    cursor = block.end;
+  }
+  return result + normalizeMathSegment(source.slice(cursor));
+}
 
 /** Completed answers do not reparse Markdown on each streamed chunk or keystroke. */
 export const MessageMarkdown = memo(function MessageMarkdown(props: MarkdownProps) {
-  const blocks = useMemo(() => fencedBlocks(props.content), [props.content]);
-  const context = useMemo(() => ({ ...props, blocks }), [props.content, props.live, props.conversationId, props.messageId, props.quizProgress, props.onQuizProgress, props.sources, blocks]);
-  return <MarkdownSource.Provider value={context}><ReactMarkdown remarkPlugins={plugins} skipHtml components={components}>{props.content}</ReactMarkdown></MarkdownSource.Provider>;
+  const markdown = useMemo(() => normalizeMathDelimiters(props.content), [props.content]);
+  const blocks = useMemo(() => fencedBlocks(markdown), [markdown]);
+  const context = useMemo(() => ({ ...props, content: markdown, blocks }), [markdown, props.live, props.conversationId, props.messageId, props.quizProgress, props.onQuizProgress, props.sources, blocks]);
+  return <MarkdownSource.Provider value={context}><ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={[[rehypeKatex, { throwOnError: false, maxExpand: 500, maxSize: 20 }]]} skipHtml components={components}>{markdown}</ReactMarkdown></MarkdownSource.Provider>;
 });
