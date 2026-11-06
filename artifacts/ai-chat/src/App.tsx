@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Brain, ImagePlus, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -19,7 +19,9 @@ import { SettingsDialog } from '@/components/settings-dialog';
 import { HomeLanding } from '@/components/home-landing';
 import NotFound from '@/pages/not-found';
 import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type ChatMessage } from '@/components/answer-details';
-import { consumeChatStream, type StreamEvent } from '@/lib/chat-stream';
+import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
+import { executeCode, type RunOutput } from '@/lib/code-runner';
+import type { AgentWorkspaceTask } from '@/components/code-workspace';
 import { useConversations } from '@/hooks/use-conversations';
 import { hasSentUserMessage, type Conversation } from '@/lib/conversation-storage';
 import { prepareRequestMessages } from '@/lib/request-context';
@@ -35,6 +37,7 @@ const logoUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/nexo-logo.png`;
 const prefersReducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const CodeWorkspace = lazy(() => import('@/components/code-workspace').then(module => ({ default: module.CodeWorkspace })));
 const DEEPTHINK_KEY = 'nexo-deepthink';
+const AGENT_KEY = 'nexo-agent';
 const queryClient = new QueryClient();
 const snippetCache = new WeakMap<ChatMessage, Snippet[]>();
 const noSnippets: Snippet[] = [];
@@ -78,6 +81,9 @@ function Home() {
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
+  const [agentMode, setAgentMode] = useState<boolean>(() => { try { return window.localStorage.getItem(AGENT_KEY) === '1'; } catch { return false; } });
+  useEffect(() => { try { window.localStorage.setItem(AGENT_KEY, agentMode ? '1' : '0'); } catch { /* ignore */ } }, [agentMode]);
+  const [agentCodeTask, setAgentCodeTask] = useState<AgentWorkspaceTask | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const homeHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -206,6 +212,7 @@ function Home() {
     setError('');
     setDraft('');
     setPendingImage(null);
+    setAgentCodeTask(null);
     const conversation: Conversation = {
       id: makeId(),
       title: 'New conversation',
@@ -231,6 +238,7 @@ function Home() {
     setStreaming(false);
     setVisibleReply(null);
     setPendingImage(null);
+    setAgentCodeTask(null);
     setConversations((items) => items.filter((item) => item.id !== activeId || hasSentUserMessage(item)));
     setActiveId(null);
     setHomeHistoryOpen(false);
@@ -244,6 +252,7 @@ function Home() {
     setConversations((items) => items.filter((item) => item.id !== activeId || hasSentUserMessage(item)));
     setActiveId(id);
     setPendingImage(null);
+    setAgentCodeTask(null);
     setHomeHistoryOpen(false);
     homeHistoryTriggerRef.current = null;
     setError('');
@@ -303,6 +312,7 @@ function Home() {
     abortRef.current = null;
     activeStreamId.current = null;
     setStreaming(false);
+    setAgentCodeTask((task) => task?.status === 'running' ? { ...task, status: 'error', error: 'Stopped by you.' } : task);
   };
 
   const sendMessage = async (event?: FormEvent, suggestedText?: string) => {
@@ -315,6 +325,11 @@ function Home() {
       return;
     }
     if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); return; }
+    const requestAgent = agentMode;
+    if (requestAgent && requestImage) {
+      setError('Agent mode cannot process image attachments yet. Remove the image or turn Agent off.');
+      return;
+    }
     shouldAutoFollowMessages.current = true;
     const requestDeepthink = deepthink;
 
@@ -340,7 +355,7 @@ function Home() {
     };
     const fullMessages = [...conversation.messages.filter((m) => m.content.trim()), userMessage];
     const requestMessages = prepareRequestMessages(fullMessages);
-    const assistantMessage: ChatMessage = { id: makeId(), role: 'assistant', content: '', deepthink: requestDeepthink };
+    const assistantMessage: ChatMessage = { id: makeId(), role: 'assistant', content: '', deepthink: requestDeepthink, agentMode: requestAgent };
     setConversations((items) => {
       const exists = items.some((item) => item.id === conversationId);
       const updated: Conversation = {
@@ -353,6 +368,7 @@ function Home() {
     });
     setDraft('');
     setError('');
+    setAgentCodeTask(null);
     setStreaming(true);
     setVisibleReply({ id: conversationId, content: '' });
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -416,42 +432,18 @@ function Home() {
     flushRef.current = flushOutput;
     controller.signal.addEventListener('abort', flushOutput, { once: true });
     const deadline = window.setTimeout(() => controller.abort(new Error('The response timed out. Your partial answer is kept; please try again.')), 180000);
-    const connectTimeout = window.setTimeout(() => controller.abort(new Error('The server did not respond in time. Please try again.')), 30000);
+    let connectTimeout: number | null = null;
     try {
-      const requestBody: Record<string, unknown> = {
-        messages: requestMessages,
-        deepthink: requestDeepthink,
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      };
-      if (requestImage) {
-        requestBody.image = {
-          mimeType: requestImage.mimeType,
-          data: await imageFileToBase64(requestImage.file),
-        };
-      }
-      const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/chat${requestImage ? '/image' : ''}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-        credentials: 'include',
-        body: JSON.stringify(requestBody),
-        signal: controller.signal,
-      });
-      window.clearTimeout(connectTimeout);
-      if (!response.ok) {
-        let message = `The request could not be completed (${response.status}).`;
-        try {
-          const body = await response.json() as { error?: string };
-          if (body.error) message = body.error;
-        } catch {
-          // Keep the useful HTTP status when the server response is not JSON.
-        }
-        throw new Error(message);
-      }
-      if (!response.body) throw new Error('This browser could not open the response stream. Please try again.');
-
+      let agentHistory: AgentToolExchange[] = [];
+      let agentToolCalls = 0;
+      const nextAgentTool: { current: AgentToolRequest | null } = { current: null };
       const acceptEvent = (eventData: StreamEvent) => {
         if (abortRef.current !== controller) return;
         if (eventData.error) throw new Error(eventData.error);
+        if (eventData.agentTool) {
+          if (!requestAgent) throw new Error('The server returned an unexpected Agent tool request.');
+          nextAgentTool.current = eventData.agentTool;
+        }
         if (typeof eventData.content === 'string') {
           received += eventData.content;
           patchLast((message) => ({ ...message, content: received }));
@@ -484,7 +476,114 @@ function Home() {
           });
         }
       };
-      await consumeChatStream(response.body, controller, acceptEvent);
+
+      while (true) {
+        nextAgentTool.current = null;
+        const requestBody: Record<string, unknown> = {
+          messages: requestMessages,
+          deepthink: requestDeepthink,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        };
+        if (requestAgent && agentHistory.length) requestBody.agentHistory = agentHistory;
+        if (requestImage) {
+          requestBody.image = {
+            mimeType: requestImage.mimeType,
+            data: await imageFileToBase64(requestImage.file),
+          };
+        }
+        const endpoint = requestImage ? '/api/chat/image' : requestAgent ? '/api/agent' : '/api/chat';
+        connectTimeout = window.setTimeout(() => controller.abort(new Error('The server did not respond in time. Please try again.')), 30000);
+        const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          credentials: 'include',
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+        if (connectTimeout !== null) {
+          window.clearTimeout(connectTimeout);
+          connectTimeout = null;
+        }
+        if (!response.ok) {
+          let message = `The request could not be completed (${response.status}).`;
+          try {
+            const body = await response.json() as { error?: string };
+            if (body.error) message = body.error;
+          } catch {
+            // Keep the useful HTTP status when the server response is not JSON.
+          }
+          throw new Error(message);
+        }
+        if (!response.body) throw new Error('This browser could not open the response stream. Please try again.');
+        await consumeChatStream(response.body, controller, acceptEvent);
+        if (controller.signal.aborted) return;
+        const tool = nextAgentTool.current as AgentToolRequest | null;
+        if (!requestAgent || !tool) break;
+        if (agentHistory.length >= 6 || agentToolCalls >= 6) throw new Error('Nexo Agent reached its tool limit. Try a more focused request.');
+        agentToolCalls += 1;
+
+        const task: AgentWorkspaceTask = {
+          id: tool.callId,
+          language: tool.arguments.language,
+          code: tool.arguments.code,
+          outputs: [],
+          status: 'running',
+        };
+        setAgentCodeTask(task);
+        setWorkspaceOpen(true);
+        let outputs: RunOutput[] = [];
+        let executionError = '';
+        let previewHtml: string | undefined;
+        try {
+          const execution = await executeCode({
+            language: tool.arguments.language,
+            code: tool.arguments.code,
+            signal: controller.signal,
+          });
+          outputs = execution.outputs;
+          executionError = execution.error ?? '';
+          previewHtml = execution.previewHtml;
+        } catch (error) {
+          if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+          executionError = error instanceof Error ? error.message : 'The browser code runner failed.';
+        }
+        if (controller.signal.aborted) return;
+        setAgentCodeTask({ ...task, outputs, status: executionError ? 'error' : 'complete', error: executionError || undefined, previewHtml });
+
+        const outputText = outputs
+          .filter((output) => output.kind === 'stdout' || output.kind === 'stderr' || output.kind === 'status')
+          .map((output) => `${output.kind}: ${output.text ?? ''}`)
+          .join('\n')
+          .slice(-7000);
+        const resultText = [
+          executionError ? `Execution error: ${executionError}` : '',
+          outputText,
+          previewHtml ? 'HTML preview rendered in the isolated browser frame.' : '',
+        ].filter(Boolean).join('\n').slice(0, 8000) || 'Execution completed with no text output.';
+        const activityId = `agent-code-${tool.callId}`;
+        patchLast((message) => {
+          const list = message.activity ?? [];
+          const updated: Activity = {
+            id: activityId,
+            label: executionError ? 'Browser code run returned an error' : 'Code finished in the isolated browser',
+            kind: 'code',
+            status: executionError ? 'error' : 'complete',
+          };
+          return {
+            ...message,
+            activity: list.some((entry) => entry.id === activityId)
+              ? list.map((entry) => entry.id === activityId ? updated : entry)
+              : [...list, updated],
+          };
+        });
+        agentHistory = [...tool.history, {
+          tool: 'run_code',
+          callId: tool.callId,
+          thoughtSignature: tool.thoughtSignature,
+          arguments: { language: tool.arguments.language, code: tool.arguments.code },
+          result: resultText,
+        }];
+      }
       await drain();
       if (controller.signal.aborted) return;
       if (received.trim() && requestImage) setPendingImage((current) => current?.file === requestImage.file ? null : current);
@@ -516,7 +615,7 @@ function Home() {
       }
     } finally {
       window.clearTimeout(deadline);
-      window.clearTimeout(connectTimeout);
+      if (connectTimeout !== null) window.clearTimeout(connectTimeout);
       flushOutput();
       persistConversations();
       controller.signal.removeEventListener('abort', flushOutput);
@@ -782,6 +881,9 @@ function Home() {
                   <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
                     <span className="deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink{deepthink ? ' on' : ''}</span>
                   </button>
+                  <button type="button" aria-pressed={agentMode} aria-label={`Agent mode ${agentMode ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`agent-toggle ${agentMode ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original route' : agentMode ? 'Agent is on: Gemini may search the web or run code in the browser' : 'Turn on Agent mode for Gemini-assisted web search and browser code'} onClick={() => setAgentMode((value) => !value)} data-testid="toggle-agent">
+                    <span className="agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent{agentMode ? ' on' : ''}</span>
+                  </button>
                 </div>
                 <span className="hint-keys">Enter to send · Shift + Enter for new line</span>
                 {streaming ? (
@@ -802,7 +904,7 @@ function Home() {
         <Suspense fallback={null}>
         <CodeWorkspace conversationId={activeId} snippets={snippets} onClose={() => setWorkspaceOpen(false)}
           returnFocus={() => textareaRef.current?.focus({ preventScroll: true })} canAsk={!streaming}
-          isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} />
+          isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} agentCode={agentCodeTask} />
         </Suspense>
       )}
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={onDeleteDialogOpenChange}>

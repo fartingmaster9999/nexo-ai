@@ -3,7 +3,7 @@ import { AlertTriangle, Brain, ChevronDown, Info } from 'lucide-react';
 import { splitReasoning } from '../lib/reasoning-sections';
 import type { QuizProgress } from '../lib/interactive-widgets';
 
-export type Activity = { id: string; label: string; kind?: 'search' | 'thinking' | 'info'; status?: 'running' | 'complete' | 'error' };
+export type Activity = { id: string; label: string; kind?: 'search' | 'thinking' | 'info' | 'code'; status?: 'running' | 'complete' | 'error' };
 export type Source = { title: string; url: string };
 export type Notice = { id: string; message: string; model?: string };
 export type ChatMessage = {
@@ -13,6 +13,7 @@ export type ChatMessage = {
   imageAttached?: boolean;
   reasoning?: string;
   deepthink?: boolean;
+  agentMode?: boolean;
   activity?: Activity[];
   sources?: Source[];
   notices?: Notice[];
@@ -103,16 +104,17 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
   const reasoning = message.reasoning ?? '';
   const [open, setOpen] = useState(false);
   const searching = isSearching(message, live);
+  const agentMode = message.agentMode === true;
   const hasActivity = (message.activity ?? []).length > 0;
   if (!live && !reasoning && !hasActivity) return null;
   const runningLabel = searching ? [...(message.activity ?? [])].reverse().find((a) => a.kind === 'search' && a.status === 'running')?.label : undefined;
   const bodyId = `progress-body-${index}`;
-  const sections = open ? splitReasoning(reasoning) : [];
+  const sections = open && !agentMode ? splitReasoning(reasoning) : [];
   return (
     <div className={`term ${live ? 'is-live' : ''}`} data-testid={`panel-progress-${index}`}>
-      <button type="button" className="term-head" aria-expanded={open} aria-controls={open ? bodyId : undefined} aria-label={`${open ? 'Hide' : 'Show'} model reasoning`} onClick={() => setOpen((v) => !v)} data-testid={`toggle-progress-${index}`}>
+      <button type="button" className="term-head" aria-expanded={open} aria-controls={open ? bodyId : undefined} aria-label={`${open ? 'Hide' : 'Show'} ${agentMode ? 'Agent activity' : 'model reasoning'}`} onClick={() => setOpen((v) => !v)} data-testid={`toggle-progress-${index}`}>
         <span className="term-prompt" aria-hidden="true">&gt;&gt;&gt;</span>
-        <span className="term-title">{message.deepthink ? (live ? 'Deepthinking' : 'Deepthink reasoning') : (live ? 'Thinking' : 'Thought process')}{live && <span className="term-ellipsis" aria-hidden="true" />}</span>
+        <span className="term-title">{agentMode ? (live ? 'Agent is working' : 'Agent activity') : message.deepthink ? (live ? 'Deepthinking' : 'Deepthink reasoning') : (live ? 'Thinking' : 'Thought process')}{live && <span className="term-ellipsis" aria-hidden="true" />}</span>
         <ChevronDown size={13} className={`term-chev ${open ? 'is-open' : ''}`} aria-hidden="true" />
       </button>
       {searching && (
@@ -122,7 +124,20 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
       )}
       {open && (
         <div className="term-body" id={bodyId}>
-          {reasoning ? (
+          {agentMode ? (
+            <div className="agent-activity-list" role="list" data-testid={`agent-activity-${index}`}>
+              {(message.activity ?? []).length ? message.activity!.map((activity) => (
+                <div className={`agent-activity-item status-${activity.status ?? 'complete'}`} role="listitem" key={activity.id}>
+                  <span className="agent-activity-dot" aria-hidden="true" />
+                  <span>{activity.label}</span>
+                  <small>{activity.status === 'running' ? 'In progress' : activity.status === 'error' ? 'Unavailable' : 'Done'}</small>
+                </div>
+              )) : (
+                <p className="term-note">{live ? 'Agent is deciding whether a tool is needed…' : 'No tools were needed for this response.'}</p>
+              )}
+              <p className="term-note">Private model reasoning is not shown; this panel lists tool activity and outcomes.</p>
+            </div>
+          ) : reasoning ? (
             <div className="reason-flow" data-testid={`reasoning-${index}`}>
               {sections.map((sec, i) => (
                 <p key={i} className="reason-sec"><span className="reason-idx" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span><span className="reason-txt">{sec}</span></p>

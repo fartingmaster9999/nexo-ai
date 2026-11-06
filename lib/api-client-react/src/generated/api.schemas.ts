@@ -77,6 +77,83 @@ export interface ImageChatInput {
   image: ImageAttachment;
 }
 
+export type AgentToolExchangeTool = typeof AgentToolExchangeTool[keyof typeof AgentToolExchangeTool];
+
+
+export const AgentToolExchangeTool = {
+  web_search: 'web_search',
+  run_code: 'run_code',
+} as const;
+
+export type AgentToolArgumentsLanguage = typeof AgentToolArgumentsLanguage[keyof typeof AgentToolArgumentsLanguage];
+
+
+export const AgentToolArgumentsLanguage = {
+  python: 'python',
+  javascript: 'javascript',
+  html: 'html',
+} as const;
+
+export interface AgentToolArguments {
+  /**
+     * @minLength 2
+     * @maxLength 300
+     */
+  query?: string;
+  language?: AgentToolArgumentsLanguage;
+  /**
+     * @minLength 1
+     * @maxLength 20000
+     */
+  code?: string;
+}
+
+export interface AgentSource {
+  /** @maxLength 300 */
+  title: string;
+  /** @maxLength 2048 */
+  url: string;
+}
+
+export interface AgentToolExchange {
+  tool: AgentToolExchangeTool;
+  /**
+     * @minLength 1
+     * @maxLength 128
+     */
+  callId: string;
+  /**
+     * @minLength 1
+     * @maxLength 4096
+     */
+  thoughtSignature: string;
+  arguments: AgentToolArguments;
+  /** @maxLength 8000 */
+  result: string;
+  /** @maxItems 5 */
+  sources?: AgentSource[];
+}
+
+export interface AgentChatInput {
+  /** Use high Gemini thinking level instead of medium */
+  deepthink?: boolean;
+  /**
+     * Browser IANA timezone, validated by the server for current-time context
+     * @maxLength 100
+     */
+  timeZone?: string;
+  /**
+     * @minItems 1
+     * @maxItems 40
+     */
+  messages: ChatMessage[];
+  /**
+     * Bounded prior tool call and result pairs for the current turn, including Gemini's opaque continuation signature.
+     * @maxItems 6
+     */
+  agentHistory?: AgentToolExchange[];
+}
+
 export interface ApiError {
   error: string;
 }

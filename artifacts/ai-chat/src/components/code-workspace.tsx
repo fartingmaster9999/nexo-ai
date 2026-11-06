@@ -11,6 +11,15 @@ import { useFocusTrap } from '@/hooks/use-focus-trap';
 import './code-workspace.css';
 
 type Draft = { language: RunLanguage; code: string; edited: boolean };
+export type AgentWorkspaceTask = {
+  id: string;
+  language: RunLanguage;
+  code: string;
+  outputs: RunOutput[];
+  status: 'running' | 'complete' | 'error';
+  error?: string;
+  previewHtml?: string;
+};
 const DRAFT_KEY = 'nexo-code-drafts-v1';
 const WRAP_KEY = 'nexo-code-wrap-v1';
 function readDrafts(): Record<string, Draft> {
@@ -33,9 +42,10 @@ type Props = {
   onAskFix: (prompt: string) => void;
   canAsk: boolean;
   isLight: boolean;
+  agentCode?: AgentWorkspaceTask | null;
 };
 
-export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, onAskFix, canAsk, isLight }: Props) {
+export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, onAskFix, canAsk, isLight, agentCode }: Props) {
   const key = conversationId ?? '__scratch';
   const [drafts, setDrafts] = useState<Record<string, Draft>>(readDrafts);
   const [sel, setSel] = useState(0);
@@ -80,13 +90,31 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
 
   const genCode = generated?.code; const genLang = generated?.language;
   useEffect(() => {
+    if (agentCode) return;
     if (genCode === undefined || !genLang) return;
     setDrafts((d) => {
       const cur = d[key];
       if (cur?.edited || (cur && cur.code === genCode && cur.language === genLang)) return d;
       return { ...d, [key]: { language: genLang, code: genCode, edited: false } };
     });
-  }, [key, genCode, genLang]);
+  }, [key, genCode, genLang, agentCode?.id]);
+
+  useEffect(() => {
+    if (!agentCode) return;
+    setDrafts((current) => ({ ...current, [key]: { language: agentCode.language, code: agentCode.code, edited: false } }));
+    setSel(0);
+  }, [key, agentCode?.id]);
+
+  useEffect(() => {
+    if (!agentCode) return;
+    outputsRef.current = agentCode.outputs;
+    pendingOutputsRef.current = [];
+    setOutputs(agentCode.outputs);
+    setHasRun(true);
+    setRunError(agentCode.error ?? '');
+    setRunStatus(agentCode.status === 'running' ? 'Agent is running code…' : '');
+    if (agentCode.previewHtml !== undefined) setPreview(agentCode.previewHtml);
+  }, [agentCode?.id, agentCode?.outputs, agentCode?.status, agentCode?.error, agentCode?.previewHtml]);
 
   useEffect(() => {
     const current = abortRef.current;
@@ -246,6 +274,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       <header className="ws-head">
         <Terminal size={15} aria-hidden="true" className="ws-icon" />
         <span className="ws-title">Workspace</span>
+        {agentCode && <span className="ws-agent-label" role="status">{agentCode.status === 'running' ? 'Agent running' : 'Agent result'}</span>}
         <select className="ws-select" value={draft.language} aria-label="Language" onChange={(e) => setDraft({ language: e.target.value as RunLanguage })} data-testid="select-language">
           {(Object.keys(LANG_LABEL) as RunLanguage[]).map((l) => <option key={l} value={l}>{LANG_LABEL[l]}</option>)}
         </select>
@@ -254,7 +283,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         {running ? (
           <button type="button" className="ws-btn stop" onClick={stop} data-testid="button-stop-code"><Square size={13} /> Stop</button>
         ) : (
-          <button type="button" className="ws-btn run" onClick={() => void run()} disabled={!draft.code.trim()} data-testid="button-run-code"><Play size={13} /> Run</button>
+          <button type="button" className="ws-btn run" onClick={() => void run()} disabled={!draft.code.trim() || agentCode?.status === 'running'} data-testid="button-run-code"><Play size={13} /> Run</button>
         )}
         <button type="button" className="icon-btn" onClick={close} aria-label="Close workspace" data-testid="button-close-workspace"><X size={16} /></button>
       </header>

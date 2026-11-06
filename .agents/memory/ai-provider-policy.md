@@ -7,7 +7,13 @@ Nexo AI must use Groq with the user's own API key. Do not add an OpenAI API conn
 
 **Why:** The user explicitly required Groq-hosted GPT-OSS instead of OpenAI billed through Replit and said to never use OpenAI. They requested GPT-OSS specifically; its `openai/` model namespace identifies its publisher, not the inference provider.
 
-**How to apply:** Keep all model inference on Groq. If Groq cannot serve a request, surface the failure rather than switching providers. Normal reasoning should be medium and Deepthink should raise it to high unless the user changes that requirement.
+**How to apply:** Keep normal text-chat inference on Groq; do not fall back to Gemini for ordinary chat. Use Gemini only for the user-selected image and Agent routes. Normal Groq reasoning should be medium and Deepthink should raise it to high unless the user changes that requirement.
+
+The user chose their own Gemini API key for image understanding and Nexo Agent. Keep Gemini credentials server-side and configure them separately in Replit and any external host such as Vercel.
+
+**Why:** Gemini is an opt-in route for multimodal/Agent features, not a replacement for Groq's normal chat path. Hosting environments do not share secret stores.
+
+**How to apply:** Read `GEMINI_API_KEY` from the server environment only. Never pass it to the browser, write it into tracked configuration, or reuse it as a Groq credential.
 
 The user permits fallback between models within Groq: use GPT-OSS 120B normally, GPT-OSS 20B after ordinary-chat quota exhaustion, and Qwen3.8 27B after coding quota exhaustion. Prefer a dedicated coder model only if Groq actually makes one available.
 

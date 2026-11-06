@@ -1,6 +1,43 @@
 import type { Activity, Source, Notice } from '../components/answer-details';
+import type { RunLanguage } from './code-runner';
 
-export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string };
+export type AgentToolExchange = {
+  tool: 'web_search' | 'run_code';
+  callId: string;
+  thoughtSignature: string;
+  arguments: { query?: string; language?: RunLanguage; code?: string };
+  result: string;
+  sources?: Source[];
+};
+export type AgentToolRequest = {
+  tool: 'run_code';
+  callId: string;
+  thoughtSignature: string;
+  arguments: { language: RunLanguage; code: string };
+  history: AgentToolExchange[];
+};
+export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentTool?: AgentToolRequest };
+
+function isAgentToolRequest(value: unknown): value is AgentToolRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const tool = value as Record<string, unknown>;
+  if (tool.tool !== 'run_code' || typeof tool.callId !== 'string' || !tool.callId || tool.callId.length > 128 ||
+      typeof tool.thoughtSignature !== 'string' || !tool.thoughtSignature || tool.thoughtSignature.length > 4096 ||
+      !tool.arguments || typeof tool.arguments !== 'object' || Array.isArray(tool.arguments) ||
+      !Array.isArray(tool.history) || tool.history.length > 6) return false;
+  const args = tool.arguments as Record<string, unknown>;
+  if (!['python', 'javascript', 'html'].includes(String(args.language)) ||
+      typeof args.code !== 'string' || !args.code.trim() || args.code.length > 20_000) return false;
+  return tool.history.every((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    const exchange = entry as Record<string, unknown>;
+    return (exchange.tool === 'web_search' || exchange.tool === 'run_code')
+      && typeof exchange.callId === 'string'
+      && typeof exchange.thoughtSignature === 'string'
+      && exchange.arguments !== null && typeof exchange.arguments === 'object'
+      && typeof exchange.result === 'string' && exchange.result.length <= 8_000;
+  });
+}
 
 /** Incremental SSE decoding: UTF-8, LF/CRLF, comments, and split frames. */
 export class ChatEventDecoder {
@@ -25,6 +62,9 @@ export class ChatEventDecoder {
         if (event[key] !== undefined && typeof event[key] !== 'string') throw new Error('The server sent an invalid response event.');
       }
       if (event.done !== undefined && typeof event.done !== 'boolean') throw new Error('The server sent an invalid response event.');
+      if (event.agentTool !== undefined && !isAgentToolRequest(event.agentTool)) {
+        throw new Error('The server sent an invalid Agent code request.');
+      }
       return [event];
     });
   }

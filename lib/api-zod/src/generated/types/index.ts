@@ -6,6 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './agentChatInput';
+export * from './agentSource';
+export * from './agentToolArguments';
+export * from './agentToolArgumentsLanguage';
+export * from './agentToolExchange';
+export * from './agentToolExchangeTool';
 export * from './apiError';
 export * from './chatInput';
 export * from './chatMessage';

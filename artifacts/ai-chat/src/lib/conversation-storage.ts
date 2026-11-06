@@ -22,6 +22,7 @@ export function parseConversation(value: unknown): Conversation | null {
     role: m.role, content: m.content,
     ...(m.role === 'user' && m.imageAttached === true ? { imageAttached: true } : {}),
     ...(m.role === 'assistant' ? { quizProgress: parseQuizStates(m.quizProgress) } : {}),
+     ...(m.role === 'assistant' && typeof m.agentMode === 'boolean' ? { agentMode: m.agentMode } : {}),
     ...(typeof m.reasoning === 'string' ? { reasoning: m.reasoning } : {}),
     ...(typeof m.deepthink === 'boolean' ? { deepthink: m.deepthink } : {}),
     ...(typeof m.model === 'string' ? { model: m.model } : {}),

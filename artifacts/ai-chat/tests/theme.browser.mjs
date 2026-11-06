@@ -189,6 +189,9 @@ await withFixture('tests/theme.html', async ({ cdp, evaluate, navigate }) => {
   await evaluate(`document.querySelector('.ws-select').focus()`);
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
   await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  assert.equal(await evaluate(`document.activeElement.matches('.ws-btn.wrap-toggle')`), true, 'Keyboard Tab reaches the line-wrap control before Run');
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
   const zoomedFocus = await evaluate(`(() => {
     const button = document.activeElement;
     const style = getComputedStyle(button);

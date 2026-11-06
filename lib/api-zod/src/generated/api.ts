@@ -75,3 +75,62 @@ export const StreamImageChatBody = zod.object({
 export const StreamImageChatResponse = zod.unknown()
 
 
+/**
+ * Gemini selectively requests external web search or browser-only code execution. Tool activity, sources, generated code, and bounded results are returned as SSE events; private model reasoning is not exposed.
+ * @summary Stream an Agent-mode response
+ */
+export const streamAgentChatBodyDeepthinkDefault = false;
+export const streamAgentChatBodyTimeZoneMax = 100;
+
+export const streamAgentChatBodyMessagesItemContentMax = 12000;
+
+export const streamAgentChatBodyMessagesMax = 40;
+
+export const streamAgentChatBodyAgentHistoryItemCallIdMax = 128;
+
+export const streamAgentChatBodyAgentHistoryItemThoughtSignatureMax = 4096;
+
+export const streamAgentChatBodyAgentHistoryItemArgumentsQueryMin = 2;
+export const streamAgentChatBodyAgentHistoryItemArgumentsQueryMax = 300;
+
+export const streamAgentChatBodyAgentHistoryItemArgumentsCodeMax = 20000;
+
+export const streamAgentChatBodyAgentHistoryItemResultMax = 8000;
+
+export const streamAgentChatBodyAgentHistoryItemSourcesItemTitleMax = 300;
+
+export const streamAgentChatBodyAgentHistoryItemSourcesItemUrlMax = 2048;
+
+export const streamAgentChatBodyAgentHistoryItemSourcesMax = 5;
+
+export const streamAgentChatBodyAgentHistoryMax = 6;
+
+
+
+export const StreamAgentChatBody = zod.object({
+  "deepthink": zod.boolean().default(streamAgentChatBodyDeepthinkDefault).describe('Use high Gemini thinking level instead of medium'),
+  "timeZone": zod.string().max(streamAgentChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
+  "messages": zod.array(zod.object({
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string().min(1).max(streamAgentChatBodyMessagesItemContentMax)
+})).min(1).max(streamAgentChatBodyMessagesMax),
+  "agentHistory": zod.array(zod.object({
+  "tool": zod.enum(['web_search', 'run_code']),
+  "callId": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemCallIdMax),
+  "thoughtSignature": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemThoughtSignatureMax),
+  "arguments": zod.object({
+  "query": zod.string().min(streamAgentChatBodyAgentHistoryItemArgumentsQueryMin).max(streamAgentChatBodyAgentHistoryItemArgumentsQueryMax).optional(),
+  "language": zod.enum(['python', 'javascript', 'html']).optional(),
+  "code": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsCodeMax).optional()
+}),
+  "result": zod.string().max(streamAgentChatBodyAgentHistoryItemResultMax),
+  "sources": zod.array(zod.object({
+  "title": zod.string().max(streamAgentChatBodyAgentHistoryItemSourcesItemTitleMax),
+  "url": zod.string().url().max(streamAgentChatBodyAgentHistoryItemSourcesItemUrlMax)
+})).max(streamAgentChatBodyAgentHistoryItemSourcesMax).optional()
+})).max(streamAgentChatBodyAgentHistoryMax).optional().describe('Bounded prior tool call and result pairs for the current turn, including Gemini\'s opaque continuation signature.')
+})
+
+export const StreamAgentChatResponse = zod.unknown()
+
+
