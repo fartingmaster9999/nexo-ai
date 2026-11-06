@@ -49,6 +49,62 @@ async function evaluate(expression, timeout) {
   return response.result?.value;
 }
 const click = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+async function wheelOverSecondCodeBlock(deltaY) {
+  const point = await evaluate(`(() => {
+    const element = document.querySelectorAll('.code-block pre')[1];
+    const scroller = document.querySelector('[data-testid="fixture-chat-scroll"]');
+    let rect = element.getBoundingClientRect();
+    const pane = scroller.getBoundingClientRect();
+    scroller.scrollTop += rect.top - (pane.top + 80);
+    rect = element.getBoundingClientRect();
+    return { before: scroller.scrollTop, x: rect.left + Math.min(rect.width / 2, 120), y: rect.top + 24 };
+  })()`);
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseWheel', x: point.x, y: point.y, deltaX: 0, deltaY });
+  await delay(100);
+  return point.before;
+}
+async function wheelOver(selector, deltaY) {
+  const point = await evaluate(`(() => {
+    const rect = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: Math.max(4, Math.min(rect.top + rect.height / 2, innerHeight - 4)) };
+  })()`);
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseWheel', x: point.x, y: point.y, deltaX: 0, deltaY });
+  await delay(100);
+}
+async function touchSwipe(selector, distance = 260) {
+  const point = await evaluate(`(() => {
+    const rect = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: Math.max(12, Math.min(rect.top + rect.height / 2, innerHeight - 92)) };
+  })()`);
+  await cdp('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await cdp('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: point.x, y: point.y + 80 }] });
+  await cdp('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: point.x, y: point.y + 80 - distance }] });
+  await delay(80);
+  await cdp('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await delay(100);
+}
+async function touchSwipeOverSecondCodeBlock() {
+  const point = await evaluate(`(() => {
+    const element = document.querySelectorAll('.code-block pre')[1];
+    const scroller = document.querySelector('[data-testid="fixture-chat-scroll"]');
+    let rect = element.getBoundingClientRect();
+    const pane = scroller.getBoundingClientRect();
+    scroller.scrollTop += rect.top - (pane.top + 80);
+    rect = element.getBoundingClientRect();
+    return { before: scroller.scrollTop, x: rect.left + Math.min(rect.width / 2, 120), y: rect.top + 24 };
+  })()`);
+  await cdp('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await cdp('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: point.x, y: point.y }] });
+  await cdp('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: point.x, y: point.y - 240 }] });
+  await delay(80);
+  await cdp('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await delay(100);
+  return point.before;
+}
 async function pressKey(selector, key, code, windowsVirtualKeyCode) {
   if (selector) await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, text: key === 'Enter' ? '\r' : undefined });
@@ -102,6 +158,9 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await cdp('Page.navigate', { url: `http://127.0.0.1:${port}/tests/workspace.html` });
   await waitFor(() => evaluate(`!!window.__workspaceFixture && document.querySelectorAll('.code-block').length === 2`), 'Markdown');
+  const beforeCodeWheel = await wheelOverSecondCodeBlock(500);
+  assert.ok(await evaluate(`document.querySelector('[data-testid="fixture-chat-scroll"]').scrollTop > ${beforeCodeWheel}`), 'Vertical wheel over a code block continues scrolling the chat');
+  await evaluate(`document.querySelector('[data-testid="fixture-chat-scroll"]').scrollTop = 0`);
   assert.ok(!requests.some((url) => /codemirror_lang-(python|javascript|html)/.test(url)), 'No grammar before workspace is opened');
   await evaluate(`window.__copied = []; Object.defineProperty(navigator, 'clipboard', { configurable:true, value:{writeText:async text=>window.__copied.push(text)} });`);
   await click('.code-block button');
@@ -173,18 +232,35 @@ try {
   await pressKey(null, 'Escape', 'Escape', 27);
   await waitFor(() => evaluate(`!document.querySelector('[data-testid="dialog-settings"]')`), 'settings dialog Escape close');
   assert.ok(await evaluate(`!!document.querySelector('[data-testid="panel-workspace"]')`), 'Escape closes the settings dialog without closing the workspace');
+  const longEditorCode = Array.from({ length: 180 }, (_, index) => `print("scroll-line-${index}")`).join('\n');
+  await evaluate(`window.__workspaceFixture.conversation('desktop-scroll-test'); window.__workspaceFixture.generated('python', ${JSON.stringify(longEditorCode)});`);
+  await waitFor(() => evaluate(`document.querySelector('.cm-content')?.textContent.includes('scroll-line-179')`), 'long editor content');
+  await wheelOver('.cm-scroller', 640);
+  assert.ok(await evaluate(`document.querySelector('.cm-scroller').scrollTop > 0`), 'Mouse wheel scrolls the code editor itself');
+  await evaluate(`window.__workspaceFixture.conversation('workspace-fixture')`);
+  await waitFor(() => evaluate(`document.querySelector('.cm-content')?.textContent.includes('edited')`), 'restore original workspace draft');
   await evaluate(`document.querySelector('[data-testid="button-run-code"]').focus()`);
   await pressKey(null, 'Escape', 'Escape', 27);
   await waitFor(() => evaluate(`!document.querySelector('[data-testid="panel-workspace"]')`), 'desktop Escape workspace close');
   await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-conversation-control'`), 'desktop workspace focus return');
   assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-conversation-control', 'Escape returns focus to the conversation control on desktop');
-  assert.equal(await evaluate(`(() => { const el=document.querySelector('[data-testid="fixture-chat-scroll"]'); el.scrollTop=150; return el.scrollTop > 0; })()`), true, 'Chat scrolling works after closing the workspace on desktop');
+  await evaluate(`document.querySelector('[data-testid="fixture-chat-scroll"]').scrollTop = 0`);
+  await wheelOver('[data-testid="fixture-chat-scroll"]', 480);
+  assert.ok(await evaluate(`document.querySelector('[data-testid="fixture-chat-scroll"]').scrollTop > 0`), 'Mouse wheel scrolls chat after the code workspace closes');
   await pressKey('[data-testid="button-conversation-control"]', 'Enter', 'Enter', 13);
   await waitFor(() => evaluate(`!!document.querySelector('.cm-content')`), 'workspace reopen');
   assert.equal(await width(), expanded, 'Saved width survives remount');
   assert.ok(await evaluate(`document.querySelector('.cm-content').textContent.includes('edited')`), 'Edited draft survives remount');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 700, deviceScaleFactor: 1, mobile: true });
-  await waitFor(async () => await width() === 390, 'phone width');
+  await waitFor(async () => await width() === 390, 'phone workspace width');
+  await evaluate(`document.querySelector('.cm-content').focus()`);
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', modifiers: 2, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', modifiers: 2, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+  await cdp('Input.insertText', { text: longEditorCode });
+  await waitFor(() => evaluate(`document.querySelector('.cm-content')?.textContent.includes('scroll-line-179')`), 'long phone editor content');
+  await touchSwipe('.cm-scroller');
+  assert.ok(await evaluate(`document.querySelector('.cm-scroller').scrollTop > 0`), 'Touch scrolls the code editor itself');
+  await evaluate(`document.querySelector('[aria-label="Language"]').focus()`);
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.workspace-resizer')).display`), 'none');
   assert.ok(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), 'No phone overflow');
   await waitFor(() => evaluate(`document.activeElement?.closest('[data-testid="panel-workspace"]') === document.querySelector('[data-testid="panel-workspace"]')`), 'mobile workspace initial focus');
@@ -199,7 +275,12 @@ try {
   await waitFor(() => evaluate(`!document.querySelector('[data-testid="panel-workspace"]')`), 'phone Escape workspace close');
   await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-conversation-control'`), 'mobile workspace focus return');
   assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-conversation-control', 'Escape returns focus to the conversation control on mobile');
-  assert.equal(await evaluate(`(() => { const el=document.querySelector('[data-testid="fixture-chat-scroll"]'); el.scrollTop=150; return el.scrollTop > 0; })()`), true, 'Chat scrolling works after closing the workspace on mobile');
+  await evaluate(`document.querySelector('[data-testid="fixture-chat-scroll"]').scrollTop = 0`);
+  await touchSwipe('[data-testid="fixture-chat-scroll"]');
+  assert.ok(await evaluate(`document.querySelector('[data-testid="fixture-chat-scroll"]').scrollTop > 0`), 'Touch scrolls chat after the code workspace closes');
+  await evaluate(`document.querySelector('[data-testid="fixture-chat-scroll"]').scrollTop = 0`);
+  const beforeCodeTouch = await touchSwipeOverSecondCodeBlock();
+  assert.ok(await evaluate(`document.querySelector('[data-testid="fixture-chat-scroll"]').scrollTop > ${beforeCodeTouch}`), 'Touch over a code block continues scrolling the chat');
   await pressKey('[data-testid="button-conversation-control"]', 'Enter', 'Enter', 13);
   await waitFor(() => evaluate(`!!document.querySelector('[data-testid="panel-workspace"]')`), 'mobile workspace reopen');
   assert.equal(await width(), 390, 'Workspace reopens at phone width');

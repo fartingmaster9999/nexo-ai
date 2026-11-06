@@ -8,10 +8,13 @@ import type { RunLanguage } from '../src/lib/code-runner';
 import '../src/index.css';
 import '../src/nexo.css';
 import '../src/refine.css';
+import '../src/ux-polish.css';
+import '../src/answer-format.css';
 
 const CodeWorkspace = lazy(() => import('../src/components/code-workspace').then((module) => ({ default: module.CodeWorkspace })));
 const raw = '\tprint("hello ✓")  \r\n\r\n';
-const markdown = `Inline \`not a block\`.\n\n\`\`\`python\r\n${raw}\`\`\`\n\n~~~rust\nfn main() {}\n~~~`;
+const longRust = Array.from({ length: 72 }, (_, index) => `let value_${index} = ${index};`).join('\n');
+const markdown = `Inline \`not a block\`.\n\n\`\`\`python\r\n${raw}\`\`\`\n\n~~~rust\n${longRust}\n~~~`;
 
 function Fixture() {
   const [open, setOpen] = useState(new URLSearchParams(location.search).has('open'));
