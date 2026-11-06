@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
+import { EditorView } from '@codemirror/view';
 import { Play, Square, Wrench, X, RotateCcw, Download, Terminal } from 'lucide-react';
 import { executeCode, type RunLanguage, type RunOutput } from '@/lib/code-runner';
 import { LANG_LABEL, STARTERS, type Snippet } from '@/lib/code-extract';
@@ -11,8 +12,17 @@ import './code-workspace.css';
 
 type Draft = { language: RunLanguage; code: string; edited: boolean };
 const DRAFT_KEY = 'nexo-code-drafts-v1';
+const WRAP_KEY = 'nexo-code-wrap-v1';
 function readDrafts(): Record<string, Draft> {
   try { const v = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+}
+function readWrapPreference() {
+  try {
+    const saved = localStorage.getItem(WRAP_KEY);
+    if (saved === 'true') return true;
+    if (saved === 'false') return false;
+  } catch {}
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
 }
 
 type Props = {
@@ -29,15 +39,25 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const key = conversationId ?? '__scratch';
   const [drafts, setDrafts] = useState<Record<string, Draft>>(readDrafts);
   const [sel, setSel] = useState(0);
+  const [wrapLines, setWrapLines] = useState(readWrapPreference);
   const [running, setRunning] = useState(false);
   const [outputs, setOutputs] = useState<RunOutput[]>([]);
   const [runError, setRunError] = useState('');
+  const [runStatus, setRunStatus] = useState('');
   const [preview, setPreview] = useState<string | null>(null);
   const [hasRun, setHasRun] = useState(false);
   const [storageError, setStorageError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const consoleRef = useRef<HTMLDivElement>(null);
+  const followConsoleRef = useRef(true);
+  const outputsRef = useRef(outputs);
+  const pendingOutputsRef = useRef<RunOutput[]>([]);
+  const outputFrameRef = useRef<number | null>(null);
+  const draftsRef = useRef(drafts);
+  const saveTimerRef = useRef<number | null>(null);
   const panelRef = useFocusTrap<HTMLElement>(true);
+  draftsRef.current = drafts;
+  outputsRef.current = outputs;
 
   const snippetCount = snippets.length;
   useEffect(() => { setSel(Math.max(0, snippetCount - 1)); }, [key, snippetCount]);
@@ -45,9 +65,18 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const draft: Draft = drafts[key] ?? (generated ? { ...generated, edited: false } : { language: 'python', code: STARTERS.python, edited: false });
 
   useEffect(() => {
-    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts)); setStorageError(''); }
-    catch { setStorageError('Your code edits could not be saved in this browser. Copy them before leaving.'); }
+    const timer = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      try { localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts)); setStorageError(''); }
+      catch { setStorageError('Your code edits could not be saved in this browser. Copy them before leaving.'); }
+    }, 180);
+    saveTimerRef.current = timer;
+    return () => window.clearTimeout(timer);
   }, [drafts]);
+
+  useEffect(() => {
+    try { localStorage.setItem(WRAP_KEY, String(wrapLines)); } catch {}
+  }, [wrapLines]);
 
   const genCode = generated?.code; const genLang = generated?.language;
   useEffect(() => {
@@ -60,16 +89,64 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   }, [key, genCode, genLang]);
 
   useEffect(() => {
-    abortRef.current?.abort();
+    const current = abortRef.current;
     abortRef.current = null;
+    current?.abort();
     setRunning(false);
-    setOutputs([]); setRunError(''); setPreview(null); setHasRun(false);
+    followConsoleRef.current = true;
+    if (outputFrameRef.current !== null) window.cancelAnimationFrame(outputFrameRef.current);
+    outputFrameRef.current = null;
+    pendingOutputsRef.current = [];
+    outputsRef.current = [];
+    setOutputs([]); setRunError(''); setRunStatus(''); setPreview(null); setHasRun(false);
   }, [key]);
-  useEffect(() => () => abortRef.current?.abort(), []);
-  useEffect(() => { consoleRef.current?.scrollTo({ top: consoleRef.current.scrollHeight }); }, [outputs, runError]);
+  useEffect(() => () => {
+    const current = abortRef.current;
+    abortRef.current = null;
+    current?.abort();
+    if (outputFrameRef.current !== null) window.cancelAnimationFrame(outputFrameRef.current);
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draftsRef.current)); } catch {}
+  }, []);
+  useEffect(() => {
+    const flushDrafts = () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draftsRef.current)); } catch {}
+    };
+    window.addEventListener('pagehide', flushDrafts);
+    return () => window.removeEventListener('pagehide', flushDrafts);
+  }, []);
+
+  const flushOutputBatch = useCallback(() => {
+    if (outputFrameRef.current !== null) {
+      window.cancelAnimationFrame(outputFrameRef.current);
+      outputFrameRef.current = null;
+    }
+    const batch = pendingOutputsRef.current.splice(0);
+    if (batch.length === 0) return;
+    const next = [...outputsRef.current, ...batch];
+    outputsRef.current = next;
+    setOutputs(next);
+  }, []);
+
+  const handleConsoleScroll = useCallback(() => {
+    const element = consoleRef.current;
+    if (element) followConsoleRef.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 24;
+  }, []);
+
+  useEffect(() => {
+    const element = consoleRef.current;
+    if (element && followConsoleRef.current) element.scrollTop = element.scrollHeight;
+  }, [outputs, runError, runStatus, running]);
 
   const setDraft = (patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [key]: { ...draft, ...patch, edited: true } }));
   const editorLanguage = useEditorLanguage(draft.language);
+  const editorExtensions = useMemo(() => wrapLines
+    ? [...editorLanguage.extensions, EditorView.lineWrapping]
+    : editorLanguage.extensions, [editorLanguage.extensions, wrapLines]);
   const workspaceSize = useWorkspaceSize();
   const differs = !!generated && draft.edited && (generated.code !== draft.code || generated.language !== draft.language);
   const close = () => {
@@ -92,28 +169,69 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
 
   const run = async () => {
     abortRef.current?.abort();
+    flushOutputBatch();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    setRunning(true); setOutputs([]); setRunError(''); setHasRun(true);
+    outputsRef.current = [];
+    pendingOutputsRef.current = [];
+    setRunning(true); setOutputs([]); setRunError(''); setRunStatus('Starting…'); setHasRun(true);
     if (draft.language !== 'html') setPreview(null);
     try {
-      const res = await executeCode({ language: draft.language, code: draft.code, signal: ctrl.signal, onOutput: (o) => { if (abortRef.current === ctrl) setOutputs((x) => [...x, o]); } });
+      const res = await executeCode({
+        language: draft.language,
+        code: draft.code,
+        signal: ctrl.signal,
+        onOutput: (output) => {
+          if (abortRef.current !== ctrl) return;
+          if (output.kind === 'status') {
+            setRunStatus(output.text ?? 'Running…');
+            return;
+          }
+          setRunStatus('');
+          pendingOutputsRef.current.push(output);
+          if (outputFrameRef.current === null) {
+            outputFrameRef.current = window.requestAnimationFrame(flushOutputBatch);
+          }
+        },
+      });
       if (abortRef.current !== ctrl) return;
       if (res.previewHtml) setPreview(res.previewHtml);
-      if (res.error) setRunError(res.error);
+      if (res.error && !res.outputs.some((output) => output.kind === 'stderr' && output.text === res.error)) setRunError(res.error);
     } catch (e) {
       if (abortRef.current !== ctrl) return;
-      if (e instanceof DOMException && e.name === 'AbortError') setOutputs((x) => [...x, { kind: 'status', text: 'Stopped.' }]);
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        const stopped = [...outputsRef.current, { kind: 'status' as const, text: 'Stopped.' }];
+        outputsRef.current = stopped;
+        setOutputs(stopped);
+      }
       else setRunError(e instanceof Error ? e.message : 'The runner failed to start.');
     } finally {
-      if (abortRef.current === ctrl) { abortRef.current = null; setRunning(false); }
+      if (abortRef.current === ctrl) {
+        flushOutputBatch();
+        abortRef.current = null;
+        setRunning(false);
+        setRunStatus('');
+      }
     }
   };
-  const stop = () => { abortRef.current?.abort(); abortRef.current = null; setRunning(false); setOutputs((x) => [...x, { kind: 'status', text: 'Stopped.' }]); };
+  const stop = () => {
+    const current = abortRef.current;
+    if (!current) return;
+    abortRef.current = null;
+    current.abort();
+    flushOutputBatch();
+    setRunning(false);
+    setRunStatus('');
+    const stopped = [...outputsRef.current, { kind: 'status' as const, text: 'Stopped.' }];
+    outputsRef.current = stopped;
+    setOutputs(stopped);
+  };
 
   const askFix = () => {
-    const errs = [runError, ...outputs.filter((o) => o.kind === 'stderr').map((o) => o.text ?? '')].filter(Boolean).join('\n');
-    const out = outputs.filter((o) => o.kind === 'stdout').map((o) => o.text ?? '').join('').slice(-800);
+    flushOutputBatch();
+    const currentOutputs = outputsRef.current;
+    const errs = [runError, ...currentOutputs.filter((o) => o.kind === 'stderr').map((o) => o.text ?? '')].filter(Boolean).join('\n');
+    const out = currentOutputs.filter((o) => o.kind === 'stdout').map((o) => o.text ?? '').join('').slice(-800);
     const summary = (errs || out || (hasRun ? 'It ran without visible output.' : 'Not run yet.')).slice(0, 2000);
     const fence = draft.language === 'html' ? 'html' : draft.language;
     onAskFix(`Please fix this ${LANG_LABEL[draft.language]} code from my workspace and return the full corrected version.\n\n\`\`\`${fence}\n${draft.code.slice(0, 8000)}\n\`\`\`\n\n${errs ? 'Errors' : 'Console'}:\n${summary}`);
@@ -131,6 +249,8 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         <select className="ws-select" value={draft.language} aria-label="Language" onChange={(e) => setDraft({ language: e.target.value as RunLanguage })} data-testid="select-language">
           {(Object.keys(LANG_LABEL) as RunLanguage[]).map((l) => <option key={l} value={l}>{LANG_LABEL[l]}</option>)}
         </select>
+        <button type="button" className={`ws-btn wrap-toggle ${wrapLines ? 'is-on' : ''}`} aria-label="Wrap code lines"
+          aria-pressed={wrapLines} title="Toggle soft line wrapping" onClick={() => setWrapLines((value) => !value)} data-testid="button-toggle-wrap">Wrap</button>
         {running ? (
           <button type="button" className="ws-btn stop" onClick={stop} data-testid="button-stop-code"><Square size={13} /> Stop</button>
         ) : (
@@ -162,7 +282,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       )}
 
       <div className="ws-editor">
-        <CodeMirror value={draft.code} height="100%" theme={isLight ? 'light' : 'dark'} extensions={editorLanguage.extensions}
+        <CodeMirror value={draft.code} height="100%" theme={isLight ? 'light' : 'dark'} extensions={editorExtensions}
           onChange={(v) => { if (v !== draft.code) setDraft({ code: v }); }} aria-label="Code editor" data-testid="editor-code" />
       </div>
 
@@ -178,12 +298,12 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         {draft.language === 'html' && preview ? (
           <iframe className="ws-preview" sandbox="allow-scripts" srcDoc={preview} title="HTML preview" data-testid="frame-preview" />
         ) : (
-          <div className="ws-console" ref={consoleRef} role="log" aria-live="polite" data-testid="console-output">
-            {!hasRun && <p className="c-status">Runs Python, JavaScript and HTML/CSS only, inside a sandbox in your browser. Nothing runs on the server. Python loads when you run it; supported packages load only when imported by your code.</p>}
+          <div className="ws-console" ref={consoleRef} onScroll={handleConsoleScroll} role="log" aria-live="polite" data-testid="console-output">
+            {!hasRun && <p className="c-status">Run code to see output.</p>}
             {outputs.map((o, i) => o.kind === 'image' && o.dataUrl
               ? <img key={i} src={o.dataUrl} alt={`Plot output ${i + 1}`} className="c-img" />
               : <pre key={i} className={`c-${o.kind}`}>{o.text}</pre>)}
-            {running && <p className="c-status c-live">running...</p>}
+            {running && <p className="c-status c-live" data-testid="status-run">{runStatus || 'Running…'}</p>}
             {hasRun && !running && !runError && outputs.length === 0 && draft.language !== 'html' && <p className="c-status">Finished with no output.</p>}
             {runError && <pre className="c-stderr" role="alert">{runError}</pre>}
           </div>

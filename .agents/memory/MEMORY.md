@@ -1,6 +1,7 @@
 - [AI provider policy](ai-provider-policy.md) — Nexo AI must use the user's Groq key, with no OpenAI API or Replit AI billing fallback.
 - [Search policy](search-policy.md) — Web retrieval must be outside Groq and selective; 2024 is a user-selected search threshold, not a verified training cutoff.
 - [Code execution boundary](code-execution-boundary.md) — Keep generated code isolated and preserve literal code while transforming rendered chat.
+- [Warm browser runtime](browser-ide-runtime.md) — Reuse the isolated runtime for speed while resetting snippet variables and loading packages on demand.
 - [Connector runtime access](connector-runtime-access.md) — A ready connection can still be unavailable to the running app; verify access from the app itself.
 - [Interface behavior](interface-behavior.md) — Preserve the user's chat, reasoning-panel, workspace, and visual-direction constraints.
 - [Theme contrast](theme-contrast.md) — Theme checks must measure rendered text, control, border, and focus colors across palettes.

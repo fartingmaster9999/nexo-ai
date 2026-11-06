@@ -34,6 +34,7 @@ const browser = spawn(process.env.CHROMIUM_PATH ?? '/repl/tools/bin/chromium', [
 ], { stdio: 'ignore' });
 let socket, sequence = 0;
 const pending = new Map(), requests = [];
+const timings = {};
 function cdp(method, params = {}, timeout = 15000) {
   const id = ++sequence;
   return new Promise((resolve, reject) => {
@@ -109,10 +110,36 @@ try {
   await evaluate(`navigator.clipboard.writeText = async()=>{throw new Error('denied')}`);
   await click('.code-block:nth-of-type(2) button');
   await waitFor(() => evaluate(`document.querySelector('.code-copy-error')?.textContent.includes('manually')`), 'denied feedback');
+  const editorStarted = await evaluate('performance.now()');
   await evaluate(`navigator.clipboard.writeText = async text=>window.__copied.push(text); window.__workspaceFixture.open(true);`);
-  await waitFor(() => evaluate(`!!document.querySelector('.cm-content') && !document.querySelector('.ws-language-status')`), 'Python highlighting');
+  await waitFor(() => evaluate(`!!document.querySelector('.cm-content')`), 'CodeMirror mount');
+  const editorMounted = await evaluate('performance.now()');
+  timings.editorMountMs = Math.round(editorMounted - editorStarted);
+  assert.equal(await evaluate(`document.querySelector('.cm-content')?.getAttribute('contenteditable')`), 'true', 'Plain-text editing is available while highlighting loads');
+  await waitFor(() => evaluate(`!document.querySelector('.ws-language-status')`), 'Python highlighting');
+  timings.languageReadyMs = Math.round(await evaluate('performance.now()') - editorMounted);
+  timings.workspaceReadyMs = Math.round(await evaluate('performance.now()') - editorStarted);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="console-output"]').textContent.trim()`), 'Run code to see output.', 'Console starts with only a short prompt');
   assert.ok(requests.some((url) => /codemirror_lang-python/.test(url)));
   assert.ok(!requests.some((url) => /codemirror_lang-(javascript|html)/.test(url)), 'Python does not download other grammars');
+  assert.equal(await evaluate(`document.querySelector('[data-testid="button-toggle-wrap"]').getAttribute('aria-pressed')`), 'false');
+  const wrappedSource = `print("${'wide'.repeat(80)}")\n`;
+  await evaluate(`document.querySelector('.cm-content').focus()`);
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', modifiers: 2, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', modifiers: 2, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+  await cdp('Input.insertText', { text: wrappedSource });
+  await click('[data-testid="button-toggle-wrap"]');
+  assert.equal(await evaluate(`document.querySelector('[data-testid="button-toggle-wrap"]').getAttribute('aria-pressed')`), 'true');
+  assert.equal(await evaluate(`document.querySelector('.cm-content').classList.contains('cm-lineWrapping')`), true, 'Wrap is a CodeMirror display extension');
+  await click('[aria-label="Copy workspace code"]');
+  await waitFor(() => evaluate(`window.__copied.at(-1) === ${JSON.stringify(wrappedSource)}`), 'wrapped editor copy preserves raw source');
+  await evaluate(`navigator.clipboard.writeText = async()=>{throw new Error('denied')}`);
+  await click('[aria-label="Copy workspace code"]');
+  await waitFor(() => evaluate(`document.querySelector('.code-copy-error')?.textContent.includes('manually')`), 'workspace clipboard denial feedback');
+  await evaluate(`navigator.clipboard.writeText = async text=>window.__copied.push(text)`);
+  await click('[data-testid="button-toggle-wrap"]');
+  assert.equal(await evaluate(`document.querySelector('.cm-content').classList.contains('cm-lineWrapping')`), false, 'Wrap can be disabled without changing source');
+  await click('[data-testid="button-toggle-wrap"]');
   const original = await width();
   await dragDivider('mouse', 80);
   assert.ok(await width() >= original + 70, 'Pointer resize');
@@ -151,6 +178,7 @@ try {
   await waitFor(() => evaluate(`!document.querySelector('[data-testid="panel-workspace"]')`), 'desktop Escape workspace close');
   await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-conversation-control'`), 'desktop workspace focus return');
   assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-conversation-control', 'Escape returns focus to the conversation control on desktop');
+  assert.equal(await evaluate(`(() => { const el=document.querySelector('[data-testid="fixture-chat-scroll"]'); el.scrollTop=150; return el.scrollTop > 0; })()`), true, 'Chat scrolling works after closing the workspace on desktop');
   await pressKey('[data-testid="button-conversation-control"]', 'Enter', 'Enter', 13);
   await waitFor(() => evaluate(`!!document.querySelector('.cm-content')`), 'workspace reopen');
   assert.equal(await width(), expanded, 'Saved width survives remount');
@@ -171,22 +199,74 @@ try {
   await waitFor(() => evaluate(`!document.querySelector('[data-testid="panel-workspace"]')`), 'phone Escape workspace close');
   await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-conversation-control'`), 'mobile workspace focus return');
   assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-conversation-control', 'Escape returns focus to the conversation control on mobile');
+  assert.equal(await evaluate(`(() => { const el=document.querySelector('[data-testid="fixture-chat-scroll"]'); el.scrollTop=150; return el.scrollTop > 0; })()`), true, 'Chat scrolling works after closing the workspace on mobile');
   await pressKey('[data-testid="button-conversation-control"]', 'Enter', 'Enter', 13);
   await waitFor(() => evaluate(`!!document.querySelector('[data-testid="panel-workspace"]')`), 'mobile workspace reopen');
   assert.equal(await width(), 390, 'Workspace reopens at phone width');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   const runPython = (code) => evaluate(`window.__workspaceFixture.execute({language:'python', code:${JSON.stringify(code)}})`, 120000);
+  const firstPythonStarted = await evaluate('performance.now()');
   const plain = await runPython('import sys\nprint("simple:", 2+3)\nprint("scientific:", any(name in sys.modules for name in ("numpy","scipy","matplotlib")))');
+  timings.firstPythonRunMs = Math.round(await evaluate('performance.now()') - firstPythonStarted);
   assert.ok(!plain.error, plain.error);
   assert.ok(plain.outputs.some((item) => item.text === 'scientific: False'));
+  const secondPythonStarted = await evaluate('performance.now()');
+  const secondPython = await runPython('print("warm run", "sys" in globals())');
+  timings.secondPythonRunMs = Math.round(await evaluate('performance.now()') - secondPythonStarted);
+  assert.ok(!secondPython.error, secondPython.error);
+  assert.ok(secondPython.outputs.some((item) => item.text === 'warm run False'), 'A warm runtime still starts each snippet with fresh variables');
+  const javascriptStarted = await evaluate('performance.now()');
+  const javascript = await evaluate(`window.__workspaceFixture.execute({language:'javascript',code:'console.log("js ready")'})`, 120000);
+  timings.javascriptRunMs = Math.round(await evaluate('performance.now()') - javascriptStarted);
+  assert.ok(!javascript.error, javascript.error);
+  assert.ok(javascript.outputs.some((item) => item.text === 'js ready'));
+  const scientificStarted = await evaluate('performance.now()');
   const scientific = await runPython('import numpy as np\nfrom scipy.special import factorial\nprint("numerics:", int(np.arange(5).sum()), factorial(5, exact=True))');
+  timings.numpyScipyRunMs = Math.round(await evaluate('performance.now()') - scientificStarted);
   assert.ok(!scientific.error, scientific.error);
   assert.ok(scientific.outputs.some((item) => item.text === 'numerics: 10 120'));
+  const warmScientificStarted = await evaluate('performance.now()');
+  const warmScientific = await runPython('import numpy as np\nfrom scipy.special import factorial\nprint("warm numerics:", int(np.arange(5).sum()), factorial(5, exact=True))');
+  timings.numpyScipyWarmMs = Math.round(await evaluate('performance.now()') - warmScientificStarted);
+  assert.ok(!warmScientific.error, warmScientific.error);
+  assert.ok(warmScientific.outputs.some((item) => item.text === 'warm numerics: 10 120'));
+  const matplotlibStarted = await evaluate('performance.now()');
   const plot = await runPython('import matplotlib.pyplot as plt\nplt.plot([0,1],[0,1])\nprint("plot ready")');
+  timings.matplotlibRunMs = Math.round(await evaluate('performance.now()') - matplotlibStarted);
   assert.ok(!plot.error, plot.error);
   assert.ok(plot.outputs.some((item) => item.kind === 'image' && item.dataUrl?.startsWith('data:image/png;base64,')), 'Conditional plot capture');
-  const cancelled = await evaluate(`(async()=>{ const ctrl=new AbortController(); setTimeout(()=>ctrl.abort(),50); try { await window.__workspaceFixture.execute({language:'python',code:'while True: pass',signal:ctrl.signal}); return false; } catch(error) { return error.name==='AbortError' && !document.querySelector('iframe[hidden]'); } })()`);
+  const warmPlotStarted = await evaluate('performance.now()');
+  const warmPlot = await runPython('import matplotlib.pyplot as plt\nplt.plot([0,1],[1,0])\nprint("warm plot")');
+  timings.matplotlibWarmMs = Math.round(await evaluate('performance.now()') - warmPlotStarted);
+  assert.ok(!warmPlot.error, warmPlot.error);
+  assert.ok(warmPlot.outputs.some((item) => item.kind === 'image' && item.dataUrl?.startsWith('data:image/png;base64,')));
+  const concurrent = await Promise.all([
+    runPython('print("queued one")'),
+    runPython('print("queued two")'),
+  ]);
+  assert.ok(concurrent.every((result) => !result.error), 'Concurrent run requests are serialized safely');
+  const scrollCode = `for (let i=0;i<60;i++){ console.log("row "+i); await new Promise(resolve=>setTimeout(resolve,15)); }`;
+  await evaluate(`window.__workspaceFixture.conversation('console-scroll-test'); window.__workspaceFixture.generated('javascript', ${JSON.stringify(scrollCode)});`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="select-language"]')?.value === 'javascript' && !document.querySelector('.ws-language-status')`), 'scroll test JavaScript mode');
+  const consoleStarted = await evaluate('performance.now()');
+  await click('[data-testid="button-run-code"]');
+  await waitFor(() => evaluate(`document.querySelectorAll('[data-testid="console-output"] pre.c-stdout').length >= 30`), 'scrollable streaming output');
+  await evaluate(`(() => { const el=document.querySelector('[data-testid="console-output"]'); el.scrollTop=0; el.dispatchEvent(new Event('scroll')); })()`);
+  await waitFor(() => evaluate(`document.querySelectorAll('[data-testid="console-output"] pre.c-stdout').length >= 40`), 'output while reading older lines');
+  assert.equal(await evaluate(`document.querySelector('[data-testid="console-output"]').scrollTop`), 0, 'New output does not pull a reader away from older lines');
+  await evaluate(`(() => { const el=document.querySelector('[data-testid="console-output"]'); el.scrollTop=el.scrollHeight; el.dispatchEvent(new Event('scroll')); })()`);
+  await waitFor(() => evaluate(`document.querySelectorAll('[data-testid="console-output"] pre.c-stdout').length >= 45`), 'output after returning to bottom');
+  assert.ok(await evaluate(`(() => { const el=document.querySelector('[data-testid="console-output"]'); return el.scrollHeight-el.clientHeight-el.scrollTop <= 2; })()`), 'New output follows only after the reader returns to the bottom');
+  await waitFor(() => evaluate(`!document.querySelector('[data-testid="status-run"]')`), 'streaming run completion');
+  timings.consoleStreamMs = Math.round(await evaluate('performance.now()') - consoleStarted);
+  const finalConsoleText = await evaluate(`document.querySelector('[data-testid="console-output"]').textContent`);
+  assert.ok(finalConsoleText.includes('row 59'));
+  assert.ok(!/Loading JavaScript libraries|Runs Python|Supported packages load/.test(finalConsoleText), 'Console contains user output without explanatory boilerplate');
+  const cancelled = await evaluate(`(async()=>{ const ctrl=new AbortController(); setTimeout(()=>ctrl.abort(),50); try { await window.__workspaceFixture.execute({language:'python',code:'while True: pass',signal:ctrl.signal}); return false; } catch(error) { return error.name==='AbortError' && !!document.querySelector('iframe[hidden]'); } })()`);
   assert.equal(cancelled, true);
+  const recovered = await runPython('print("recovered after stop")');
+  assert.ok(!recovered.error, recovered.error);
+  assert.ok(recovered.outputs.some((item) => item.text === 'recovered after stop'));
   await evaluate(`localStorage.setItem('nexo-conversation-v2:focus-check', ${JSON.stringify(JSON.stringify({
     conversation: { id: 'focus-check', title: 'Focus check', messages: [{ id: 'focus-message', role: 'user', content: 'Test keyboard focus.' }], createdAt: 1, updatedAt: 2 },
     updatedAt: 2,
@@ -216,7 +296,8 @@ try {
   await waitFor(() => evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]')?.getAttribute('aria-expanded') === 'false'`), 'mobile sidebar close');
   await waitFor(() => evaluate(`document.activeElement?.dataset.testid === 'button-toggle-sidebar'`), 'mobile sidebar focus return');
   assert.equal(await evaluate(`document.activeElement?.dataset.testid`), 'button-toggle-sidebar', 'Sidebar close returns focus to its toggle on mobile');
-  console.log('Workspace browser checks passed: copy, denial, resize, drafts, lazy modes, desktop tab order, mobile panel focus traps and restoration, Python, plots, and cancellation.');
+  console.log('Workspace timings (ms):', JSON.stringify(timings));
+  console.log('Workspace browser checks passed: lazy editor, line wrapping, exact copy/denial, scroll recovery/following, draft restore, queued runs, on-demand languages/packages, warm Python, plots and cancellation.');
 } finally {
   socket?.close();
   for (const child of [browser, vite]) child.kill('SIGTERM');

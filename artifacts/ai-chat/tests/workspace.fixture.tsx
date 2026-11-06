@@ -1,7 +1,6 @@
-import { useRef, useState } from 'react';
+import { lazy, Suspense, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { CodeWorkspace } from '../src/components/code-workspace';
 import { MessageMarkdown } from '../src/components/message-markdown';
 import { SettingsDialog } from '../src/components/settings-dialog';
 import { executeCode } from '../src/lib/code-runner';
@@ -10,6 +9,7 @@ import '../src/index.css';
 import '../src/nexo.css';
 import '../src/refine.css';
 
+const CodeWorkspace = lazy(() => import('../src/components/code-workspace').then((module) => ({ default: module.CodeWorkspace })));
 const raw = '\tprint("hello ✓")  \r\n\r\n';
 const markdown = `Inline \`not a block\`.\n\n\`\`\`python\r\n${raw}\`\`\`\n\n~~~rust\nfn main() {}\n~~~`;
 
@@ -31,16 +31,21 @@ function Fixture() {
     },
   });
   return <div className="app-shell">
-    <main className="main-pane"><div className="markdown" style={{ padding: 28 }}>
-      <h1>Workspace checks</h1>
-      <button ref={conversationControlRef} type="button" onClick={() => setOpen(true)} data-testid="button-conversation-control">Conversation</button>
-      <MessageMarkdown content={markdown} />
+    <main className="main-pane"><div className="messages" data-testid="fixture-chat-scroll" style={{ height: 320, flex: 'none' }}>
+      <div className="markdown" style={{ padding: 28 }}>
+        <h1>Workspace checks</h1>
+        <button ref={conversationControlRef} type="button" onClick={() => setOpen(true)} data-testid="button-conversation-control">Conversation</button>
+        <MessageMarkdown content={markdown} />
+        <div aria-hidden="true" style={{ height: 1000 }} />
+      </div>
     </div></main>
-    {open && <CodeWorkspace conversationId={conversation}
-      snippets={[{ language, code, label: 'Test code', complete: true }]}
-      onClose={() => setOpen(false)}
-      returnFocus={() => conversationControlRef.current?.focus({ preventScroll: true })}
-      onAskFix={() => {}} canAsk isLight={false} />}
+    {open && <Suspense fallback={<div data-testid="workspace-loading">Loading workspace…</div>}>
+      <CodeWorkspace conversationId={conversation}
+        snippets={[{ language, code, label: 'Test code', complete: true }]}
+        onClose={() => setOpen(false)}
+        returnFocus={() => conversationControlRef.current?.focus({ preventScroll: true })}
+        onAskFix={() => {}} canAsk isLight={false} />
+    </Suspense>}
     <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId="midnight" accentId="blue"
       setTheme={() => {}} setAccent={() => {}} />
   </div>;

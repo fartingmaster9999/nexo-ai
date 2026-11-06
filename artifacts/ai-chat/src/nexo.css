@@ -71,6 +71,9 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .ws-btn.run { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
 .ws-btn.run:disabled { opacity: .45; cursor: not-allowed; }
 .ws-btn.stop { background: hsl(var(--destructive)); color: hsl(var(--destructive-foreground)); }
+.ws-btn.wrap-toggle { border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--muted-foreground)); padding-inline: 10px; }
+.ws-btn.wrap-toggle:hover { color: hsl(var(--foreground)); }
+.ws-btn.wrap-toggle.is-on { border-color: hsl(var(--primary) / .55); background: hsl(var(--primary) / .1); color: hsl(var(--primary)); }
 .ws-snippets { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid hsl(var(--border)); overflow-x: auto; }
 .ws-snippets button { border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--muted-foreground)); border-radius: 999px; padding: 4px 10px; font-size: 11px; font-family: var(--app-font-mono); cursor: pointer; white-space: nowrap; }
 .ws-snippets button.is-on { color: hsl(var(--foreground)); border-color: hsl(var(--primary)); background: hsl(var(--primary) / .12); }
@@ -88,7 +91,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .ws-mini:hover:not(:disabled) { color: hsl(var(--foreground)); }
 .ws-mini.accent { color: hsl(var(--foreground)); border-color: hsl(var(--primary) / .55); }
 .ws-mini:disabled { opacity: .45; cursor: not-allowed; }
-.ws-console { flex: 1; overflow: auto; padding: 4px 14px 14px; background: hsl(var(--code-bg)); color: hsl(var(--code-foreground)); font-family: var(--app-font-mono); font-size: 12px; }
+.ws-console { flex: 1; overflow: auto; overflow-anchor: none; padding: 4px 14px 14px; background: hsl(var(--code-bg)); color: hsl(var(--code-foreground)); font-family: var(--app-font-mono); font-size: 12px; }
 .ws-console pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; }
 .c-stderr { color: hsl(2 85% 70%); }
 .c-status { color: hsl(var(--code-muted-foreground)); margin: 8px 0; font-size: 11.5px; line-height: 1.55; }
