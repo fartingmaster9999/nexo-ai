@@ -326,10 +326,6 @@ function Home() {
     }
     if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); return; }
     const requestAgent = agentMode;
-    if (requestAgent && requestImage) {
-      setError('Agent mode cannot process image attachments yet. Remove the image or turn Agent off.');
-      return;
-    }
     shouldAutoFollowMessages.current = true;
     const requestDeepthink = deepthink;
 
@@ -437,6 +433,10 @@ function Home() {
       let agentHistory: AgentToolExchange[] = [];
       let agentToolCalls = 0;
       const nextAgentTool: { current: AgentToolRequest | null } = { current: null };
+      const encodedImage = requestImage ? {
+        mimeType: requestImage.mimeType,
+        data: await imageFileToBase64(requestImage.file),
+      } : undefined;
       const acceptEvent = (eventData: StreamEvent) => {
         if (abortRef.current !== controller) return;
         if (eventData.error) throw new Error(eventData.error);
@@ -485,13 +485,8 @@ function Home() {
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         };
         if (requestAgent && agentHistory.length) requestBody.agentHistory = agentHistory;
-        if (requestImage) {
-          requestBody.image = {
-            mimeType: requestImage.mimeType,
-            data: await imageFileToBase64(requestImage.file),
-          };
-        }
-        const endpoint = requestImage ? '/api/chat/image' : requestAgent ? '/api/agent' : '/api/chat';
+        if (encodedImage) requestBody.image = encodedImage;
+        const endpoint = requestAgent ? '/api/agent' : requestImage ? '/api/chat/image' : '/api/chat';
         connectTimeout = window.setTimeout(() => controller.abort(new Error('The server did not respond in time. Please try again.')), 30000);
         const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}${endpoint}`, {
           method: 'POST',

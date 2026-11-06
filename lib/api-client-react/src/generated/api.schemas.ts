@@ -152,6 +152,7 @@ export interface AgentChatInput {
      * @maxItems 6
      */
   agentHistory?: AgentToolExchange[];
+  image?: ImageAttachment;
 }
 
 export interface ApiError {

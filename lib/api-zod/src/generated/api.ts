@@ -76,7 +76,7 @@ export const StreamImageChatResponse = zod.unknown()
 
 
 /**
- * Gemini selectively requests external web search or browser-only code execution. Tool activity, sources, generated code, and bounded results are returned as SSE events; private model reasoning is not exposed.
+ * Gemini can analyze an optional image, then selectively request external web search or browser-only code execution. Tool activity, sources, generated code, and bounded results are returned as SSE events; private model reasoning and image bytes are not exposed.
  * @summary Stream an Agent-mode response
  */
 export const streamAgentChatBodyDeepthinkDefault = false;
@@ -105,6 +105,11 @@ export const streamAgentChatBodyAgentHistoryItemSourcesMax = 5;
 
 export const streamAgentChatBodyAgentHistoryMax = 6;
 
+export const streamAgentChatBodyImageDataMin = 4;
+export const streamAgentChatBodyImageDataMax = 4194304;
+
+
+export const streamAgentChatBodyImageDataRegExp = new RegExp('^[A-Za-z0-9+/]+={0,2}$');
 
 
 export const StreamAgentChatBody = zod.object({
@@ -128,7 +133,11 @@ export const StreamAgentChatBody = zod.object({
   "title": zod.string().max(streamAgentChatBodyAgentHistoryItemSourcesItemTitleMax),
   "url": zod.string().url().max(streamAgentChatBodyAgentHistoryItemSourcesItemUrlMax)
 })).max(streamAgentChatBodyAgentHistoryItemSourcesMax).optional()
-})).max(streamAgentChatBodyAgentHistoryMax).optional().describe('Bounded prior tool call and result pairs for the current turn, including Gemini\'s opaque continuation signature.')
+})).max(streamAgentChatBodyAgentHistoryMax).optional().describe('Bounded prior tool call and result pairs for the current turn, including Gemini\'s opaque continuation signature.'),
+  "image": zod.object({
+  "mimeType": zod.enum(['image/jpeg', 'image/png', 'image/webp']),
+  "data": zod.string().min(streamAgentChatBodyImageDataMin).max(streamAgentChatBodyImageDataMax).regex(streamAgentChatBodyImageDataRegExp).describe('Base64-encoded image bytes without a data URL prefix')
+}).optional()
 })
 
 export const StreamAgentChatResponse = zod.unknown()

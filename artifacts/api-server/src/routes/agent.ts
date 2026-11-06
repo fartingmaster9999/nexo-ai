@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { StreamAgentChatBody, type AgentToolExchange } from "@workspace/api-zod";
 import { isValidTimeZone } from "../lib/chat-request";
-import { GeminiSseDecoder } from "../lib/gemini-image";
+import { GeminiSseDecoder, validateImageData } from "../lib/gemini-image";
 import { isPublicUrl } from "../lib/public-scraper";
 import { searchWeb, type SearchResult } from "../lib/web-search";
 import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry";
@@ -70,6 +70,14 @@ export function createAgentRouter({
       res.status(400).json({ error: "The provided timezone is invalid." });
       return;
     }
+    if (parsed.data.image) {
+      try {
+        validateImageData(parsed.data.image.mimeType, parsed.data.image.data);
+      } catch {
+        res.status(400).json({ error: "The image data is invalid. Choose a JPEG, PNG, or WebP image under 3 MB." });
+        return;
+      }
+    }
     const history: AgentToolExchange[] = (parsed.data.agentHistory ?? []).map((exchange) => ({
       ...exchange,
       ...(exchange.sources ? { sources: cleanSources(exchange.sources) } : {}),
@@ -107,9 +115,13 @@ export function createAgentRouter({
         if (!res.destroyed && !res.writableEnded && res.writableLength === 0) res.write(": keepalive\n\n");
       }, 10000);
       await emit({ model: GEMINI_AGENT_MODEL });
+      if (parsed.data.image && history.length === 0) {
+        await emit({ activity: { id: "image-analysis", label: "Analyzing the attached image", kind: "thinking", status: "running" } });
+      }
 
       let answer = "";
       let toolCalls = history.length;
+      let imageAnalysisComplete = history.length > 0;
       const switchToFallback = async (status?: number) => {
         if (activeModel !== GEMINI_AGENT_MODEL || toolCalls !== 0) return false;
         activeModel = GEMINI_AGENT_FALLBACK_MODEL;
@@ -210,6 +222,10 @@ export function createAgentRouter({
 
         if (!modelResponse) throw new AgentPublicError("Gemini returned no Agent response. Please try again.");
         modelIdleRetries = 0;
+        if (parsed.data.image && !imageAnalysisComplete) {
+          imageAnalysisComplete = true;
+          await emit({ activity: { id: "image-analysis", label: "Image analysis complete", kind: "thinking", status: "complete" } });
+        }
         if (modelResponse.calls.length > 1) {
           throw new AgentPublicError("Nexo Agent requested multiple tools at once. Please try a more focused request.");
         }

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { tmpdir } from "node:os";
 import { delay, waitFor, withFixture } from "./browser-harness.mjs";
 
+const temp = await mkdtemp(path.join(tmpdir(), "nexo-agent-image-"));
+const imagePath = path.join(temp, "chart.png");
+const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==";
+await writeFile(imagePath, Buffer.from(imageBase64, "base64"));
 const liveEvents = process.env.NEXO_LIVE_AGENT_EVENTS ? JSON.parse(process.env.NEXO_LIVE_AGENT_EVENTS) : null;
 const liveTool = liveEvents?.find((event) => event.agentTool)?.agentTool;
 const expectedOutput = liveTool ? "LIVE_BROWSER_OK:42" : "agent-run-ok";
@@ -8,6 +15,7 @@ const userPrompt = liveTool
   ? "Use the browser-only JavaScript code tool to print the exact string LIVE_BROWSER_OK:42."
   : "Run a tiny JavaScript example.";
 
+try {
 await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-start-from-home"]'))`), "home screen");
   await evaluate(`(() => {
@@ -66,6 +74,11 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="toggle-agent"]'))`), "Agent toggle");
   await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute("aria-pressed")`), "true");
+  const root = (await cdp("DOM.getDocument")).root.nodeId;
+  const imageInput = (await cdp("DOM.querySelector", { nodeId: root, selector: '[data-testid="input-image-file"]' })).nodeId;
+  assert.ok(imageInput);
+  await cdp("DOM.setFileInputFiles", { nodeId: imageInput, files: [imagePath] });
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="image-attachment-preview"]'))`), "Agent image attachment");
   await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
   await cdp("Input.insertText", { text: userPrompt });
   await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
@@ -78,7 +91,14 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   const requests = await evaluate(`window.__agentRequests`);
   assert.ok(requests.every((request) => request.url.endsWith("/api/agent")));
   assert.equal(requests[0].body.messages.at(-1).content, userPrompt);
+  assert.equal(requests[0].body.image.mimeType, "image/png");
+  assert.equal(requests[0].body.image.data, imageBase64);
   assert.equal(requests[0].body.agentHistory, undefined);
+  assert.equal(requests[1].body.image.mimeType, "image/png", "the image remains available to Gemini after browser tool execution");
+  assert.equal(requests[1].body.image.data, imageBase64);
+  assert.equal(await evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes(${JSON.stringify(imageBase64)})`), false);
+  assert.equal(await evaluate(`document.body.textContent.includes("Image sent to Gemini. The image file is not saved in chat history.")`), true);
+  await waitFor(() => evaluate(`!document.querySelector('[data-testid="image-attachment-preview"]')`), "sent Agent image preview cleared");
   assert.equal(requests[1].body.agentHistory[0].callId, liveTool?.callId ?? "browser-code-1");
   assert.equal(requests[1].body.agentHistory[0].thoughtSignature, liveTool?.thoughtSignature ?? "opaque-browser-signature");
   assert.match(requests[1].body.agentHistory[0].result, new RegExp(expectedOutput));
@@ -101,7 +121,10 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.equal(await evaluate(`window.__agentRequests.length`), 3, "stopped browser code is not sent for another model turn");
 
   console.log(liveTool
-    ? "Live Agent browser check passed: Gemini-generated code ran in isolation and its result was sent in the continuation."
-    : "Agent browser checks passed: Gemini route selection, isolated code execution, continuation result, workspace output, and activity panel.");
+    ? "Live Agent browser check passed: image upload, Gemini-generated code execution, and continuation result."
+    : "Agent browser checks passed: image upload, Agent routing, isolated code execution, continuation result, workspace output, and activity panel.");
   await delay(50);
 });
+} finally {
+  await rm(temp, { recursive: true, force: true });
+}

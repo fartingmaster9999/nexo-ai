@@ -68,6 +68,30 @@ test("Agent request uses the supported Gemini model, current time, and selected 
   assert.equal(normal.generationConfig.thinkingConfig.thinkingLevel, "medium");
 });
 
+test("Agent sends a validated image to Gemini without adding it to tool history", () => {
+  const image = {
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==",
+  };
+  const request = buildGeminiAgentRequest({ ...input, image });
+  assert.deepEqual(request.contents[0].parts[1], { inlineData: image });
+  assert.match(request.systemInstruction.parts[0].text, /attached image as visual context/);
+  const continuation = buildGeminiAgentRequest({
+    ...input,
+    image,
+    agentHistory: [{
+      tool: "web_search",
+      callId: "search-1",
+      thoughtSignature: "opaque-signature",
+      arguments: { query: "latest release" },
+      result: "Release notes",
+    }],
+  });
+  assert.deepEqual(continuation.contents[0].parts[1], { inlineData: image });
+  assert.equal(JSON.stringify(continuation.contents.slice(1)).includes(image.data), false);
+  assert.throws(() => buildGeminiAgentRequest({ ...input, image: { ...image, mimeType: "image/jpeg" } }), /Invalid image|match its content/);
+});
+
 test("Agent request keeps the key in a header and preserves function call IDs and signatures", async () => {
   let captured;
   const history = [{
@@ -125,6 +149,22 @@ test("Agent route reports missing Gemini configuration without making an upstrea
     });
     assert.equal(response.status, 503);
     assert.match((await response.json()).error, /GEMINI_API_KEY/);
+  });
+  assert.equal(calls, 0);
+});
+
+test("Agent rejects invalid image bytes before contacting Gemini", async () => {
+  let calls = 0;
+  await withServer(createSseApp({
+    fetchImpl: async () => { calls++; return geminiResponse([modelEvent([{ text: "unexpected" }])]); },
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, image: { mimeType: "image/png", data: "bm90LWltYWdl" } }),
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /JPEG, PNG, or WebP image under 3 MB/);
   });
   assert.equal(calls, 0);
 });
@@ -322,6 +362,10 @@ test("Agent searches only when the model requests it and continues with bounded 
 });
 
 test("Agent sends code requests to the browser client and accepts its bounded execution result", async () => {
+  const image = {
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==",
+  };
   const requests = [];
   const fetchImpl = async (_url, init) => {
     const body = JSON.parse(init.body);
@@ -336,9 +380,13 @@ test("Agent sends code requests to the browser client and accepts its bounded ex
   };
   await withServer(createSseApp({ fetchImpl }), async (url) => {
     const first = await fetch(url, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, image }),
     });
     const firstEvents = await readEvents(first);
+    assert.deepEqual(requests[0].contents[0].parts[1], { inlineData: image });
+    assert.equal(JSON.stringify(firstEvents).includes(image.data), false, "image bytes are not returned in Agent events");
     const toolEvent = firstEvents.find((event) => event.agentTool)?.agentTool;
     assert.deepEqual(toolEvent.arguments, { language: "javascript", code: "console.log('agent-ok')" });
     assert.equal(firstEvents.at(-1).done, true);
@@ -348,6 +396,7 @@ test("Agent sends code requests to the browser client and accepts its bounded ex
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...input,
+        image,
         agentHistory: [{
           tool: "run_code",
           callId: toolEvent.callId,
@@ -361,6 +410,7 @@ test("Agent sends code requests to the browser client and accepts its bounded ex
     assert.equal(continuationEvents.filter((event) => event.content).map((event) => event.content).join(""), "The browser run printed agent-ok.");
   });
   assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].contents[0].parts[1], { inlineData: image });
   assert.equal(requests[1].contents.at(-2).parts[0].functionCall.id, "code-1");
   assert.equal(requests[1].contents.at(-2).parts[0].thoughtSignature, "code-signature");
   assert.equal(requests[1].contents.at(-1).parts[0].functionResponse.response.result, "stdout: agent-ok");

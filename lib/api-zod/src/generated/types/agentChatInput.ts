@@ -7,6 +7,7 @@
  */
 import type { AgentToolExchange } from './agentToolExchange';
 import type { ChatMessage } from './chatMessage';
+import type { ImageAttachment } from './imageAttachment';
 
 export interface AgentChatInput {
   /** Use high Gemini thinking level instead of medium */
@@ -26,4 +27,5 @@ export interface AgentChatInput {
      * @maxItems 6
      */
   agentHistory?: AgentToolExchange[];
+  image?: ImageAttachment;
 }

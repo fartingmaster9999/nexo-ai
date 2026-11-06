@@ -120,7 +120,7 @@ paths:
       operationId: streamAgentChat
       tags: [agent]
       summary: Stream an Agent-mode response
-      description: Gemini selectively requests external web search or browser-only code execution. Tool activity, sources, generated code, and bounded results are returned as SSE events; private model reasoning is not exposed.
+      description: Gemini can analyze an optional image, then selectively request external web search or browser-only code execution. Tool activity, sources, generated code, and bounded results are returned as SSE events; private model reasoning and image bytes are not exposed.
       requestBody:
         required: true
         content:
@@ -134,6 +134,12 @@ paths:
             text/event-stream: {}
         "400":
           description: Invalid conversation or tool history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          description: Agent image request is too large
           content:
             application/json:
               schema:
@@ -257,6 +263,8 @@ components:
           description: Bounded prior tool call and result pairs for the current turn, including Gemini's opaque continuation signature.
           items:
             $ref: "#/components/schemas/AgentToolExchange"
+        image:
+          $ref: "#/components/schemas/ImageAttachment"
       required:
         - messages
     AgentToolExchange:
