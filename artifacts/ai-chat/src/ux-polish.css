@@ -144,6 +144,17 @@
 }
 
 .landing-preview-head .lx-pager { margin-left: auto; }
+.landing-wordmark {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.landing-wordmark:hover { color: hsl(var(--primary)); }
+.messages { scroll-behavior: auto; }
 
 .ws-editor,
 .ws-console {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { withFixture, waitFor, delay } from './browser-harness.mjs';
+import { withFixture, waitFor } from './browser-harness.mjs';
 
 await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, requests }) => {
   const click = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
@@ -20,6 +20,15 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
   const activeId = () => evaluate(`document.querySelector('[data-testid^="active-conversation-"]').dataset.testid.replace('active-conversation-','')`);
   await waitFor(() => exists('[data-testid="input-message"]'), 'app');
   assert.ok(!requests.some((url) => /quiz-view|chart-view|recharts/.test(url)), 'Widgets are not loaded on ordinary home');
+  await evaluate(`window.confirm = () => { throw new Error('The browser confirmation dialog must not be used'); }`);
+  await click('[data-testid="button-home-history"]');
+  await waitFor(() => exists('[data-testid="history-sidebar"]'), 'open history from the home logo');
+  assert.equal(await evaluate(`document.querySelector('[data-testid="button-home-history"]').getAttribute('aria-expanded')`), 'true');
+  await click('[data-testid="button-close-sidebar"]');
+  await waitFor(async () => !await exists('[data-testid="history-sidebar"]'), 'close history from its close control');
+  await click('[data-testid="button-topbar-home"]');
+  await waitFor(() => exists('[data-testid="history-sidebar"]'), 'reopen history from the topbar logo');
+  assert.equal(await evaluate(`document.querySelector('[data-testid="button-topbar-home"]').getAttribute('aria-expanded')`), 'true');
   await send('Quiz me on biology');
   await waitFor(() => exists('.widget-fallback'), 'partial widget placeholder');
   assert.ok(!await exists('[data-testid="panel-workspace"]'));
@@ -63,6 +72,14 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
   await click(`[data-testid="select-conversation-${second}"]`);
   assert.match(await text('[data-testid="text-quiz-feedback"]'), /Correct/);
   await click(`[data-testid="delete-conversation-${first}"]`);
+  await waitFor(() => exists('[data-testid="dialog-delete-conversation"]'), 'in-app delete confirmation');
+  await click('[data-testid="button-cancel-delete"]');
+  await waitFor(async () => !await exists('[data-testid="dialog-delete-conversation"]'), 'cancel deletion');
+  assert.notEqual(await evaluate(`JSON.parse(localStorage.getItem('nexo-conversation-v2:${first}')).conversation`), null, 'Cancel keeps the saved conversation');
+  await click(`[data-testid="delete-conversation-${first}"]`);
+  await waitFor(() => exists('[data-testid="dialog-delete-conversation"]'), 'confirm deletion dialog');
+  await click('[data-testid="button-confirm-delete"]');
+  await waitFor(async () => !await exists('[data-testid="dialog-delete-conversation"]'), 'confirm deletion');
   await evaluate(`window.dispatchEvent(new Event('pagehide'))`);
   assert.equal(await evaluate(`JSON.parse(localStorage.getItem('nexo-conversation-v2:${first}')).conversation`), null, 'Deleting chat removes its progress with the record');
   await send('Graph the example growth data');
@@ -114,9 +131,13 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
     assert.ok(!await exists('[data-testid="panel-workspace"]'));
     assert.match(body, /malformed|Unsupported|not completed|could not be verified/);
   }
+  await evaluate(`document.querySelector('.conversation-flow').style.minHeight = '1400px'`);
   await send('ordinary question');
+  await evaluate(`const m=document.querySelector('[data-testid="chat-messages"]'); m.scrollTop=0; m.dispatchEvent(new Event('scroll',{bubbles:true}))`);
   await settled();
   assert.match(await evaluate(`Array.from(document.querySelectorAll('.message-row.assistant')).at(-1).textContent`), /normal Markdown answer/);
+  assert.ok(await evaluate(`document.querySelector('[data-testid="chat-messages"]').scrollTop < 30`), 'Streaming does not pull a reader away from a manually chosen scroll position');
+  await evaluate(`document.querySelector('.conversation-flow').style.minHeight = ''`);
   await evaluate(`Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>window.__copied=value}})`);
   await send('code');
   await settled();
@@ -124,9 +145,21 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
   await click('.code-block button');
   await waitFor(() => evaluate(`window.__copied === "print('plain')\\n"`), 'raw code copy preserved');
   await click('[data-testid="button-close-workspace"]');
+  await click('[data-testid="button-new-chat"]');
+  await waitFor(() => exists('[data-testid="welcome-screen"]'), 'unsent conversation');
+  await evaluate(`window.dispatchEvent(new Event('pagehide'))`);
+  const savedEmptyConversation = await evaluate(`Array.from({length:localStorage.length},(_,i)=>localStorage.key(i)).filter(k=>k?.startsWith('nexo-conversation-v2:')).some(k=>{const v=JSON.parse(localStorage.getItem(k));return v.conversation && !v.conversation.messages.some(m=>m.role==='user' && m.content.trim())})`);
+  assert.equal(savedEmptyConversation, false, 'An unsent conversation is never written to browser history');
+  await click('[data-testid="button-home"]');
+  await waitFor(() => exists('[data-testid="home-landing"]'), 'return home discards the empty conversation');
+  await click('[data-testid="button-home-history"]');
+  await waitFor(() => exists('[data-testid="history-sidebar"]'), 'open saved history from home');
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('.thread-title')).some(node=>node.textContent==='New conversation')`), false, 'An empty conversation is not shown in saved history');
+  await click('[data-testid="button-home-history"]');
+  await waitFor(async () => !await exists('[data-testid="history-sidebar"]'), 'close saved history');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await cdp('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
-  if (await evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]').getAttribute('aria-expanded') === 'true'`)) await click('[data-testid="button-toggle-sidebar"]');
+  if (await evaluate(`document.querySelector('[data-testid="button-toggle-sidebar"]')?.getAttribute('aria-expanded') === 'true'`)) await click('[data-testid="button-toggle-sidebar"]');
   await send('Quiz me on biology again');
   await settled();
   await waitFor(() => exists('[data-testid="message-assistant-19"] .nx-quiz, .nx-quiz'), 'phone quiz');

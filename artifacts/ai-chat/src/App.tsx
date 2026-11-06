@@ -4,6 +4,16 @@ import { AlertCircle, ArrowUp, ArrowUpRight, Brain, MessageSquare, PanelLeft, Pl
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SettingsDialog } from '@/components/settings-dialog';
 import { HomeLanding } from '@/components/home-landing';
@@ -11,7 +21,7 @@ import NotFound from '@/pages/not-found';
 import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type StreamEvent } from '@/lib/chat-stream';
 import { useConversations } from '@/hooks/use-conversations';
-import type { Conversation } from '@/lib/conversation-storage';
+import { hasSentUserMessage, type Conversation } from '@/lib/conversation-storage';
 import { prepareRequestMessages } from '@/lib/request-context';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
@@ -46,6 +56,7 @@ function titleFromPrompt(prompt: string) {
 
 function Home() {
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [homeHistoryOpen, setHomeHistoryOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [conversations, setConversations, persistConversations] = useConversations(setError);
@@ -60,16 +71,40 @@ function Home() {
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
-  const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean(activeId && sidebarOpen && !workspaceOpen && !settingsOpen));
+  const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
+  const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean((activeId || homeHistoryOpen) && sidebarOpen && !workspaceOpen && !settingsOpen && !deleteTarget));
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const homeHeadingRef = useRef<HTMLHeadingElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const shouldAutoFollowMessages = useRef(true);
+  const homeHistoryTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const activeStreamId = useRef<string | null>(null);
   const flushRef = useRef<(() => void) | null>(null);
+
+  const closeHistorySidebar = useCallback((fallback?: HTMLButtonElement) => {
+    setSidebarOpen(false);
+    if (!activeId) {
+      setHomeHistoryOpen(false);
+      const trigger = homeHistoryTriggerRef.current ?? fallback;
+      window.requestAnimationFrame(() => trigger?.focus({ preventScroll: true }));
+      homeHistoryTriggerRef.current = null;
+    }
+  }, [activeId, setSidebarOpen]);
+  const toggleHomeHistory = useCallback((trigger: HTMLButtonElement) => {
+    if (homeHistoryOpen) {
+      closeHistorySidebar(trigger);
+      return;
+    }
+    homeHistoryTriggerRef.current = trigger;
+    setHomeHistoryOpen(true);
+    setSidebarOpen(true);
+  }, [closeHistorySidebar, homeHistoryOpen, setSidebarOpen]);
 
   useEffect(() => {
     if (sidebarWasOpen.current && !sidebarOpen) sidebarToggleRef.current?.focus({ preventScroll: true });
@@ -77,6 +112,7 @@ function Home() {
   }, [sidebarOpen]);
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeId) ?? null;
+  const savedConversations = conversations.filter(hasSentUserMessage);
   const currentMessages = activeConversation?.messages ?? [];
   const lastAssistantIndex = currentMessages.map((m) => m.role).lastIndexOf('assistant');
   const codeSource = useMemo(() => {
@@ -113,21 +149,22 @@ function Home() {
     };
   }, [persistConversations]);
 
+  useEffect(() => { shouldAutoFollowMessages.current = true; }, [activeId]);
   useEffect(() => {
-    const container = messagesEndRef.current?.parentElement?.parentElement;
-    if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 200) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    const container = messagesContainerRef.current;
+    if (container && shouldAutoFollowMessages.current) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
     }
   }, [currentMessages.length, currentMessages[currentMessages.length - 1]?.content, visibleReply?.content]);
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape' || document.querySelector('[role="dialog"]') || workspaceOpen) return;
-      if (isMobile()) setSidebarOpen(false);
+      if (event.key !== 'Escape' || document.querySelector('[role="dialog"], [role="alertdialog"]') || workspaceOpen) return;
+      if (isMobile() && sidebarOpen && (activeId || homeHistoryOpen)) closeHistorySidebar();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [setSidebarOpen, workspaceOpen]);
+  }, [activeId, closeHistorySidebar, homeHistoryOpen, sidebarOpen, workspaceOpen]);
 
   const updateConversation = useCallback((id: string, updater: (conversation: Conversation) => Conversation) => {
     setConversations((items) => items.map((conversation) => conversation.id === id ? updater(conversation) : conversation));
@@ -167,11 +204,13 @@ function Home() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    setConversations((items) => [conversation, ...items]);
+    setConversations((items) => [conversation, ...items.filter((item) => item.id !== activeId || hasSentUserMessage(item))]);
+    setHomeHistoryOpen(false);
+    homeHistoryTriggerRef.current = null;
     setActiveId(conversation.id);
     closeIfMobile();
     window.setTimeout(() => textareaRef.current?.focus(), 0);
-  }, [removePendingAssistant]);
+  }, [activeId, removePendingAssistant, setConversations]);
 
   const returnHome = () => {
     flushRef.current?.();
@@ -182,21 +221,49 @@ function Home() {
     activeStreamId.current = null;
     setStreaming(false);
     setVisibleReply(null);
+    setConversations((items) => items.filter((item) => item.id !== activeId || hasSentUserMessage(item)));
     setActiveId(null);
+    setHomeHistoryOpen(false);
+    homeHistoryTriggerRef.current = null;
     setError('');
     closeIfMobile();
     window.requestAnimationFrame(() => homeHeadingRef.current?.focus({ preventScroll: true }));
   };
 
   const selectConversation = (id: string) => {
+    setConversations((items) => items.filter((item) => item.id !== activeId || hasSentUserMessage(item)));
     setActiveId(id);
+    setHomeHistoryOpen(false);
+    homeHistoryTriggerRef.current = null;
     setError('');
     closeIfMobile();
   };
 
+  const requestDeleteConversation = (conversation: Conversation, trigger: HTMLButtonElement) => {
+    deleteTriggerRef.current = trigger;
+    setDeleteTarget(conversation);
+  };
+  const restoreDeleteFocus = () => {
+    const trigger = deleteTriggerRef.current;
+    deleteTriggerRef.current = null;
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) {
+        trigger.focus({ preventScroll: true });
+        return;
+      }
+      const target = document.querySelector<HTMLButtonElement>('#history-sidebar [data-testid="button-new-chat"]')
+        ?? document.querySelector<HTMLButtonElement>('[data-testid="button-toggle-sidebar"]')
+        ?? document.querySelector<HTMLButtonElement>('[data-testid="button-topbar-home"]')
+        ?? homeHeadingRef.current;
+      target?.focus({ preventScroll: true });
+    });
+  };
+  const onDeleteDialogOpenChange = (open: boolean) => {
+    if (open) return;
+    setDeleteTarget(null);
+    restoreDeleteFocus();
+  };
   const deleteConversation = (conversation: Conversation) => {
-    const confirmed = window.confirm(`Delete “${conversation.title}”? This cannot be undone.`);
-    if (!confirmed) return;
     if (activeStreamId.current === conversation.id) {
       flushRef.current?.();
       flushRef.current = null;
@@ -211,6 +278,9 @@ function Home() {
       setActiveId(null);
       setError('');
     }
+  };
+  const confirmDeleteConversation = () => {
+    if (deleteTarget) deleteConversation(deleteTarget);
   };
 
   const stopResponse = () => {
@@ -229,6 +299,7 @@ function Home() {
     const prompt = (suggestedText ?? draft).trim();
     if (!prompt) return;
     if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); return; }
+    shouldAutoFollowMessages.current = true;
     const requestDeepthink = deepthink;
 
     let conversation = activeConversation;
@@ -242,6 +313,8 @@ function Home() {
       };
       setConversations((items) => [conversation as Conversation, ...items]);
       setActiveId(conversation.id);
+      setHomeHistoryOpen(false);
+      homeHistoryTriggerRef.current = null;
     }
 
     const conversationId = conversation.id;
@@ -444,8 +517,8 @@ function Home() {
 
   return (
     <div className="app-shell">
-      {activeId && (
-        <aside ref={sidebarPanelRef} id="history-sidebar" className={`sidebar ${sidebarOpen ? 'is-open' : 'is-collapsed'}`} style={{ ['--sb-w' as string]: `${sidebar.width}px` }} aria-label="Conversation history" tabIndex={-1}>
+      {(activeId || homeHistoryOpen) && (
+        <aside ref={sidebarPanelRef} id="history-sidebar" data-testid="history-sidebar" className={`sidebar ${sidebarOpen ? 'is-open' : 'is-collapsed'}`} style={{ ['--sb-w' as string]: `${sidebar.width}px` }} aria-label="Conversation history" tabIndex={-1}>
           <div className="brand">
             <button className="brand-home" type="button" onClick={returnHome} aria-label="Go to Nexo AI home" title="Home" data-testid="button-home">
               <img className="brand-mark" src={logoUrl} alt="" aria-hidden="true" data-testid="img-logo" />
@@ -454,13 +527,13 @@ function Home() {
             <button className="icon-btn new-chat" type="button" onClick={createConversation} aria-label="New conversation" title="New conversation" data-testid="button-new-chat">
               <Plus size={18} aria-hidden="true" />
             </button>
-            <button type="button" className="icon-btn sb-close-mobile" onClick={() => setSidebarOpen(false)} aria-label="Close history sidebar" data-testid="button-close-sidebar"><X size={16} /></button>
+            <button type="button" className="icon-btn sb-close-mobile" onClick={() => closeHistorySidebar()} aria-label="Close history sidebar" data-testid="button-close-sidebar"><X size={16} /></button>
           </div>
           <div className="thread-heading" aria-hidden="true">Recent</div>
           <div className="thread-list" role="list" aria-label="Saved conversations" data-testid="list-conversations">
-            {conversations.length === 0 ? (
+            {savedConversations.length === 0 ? (
               <div className="thread-empty" data-testid="empty-conversations">No conversations yet.</div>
-            ) : conversations.map((conversation) => (
+            ) : savedConversations.map((conversation) => (
               <div className="thread-item" role="listitem" key={conversation.id} data-testid={`conversation-${conversation.id}`}>
                 <button
                   type="button"
@@ -478,7 +551,7 @@ function Home() {
                   type="button"
                   aria-label={`Delete ${conversation.title}`}
                   title="Delete conversation"
-                  onClick={() => deleteConversation(conversation)}
+                  onClick={(event) => requestDeleteConversation(conversation, event.currentTarget)}
                   data-testid={`delete-conversation-${conversation.id}`}
                 ><Trash2 size={14} /></button>
               </div>
@@ -490,16 +563,16 @@ function Home() {
           </button>
         </aside>
       )}
-      {activeId && sidebarOpen && (
+      {(activeId || homeHistoryOpen) && sidebarOpen && (
         <div className="sb-sep" role="separator" aria-orientation="vertical" aria-label="Resize conversation history" tabIndex={0}
           aria-valuemin={SIDEBAR_MIN} aria-valuemax={SIDEBAR_MAX} aria-valuenow={sidebar.width} {...sidebar.separatorProps} data-testid="separator-sidebar" />
       )}
-      {activeId && (
+      {(activeId || homeHistoryOpen) && (
         <button
           className={`scrim ${sidebarOpen ? 'is-visible' : ''}`}
           type="button"
           aria-label="Close conversation menu"
-          onClick={() => setSidebarOpen(false)}
+          onClick={() => closeHistorySidebar()}
           tabIndex={-1}
           data-testid="button-close-menu-overlay"
         />
@@ -507,7 +580,16 @@ function Home() {
       <main className="main-pane">
         <header className={`topbar ${activeId ? '' : 'is-home'}`}>
           <div className="topbar-left">
-            <button className="icon-btn topbar-home" type="button" onClick={returnHome} aria-label="Go to Nexo AI home" title="Home" data-testid="button-topbar-home">
+            <button
+              className="icon-btn topbar-home"
+              type="button"
+              onClick={(event) => toggleHomeHistory(event.currentTarget)}
+              aria-label={homeHistoryOpen ? 'Close conversation history' : 'Open conversation history'}
+              title={homeHistoryOpen ? 'Close history' : 'Open history'}
+              aria-expanded={homeHistoryOpen}
+              aria-controls="history-sidebar"
+              data-testid="button-topbar-home"
+            >
               <img src={logoUrl} alt="" aria-hidden="true" />
             </button>
             {activeId && (
@@ -527,7 +609,17 @@ function Home() {
         </header>
 
         <section className={`chat-region ${activeId ? '' : 'home-region'}`} aria-label={activeId ? 'AI conversation' : 'Nexo AI home'}>
-          <div className="messages" aria-live="polite" aria-relevant="additions text" data-testid="chat-messages">
+          <div
+            ref={messagesContainerRef}
+            className="messages"
+            onScroll={(event) => {
+              const container = event.currentTarget;
+              shouldAutoFollowMessages.current = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+            }}
+            aria-live="polite"
+            aria-relevant="additions text"
+            data-testid="chat-messages"
+          >
             {currentMessages.length === 0 ? (
               activeId ? (
                 <div className="welcome" data-testid="welcome-screen">
@@ -557,6 +649,8 @@ function Home() {
                   prompts={suggestions}
                   onStart={createConversation}
                   onPrompt={(text) => void sendMessage(undefined, text)}
+                  onOpenHistory={toggleHomeHistory}
+                  historyOpen={homeHistoryOpen}
                 />
               )
             ) : (
@@ -639,6 +733,26 @@ function Home() {
           isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} />
         </Suspense>
       )}
+      <AlertDialog open={Boolean(deleteTarget)} onOpenChange={onDeleteDialogOpenChange}>
+        <AlertDialogContent data-testid="dialog-delete-conversation">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget ? `“${deleteTarget.title}” will be removed from this browser. This cannot be undone.` : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDeleteConversation}
+              data-testid="button-confirm-delete"
+            >
+              Delete conversation
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId={theme.themeId} accentId={theme.accentId}
         setTheme={theme.setTheme} setAccent={theme.setAccent} />
     </div>

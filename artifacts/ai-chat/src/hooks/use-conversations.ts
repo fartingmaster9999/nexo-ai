@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
-import { loadConversations, parseRecord, RECORD_PREFIX, type Conversation } from '../lib/conversation-storage';
+import { hasSentUserMessage, loadConversations, parseRecord, RECORD_PREFIX, type Conversation } from '../lib/conversation-storage';
 
 export function useConversations(onError: (message: string) => void) {
   const [initial] = useState(() => {
     try {
       let error = false;
-      const items = loadConversations(localStorage, () => { error = true; });
+      const items = loadConversations(localStorage, () => { error = true; }).filter(hasSentUserMessage);
       return { items, error };
     }
     catch { return { items: [] as Conversation[], error: true }; }
@@ -35,8 +35,13 @@ export function useConversations(onError: (message: string) => void) {
     const next = typeof action === 'function' ? action(previous) : action;
     const old = new Map(previous.map(c => [c.id, c]));
     const ids = new Set(next.map(c => c.id));
-    for (const c of next) if (old.get(c.id) !== c) dirty.current.set(c.id, c);
-    for (const c of previous) if (!ids.has(c.id)) dirty.current.set(c.id, null);
+    for (const c of next) {
+      const before = old.get(c.id);
+      if (before === c) continue;
+      if (hasSentUserMessage(c)) dirty.current.set(c.id, c);
+      else if (before && hasSentUserMessage(before)) dirty.current.set(c.id, null);
+    }
+    for (const c of previous) if (!ids.has(c.id) && hasSentUserMessage(c)) dirty.current.set(c.id, null);
     current.current = next;
     setItems(next);
     // Fixed cadence rather than debounce: sustained streaming still checkpoints.

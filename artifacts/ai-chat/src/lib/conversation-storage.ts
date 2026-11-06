@@ -6,6 +6,10 @@ export const LEGACY_KEY = 'still-chat-conversations-v1';
 export const RECORD_PREFIX = 'nexo-conversation-v2:';
 type RecordValue = { conversation: Conversation | null; updatedAt: number };
 
+export function hasSentUserMessage(conversation: Conversation): boolean {
+  return conversation.messages.some(message => message.role === 'user' && message.content.trim().length > 0);
+}
+
 export function parseConversation(value: unknown): Conversation | null {
   if (!value || typeof value !== 'object') return null;
   const c = value as Conversation;
