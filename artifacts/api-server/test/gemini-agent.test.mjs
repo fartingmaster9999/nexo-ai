@@ -484,6 +484,46 @@ test("Gemini in-stream rate limits use the existing Qwen fallback", async () => 
   });
 });
 
+test("Gemini image requests keep image bytes out of the Groq fallback and its events", async () => {
+  const image = {
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==",
+  };
+  let geminiRequest;
+  let groqRequest;
+  const groqClient = {
+    models: { list: async () => ({ data: [{
+      id: CODING_FALLBACK,
+      active: true,
+      context_window: 131072,
+      max_completion_tokens: 16384,
+    }] }) },
+    chat: { completions: { create: async (request) => {
+      groqRequest = request;
+      return (async function* () {
+        yield { choices: [{ delta: { content: "I can continue with the text prompt." } }] };
+      })();
+    } } },
+  };
+  await withServer(createSseApp({
+    getGroqClient: () => groqClient,
+    fetchImpl: async (_url, init) => {
+      geminiRequest = JSON.parse(init.body);
+      return new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } });
+    },
+  }), async (url) => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, image, agentProvider: "gemini", agentTask: "reasoning" }),
+    }));
+    assert.equal(events.some((event) => event.agentProvider === "groq"), true);
+    assert.deepEqual(geminiRequest.contents[0].parts[1], { inlineData: image });
+    assert.equal(JSON.stringify(groqRequest).includes(image.data), false, "Groq receives no image bytes");
+    assert.equal(JSON.stringify(events).includes(image.data), false, "fallback events expose no image bytes");
+  });
+});
+
 test("Agent logs known parser failures without logging credentials or upstream bodies", async () => {
   const logs = [];
   const logger = pino({ level: "info" }, { write: (line) => logs.push(JSON.parse(line)) });
