@@ -68,6 +68,35 @@ function normalizeTimestamp(value: unknown): Date | undefined {
   return timestamp && Number.isFinite(timestamp.getTime()) ? timestamp : undefined;
 }
 
+function safeAgentFailureDetails(error: unknown) {
+  if (error instanceof AgentPublicError) {
+    return { failureKind: "agent", failureReason: error.message };
+  }
+  if (error instanceof GeminiAgentApiError) {
+    return { failureKind: "gemini_http", failureReason: `HTTP ${error.status}` };
+  }
+  if (error instanceof Groq.APIError) {
+    return {
+      failureKind: "groq_http",
+      failureReason: `HTTP ${error.status ?? "unknown"}`,
+    };
+  }
+  if (error instanceof Error) {
+    const knownInternalMessages = new Set([
+      "Gemini returned an incomplete Agent tool request.",
+      "Gemini's response exceeded the Agent output limit.",
+      "Gemini sent an oversized event",
+      "Gemini sent an invalid response event",
+      "Gemini returned no visible answer",
+    ]);
+    return {
+      failureKind: error.name,
+      ...(knownInternalMessages.has(error.message) ? { failureReason: error.message } : {}),
+    };
+  }
+  return { failureKind: typeof error };
+}
+
 export function createAgentRouter({
   getApiKey = () => process.env.GEMINI_API_KEY,
   getGroqClient = () => process.env.GROQ_API_KEY ? getChatClient() : undefined,
@@ -157,13 +186,15 @@ export function createAgentRouter({
       let answer = "";
       let toolCalls = history.length;
       let imageAnalysisComplete = history.length > 0;
-      const switchToGeminiFallback = async () => {
+      const switchToGeminiFallback = async (reason: "provider_error" | "stream_idle", status?: number) => {
         if (activeProvider !== "gemini" || activeModel !== GEMINI_AGENT_MODEL || toolCalls !== 0) return false;
         activeModel = GEMINI_AGENT_FALLBACK_MODEL;
         req.log.warn({
           provider: "gemini",
           model: GEMINI_AGENT_MODEL,
           fallbackModel: activeModel,
+          reason,
+          ...(status !== undefined ? { status } : {}),
         }, "Gemini Agent primary model unavailable; retrying with fallback");
         await emit({ model: activeModel });
         await emit({
@@ -244,7 +275,7 @@ export function createAgentRouter({
             if (!upstream.ok) {
               await upstream.body?.cancel().catch(() => {});
               if (upstream.status === 429 && await switchToGroqFallback(upstream.status)) continue;
-              if (upstream.status >= 500 && await switchToGeminiFallback()) continue;
+              if (upstream.status >= 500 && await switchToGeminiFallback("provider_error", upstream.status)) continue;
               req.log.warn({ provider: "gemini", model: activeModel, status: upstream.status }, "Gemini Agent request rejected");
               throw new GeminiAgentApiError(upstream.status);
             }
@@ -280,7 +311,7 @@ export function createAgentRouter({
             modelResponse = collectAgentResponse(events);
           }
         } catch (error) {
-          if (attemptTimedOut && activeProvider === "gemini" && await switchToGeminiFallback()) continue;
+          if (attemptTimedOut && activeProvider === "gemini" && await switchToGeminiFallback("stream_idle")) continue;
           if (attemptTimedOut && modelIdleRetries < 1 && !controller.signal.aborted) {
             modelIdleRetries++;
             req.log.warn({ provider: activeProvider, model: activeModel, retry: modelIdleRetries }, "Agent stream stalled; retrying the same model");
@@ -420,7 +451,15 @@ export function createAgentRouter({
       const status = error instanceof GeminiAgentApiError
         ? error.status
         : error instanceof Groq.APIError ? error.status : undefined;
-      req.log.error({ event: "agent.stream.failed", provider: activeProvider, model: activeModel, status, timedOut, durationMs: Date.now() - startedAt }, "Agent stream failed");
+      req.log.error({
+        event: "agent.stream.failed",
+        provider: activeProvider,
+        model: activeModel,
+        status,
+        timedOut,
+        ...safeAgentFailureDetails(error),
+        durationMs: Date.now() - startedAt,
+      }, "Agent stream failed");
       const message = timedOut
         ? "Nexo Agent timed out. Your partial answer is kept; please try again."
         : error instanceof AgentPublicError
