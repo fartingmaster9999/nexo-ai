@@ -1,12 +1,24 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useSceneTimer } from '@/lib/video';
 
 const EASE = [0.2, 0.85, 0.25, 1] as const;
 
 export function Scene1({ sceneIndex: _sceneIndex }: { sceneIndex: number }) {
-  const [copyVisible, setCopyVisible] = useState(true);
-  useSceneTimer([{ time: 1500, callback: () => setCopyVisible(false) }]);
+  const [copyBeat, setCopyBeat] = useState<'hook' | 'brand' | 'slogan' | null>('hook');
+  const [shuttersOpen, setShuttersOpen] = useState(false);
+
+  useSceneTimer([
+    {
+      time: 650,
+      callback: () => {
+        setCopyBeat('brand');
+        setShuttersOpen(true);
+      },
+    },
+    { time: 1700, callback: () => setCopyBeat('slogan') },
+    { time: 2900, callback: () => setCopyBeat(null) },
+  ]);
 
   return (
     <motion.section
@@ -31,23 +43,41 @@ export function Scene1({ sceneIndex: _sceneIndex }: { sceneIndex: number }) {
       <motion.div
         className="absolute left-0 top-0 z-20 h-full w-[38%] bg-[#020711]"
         initial={{ x: 0 }}
-        animate={{ x: '-104%' }}
-        transition={{ delay: 0.02, duration: 0.34, ease: EASE }}
+        animate={{ x: shuttersOpen ? '-104%' : 0 }}
+        transition={{ duration: 0.34, ease: EASE }}
       />
       <motion.div
         className="absolute right-0 top-0 z-20 h-full w-[38%] bg-[#020711]"
         initial={{ x: 0 }}
-        animate={{ x: '104%' }}
-        transition={{ delay: 0.02, duration: 0.34, ease: EASE }}
+        animate={{ x: shuttersOpen ? '104%' : 0 }}
+        transition={{ duration: 0.34, ease: EASE }}
       />
-      <motion.h1
-        className="nexo-display absolute left-[6%] top-[8%] z-40 m-0 max-w-[54%] text-[8.3vmin] leading-[0.96] text-[#f5f8ff]"
-        initial={{ opacity: 0, y: 22, scale: 0.98 }}
-        animate={copyVisible ? { opacity: 1, y: 0, scale: 1 } : { opacity: 0, y: -12, scale: 0.99 }}
-        transition={{ delay: copyVisible ? 0.12 : 0, duration: copyVisible ? 0.35 : 0.24, ease: EASE }}
-      >
-        Give it the <span className="text-[#70b5ff]">goal.</span>
-      </motion.h1>
+      <h1 className="nexo-display absolute left-[6%] top-[8%] z-40 m-0 max-w-[54%] text-[8.3vmin] leading-[0.96] text-[#f5f8ff]">
+        <AnimatePresence mode="wait" initial={false}>
+          {copyBeat && (
+            <motion.span
+              key={copyBeat}
+              className="block"
+              initial={{ opacity: 0, y: 18, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -14, scale: 0.99 }}
+              transition={{ duration: 0.2, ease: EASE }}
+            >
+              {copyBeat === 'hook' && 'A new way to work.'}
+              {copyBeat === 'brand' && (
+                <>
+                  Meet <span className="text-[#70b5ff]">Nexo</span> Agent.
+                </>
+              )}
+              {copyBeat === 'slogan' && (
+                <>
+                  Give it the <span className="text-[#70b5ff]">goal.</span>
+                </>
+              )}
+            </motion.span>
+          )}
+        </AnimatePresence>
+      </h1>
     </motion.section>
   );
 }
