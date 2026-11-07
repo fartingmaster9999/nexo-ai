@@ -7,3 +7,4 @@
 - [Theme contrast](theme-contrast.md) — Theme checks must measure rendered text, control, border, and focus colors across palettes.
 - [Chat reliability](chat-reliability.md) — Preserve legacy history and partial replies; prune complete context turns without silent prompt truncation or automatic regeneration.
 - [Hosting portability](hosting-portability.md) — Support independent Vercel hosting while preserving Replit development and Groq-only inference.
+- [Validated .replit edits](replit-config-editing.md) — Replace `.replit` through Replit's TOML validation callback; direct patches are blocked.

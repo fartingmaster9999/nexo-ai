@@ -139,6 +139,11 @@ await withFixture('tests/widgets.html', async ({ cdp, evaluate, navigate, reques
   assert.equal(renderedMath.code, '$literal math$ and \\(literal\\)', 'Inline code containing math delimiters stays literal');
   assert.equal(renderedMath.codeMath, false, 'Math rendering does not enter inline code');
   assert.match(await evaluate(`Array.from(document.querySelectorAll('.message-row.assistant')).at(-1).textContent`), /Ordinary text keeps its spacing/);
+  await send('raw math');
+  await settled();
+  const rawMath = await evaluate(`(() => { const row=Array.from(document.querySelectorAll('.message-row.assistant')).at(-1); return {display:row.querySelectorAll('.katex-display').length, errors:row.querySelectorAll('.katex-error').length}; })()`);
+  assert.ok(rawMath.display >= 2, 'Standalone raw TeX and plain equations render instead of appearing as source');
+  assert.equal(rawMath.errors, 0, 'Recognized raw formula examples render without KaTeX errors');
   await send('broken math notation');
   await settled();
   const brokenMath = await evaluate(`(() => { const row=Array.from(document.querySelectorAll('.message-row.assistant')).at(-1); return {error:row.querySelector('.katex-error')?.textContent, unsupported:row.querySelector('.katex-html')?.textContent, text:row.textContent}; })()`);

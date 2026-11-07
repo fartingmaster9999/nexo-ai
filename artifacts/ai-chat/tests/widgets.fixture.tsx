@@ -20,6 +20,7 @@ window.fetch = async (input, init) => {
   let content = 'A normal **Markdown** answer, with no interactive widget.';
   if (prompt.includes('quiz')) content = 'Try these biology questions.\n\n' + fence(quiz);
   else if (prompt.includes('expression plot')) content = fence(expression);
+  else if (prompt.includes('raw math')) content = 'A formula without delimiters:\n\n\\frac{a+b}{c}\n\nA plain equation:\n\nx^2 + y^2 = z^2';
   else if (prompt.includes('render math')) content = 'Ordinary text keeps its spacing with an inline formula $x^2 + y^2 = z^2$.\n\n' +
     'The standalone equation follows:\n\n$$\n\\int_0^1 x^2\\,dx = \\frac{1}{3}\n$$\n\n' +
     'The bracketed display form follows:\n\n\\[\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}\\]\n\n' +

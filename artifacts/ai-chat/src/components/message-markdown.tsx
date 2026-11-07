@@ -72,6 +72,7 @@ const INLINE_OPEN = '\\(';
 const INLINE_CLOSE = '\\)';
 const DISPLAY_OPEN = '\\[';
 const DISPLAY_CLOSE = '\\]';
+const RAW_TEX_COMMAND = /\\(?:frac|dfrac|tfrac|sqrt|sum|prod|int|oint|lim|alpha|beta|gamma|delta|theta|pi|sigma|mu|infty|cdot|times|leq|geq|neq|approx|equiv|partial|nabla|text|left|right|begin|end|overline|underline|hat|bar|vec|boxed|mathbb|mathcal|mathrm|operatorname|sin|cos|tan|log|ln|exp|pm|mp|rightarrow|to|implies|therefore|quad|qquad|cases|matrix|det|Pr|mathbf|dots)\b/;
 
 function isEscapedAt(source: string, index: number) {
   let slashes = 0;
@@ -116,6 +117,33 @@ function findMathOpening(source: string, from: number) {
   return null;
 }
 
+function isBareMathLine(line: string) {
+  const trimmed = line.trim();
+  if (!trimmed || line.startsWith('    ') || line.startsWith('\t') || /[`$]/.test(trimmed)
+    || trimmed.includes(INLINE_OPEN) || trimmed.includes(DISPLAY_OPEN)) return false;
+
+  const hasTexCommand = RAW_TEX_COMMAND.test(trimmed);
+  const hasEquationSyntax = /[=<>^_∑∫√±×÷≤≥≠≈]/.test(trimmed);
+  if (!hasTexCommand && !hasEquationSyntax) return false;
+
+  if (hasTexCommand) {
+    const prose = trimmed.replace(/\\[A-Za-z]+/g, ' ').replace(/[{}[\]\\]/g, ' ');
+    const words = prose.match(/[A-Za-z]{3,}/g) ?? [];
+    return words.length <= 2;
+  }
+
+  const words = trimmed.match(/[A-Za-z]{3,}/g) ?? [];
+  return words.length === 0 && /[A-Za-z0-9]/.test(trimmed);
+}
+
+/** Render unwrapped, standalone formulas without changing fenced or inline code. */
+function normalizeBareMathLines(source: string) {
+  return source.split(/(\r?\n)/).map((line) => {
+    if (line === '\n' || line === '\r\n' || !isBareMathLine(line)) return line;
+    return `\n\n$$\n${line.trim()}\n$$\n\n`;
+  }).join('');
+}
+
 /** Convert common TeX delimiters without touching fenced or inline code source. */
 function normalizeMathSegment(source: string) {
   let output = '';
@@ -153,11 +181,10 @@ function normalizeMathSegment(source: string) {
     output += isDisplay ? `\n\n$$\n${expression}\n$$\n\n` : `$${expression}$`;
     cursor = end + close.length;
   }
-  return output;
+  return normalizeBareMathLines(output);
 }
 
 function normalizeMathDelimiters(source: string) {
-  if (!source.includes(INLINE_OPEN) && !source.includes(DISPLAY_OPEN)) return source;
   const codeBlocks = fencedBlocks(source);
   if (codeBlocks.length === 0) return normalizeMathSegment(source);
 
