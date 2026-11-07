@@ -102,6 +102,32 @@ test("unsafe source URLs are excluded and retrieved context stays bounded", asyn
   assert.doesNotMatch(result.context, /must not appear|localhost|user:pass/);
 });
 
+test("sources distinguish readable page text from blocked or short-page excerpts", async () => {
+  const search = createWebSearch({
+    firecrawlSearch: async () => firecrawlResponse([
+      usablePage({ markdown: `  ${"Readable page text. ".repeat(15)}  ` }),
+      usablePage({
+        title: "Blocked page",
+        url: "https://example.com/blocked",
+        description: "Only this search-result description was available.",
+      }),
+      usablePage({
+        title: "Short page",
+        url: "https://example.com/short",
+        description: "Short page search result.",
+        markdown: "A page returned too little text to verify.",
+      }),
+    ]),
+  });
+
+  const result = await search("page retrieval labels");
+  assert.deepEqual(result.sources.map(({ retrieval }) => retrieval), ["page", "search_excerpt", "search_excerpt"]);
+  assert.match(result.context, /Scraped page:/);
+  assert.match(result.context, /Search excerpt only:/);
+  assert.match(result.context, /Only this search-result description was available/);
+  assert.doesNotMatch(result.context, /A page returned too little text to verify/);
+});
+
 test("successful results are cached until their deterministic expiry", async () => {
   let clock = 5000;
   let calls = 0;

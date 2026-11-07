@@ -9,6 +9,7 @@
 export * from './agentChatInput';
 export * from './agentChatInputAgentProvider';
 export * from './agentSource';
+export * from './agentSourceRetrieval';
 export * from './agentToolArguments';
 export * from './agentToolArgumentsLanguage';
 export * from './agentToolExchange';

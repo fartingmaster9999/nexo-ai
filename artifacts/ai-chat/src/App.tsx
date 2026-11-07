@@ -476,7 +476,16 @@ function Home() {
           const incoming = eventData.sources.filter((src) => src && typeof src.url === 'string' && /^https?:\/\//i.test(src.url));
           if (incoming.length) patchLast((m) => {
             const list = [...(m.sources ?? [])];
-            incoming.forEach((src) => { if (!list.some((x) => x.url === src.url)) list.push({ title: String(src.title ?? ''), url: src.url }); });
+            incoming.forEach((src) => {
+              const clean = {
+                title: String(src.title ?? ''),
+                url: src.url,
+                ...(src.retrieval === 'page' || src.retrieval === 'search_excerpt' ? { retrieval: src.retrieval } : {}),
+              };
+              const existingIndex = list.findIndex((source) => source.url === clean.url);
+              if (existingIndex === -1) list.push(clean);
+              else list[existingIndex] = { ...list[existingIndex], ...clean };
+            });
             return { ...m, sources: list };
           });
         }

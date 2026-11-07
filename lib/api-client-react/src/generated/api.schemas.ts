@@ -119,11 +119,20 @@ export interface AgentToolArguments {
   code?: string;
 }
 
+export type AgentSourceRetrieval = typeof AgentSourceRetrieval[keyof typeof AgentSourceRetrieval];
+
+
+export const AgentSourceRetrieval = {
+  page: 'page',
+  search_excerpt: 'search_excerpt',
+} as const;
+
 export interface AgentSource {
   /** @maxLength 300 */
   title: string;
   /** @maxLength 2048 */
   url: string;
+  retrieval?: AgentSourceRetrieval;
 }
 
 export interface AgentToolExchange {

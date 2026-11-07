@@ -300,3 +300,8 @@ body::before { content:''; position:fixed; inset:0; pointer-events:none; backgro
 .activity-sources a { display:flex; align-items:center; gap:6px; color:hsl(var(--primary)); text-decoration:none; padding:2px 0; overflow:hidden; }
 .activity-sources a span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .activity-sources a:hover span { text-decoration:underline; }
+.activity-source-section { margin-top:12px; }
+.activity-sources { margin:0; padding:0; list-style:none; }
+.activity-sources li { margin:4px 0; }
+.activity-sources a { justify-content:space-between; }
+.source-retrieval { flex:0 0 auto; color:hsl(var(--muted-foreground)); font-size:10px; white-space:nowrap; }

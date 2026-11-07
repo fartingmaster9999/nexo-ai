@@ -4,7 +4,7 @@ import { splitReasoning } from '../lib/reasoning-sections';
 import type { QuizProgress } from '../lib/interactive-widgets';
 
 export type Activity = { id: string; label: string; kind?: 'search' | 'thinking' | 'info' | 'code'; status?: 'running' | 'complete' | 'error' };
-export type Source = { title: string; url: string };
+export type Source = { title: string; url: string; retrieval?: 'page' | 'search_excerpt' };
 export type Notice = { id: string; message: string; model?: string };
 export type ChatMessage = {
   id?: string;
@@ -106,7 +106,8 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
   const searching = isSearching(message, live);
   const agentMode = message.agentMode === true;
   const hasActivity = (message.activity ?? []).length > 0;
-  if (!live && !reasoning && !hasActivity) return null;
+  const hasSources = (message.sources ?? []).length > 0;
+  if (!live && !reasoning && !hasActivity && !hasSources) return null;
   const runningLabel = searching ? [...(message.activity ?? [])].reverse().find((a) => a.kind === 'search' && a.status === 'running')?.label : undefined;
   const bodyId = `progress-body-${index}`;
   const sections = open && !agentMode ? splitReasoning(reasoning) : [];
@@ -114,7 +115,7 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
     <div className={`term ${live ? 'is-live' : ''}`} data-testid={`panel-progress-${index}`}>
       <button type="button" className="term-head" aria-expanded={open} aria-controls={open ? bodyId : undefined} aria-label={`${open ? 'Hide' : 'Show'} ${agentMode ? 'Agent activity' : 'model reasoning'}`} onClick={() => setOpen((v) => !v)} data-testid={`toggle-progress-${index}`}>
         <span className="term-prompt" aria-hidden="true">&gt;&gt;&gt;</span>
-        <span className="term-title">{agentMode ? (live ? 'Agent is working' : 'Agent activity') : message.deepthink ? (live ? 'Deepthinking' : 'Deepthink reasoning') : (live ? 'Thinking' : 'Thought process')}{live && <span className="term-ellipsis" aria-hidden="true" />}</span>
+        <span className="term-title">{agentMode ? (live ? 'Agent is working' : 'Agent activity') : !live && hasSources && !reasoning && !hasActivity ? 'Sources' : message.deepthink ? (live ? 'Deepthinking' : 'Deepthink reasoning') : (live ? 'Thinking' : 'Thought process')}{live && <span className="term-ellipsis" aria-hidden="true" />}</span>
         <ChevronDown size={13} className={`term-chev ${open ? 'is-open' : ''}`} aria-hidden="true" />
       </button>
       {searching && (
@@ -145,6 +146,28 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
             </div>
           ) : (
             <p className="term-note">{live ? 'Waiting for model reasoning…' : 'No reasoning trace was returned for this response.'}</p>
+          )}
+          {hasSources && (
+            <section className="activity-source-section" aria-label="Sources used">
+              <h3 className="activity-head">Sources</h3>
+              <ul className="activity-sources">
+                {message.sources!.map((source) => {
+                  const retrievalLabel = source.retrieval === 'page'
+                    ? 'Page read'
+                    : source.retrieval === 'search_excerpt'
+                      ? 'Search excerpt'
+                      : 'Retrieval level unavailable';
+                  return (
+                    <li key={source.url}>
+                      <a href={source.url} target="_blank" rel="noopener noreferrer">
+                        <span>{source.title}</span>
+                        <small className={`source-retrieval${source.retrieval ? ` is-${source.retrieval.replace('_', '-')}` : ' is-unknown'}`}>{retrievalLabel}</small>
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
           )}
         </div>
       )}

@@ -5,10 +5,12 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AgentSourceRetrieval } from './agentSourceRetrieval';
 
 export interface AgentSource {
   /** @maxLength 300 */
   title: string;
   /** @maxLength 2048 */
   url: string;
+  retrieval?: AgentSourceRetrieval;
 }

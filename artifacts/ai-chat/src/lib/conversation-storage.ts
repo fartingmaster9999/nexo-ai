@@ -27,7 +27,11 @@ export function parseConversation(value: unknown): Conversation | null {
     ...(typeof m.deepthink === 'boolean' ? { deepthink: m.deepthink } : {}),
     ...(typeof m.model === 'string' ? { model: m.model } : {}),
     activity: Array.isArray(m.activity) ? m.activity.filter(a => a && typeof a.id === 'string' && typeof a.label === 'string') : [],
-    sources: Array.isArray(m.sources) ? m.sources.filter(s => s && typeof s.title === 'string' && typeof s.url === 'string' && /^https?:\/\//i.test(s.url)) : [],
+    sources: Array.isArray(m.sources) ? m.sources.filter(s => s && typeof s.title === 'string' && typeof s.url === 'string' && /^https?:\/\//i.test(s.url)).map(s => ({
+      title: s.title,
+      url: s.url,
+      ...(s.retrieval === 'page' || s.retrieval === 'search_excerpt' ? { retrieval: s.retrieval } : {}),
+    })) : [],
     notices: Array.isArray(m.notices) ? m.notices.filter(n => n && typeof n.id === 'string' && typeof n.message === 'string') : [],
   })) };
 }

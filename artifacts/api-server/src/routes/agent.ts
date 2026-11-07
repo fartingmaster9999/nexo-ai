@@ -43,11 +43,17 @@ function safeResultText(result: string) {
   return result.slice(0, MAX_AGENT_RESULT_CHARS);
 }
 
-function cleanSources(sources: SearchResult["sources"]) {
+function cleanSources(sources: { title: string; url: string; retrieval?: "page" | "search_excerpt" }[]) {
   return sources
     .filter((source) => isPublicUrl(source.url))
     .slice(0, 5)
-    .map((source) => ({ title: source.title.slice(0, 300), url: source.url.slice(0, 2048) }));
+    .map((source) => ({
+      title: source.title.slice(0, 300),
+      url: source.url.slice(0, 2048),
+      ...(source.retrieval === "page" || source.retrieval === "search_excerpt"
+        ? { retrieval: source.retrieval }
+        : {}),
+    }));
 }
 
 export function createAgentRouter({

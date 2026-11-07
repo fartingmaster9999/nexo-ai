@@ -4,8 +4,13 @@ import { isPublicUrl, scrapePublicSearch as defaultScrapePublicSearch, type Scra
 import { logger } from "./logger";
 
 type SearchPage = ScrapedPage;
+const MIN_PAGE_TEXT_CHARS = 200;
+function hasReadablePageText(markdown: string | undefined): markdown is string {
+  return typeof markdown === "string" && markdown.replace(/\s+/g, " ").trim().length >= MIN_PAGE_TEXT_CHARS;
+}
+
 export type SearchResult = {
-  sources: { title: string; url: string }[];
+  sources: { title: string; url: string; retrieval: "page" | "search_excerpt" }[];
   context: string;
   cached: boolean;
   provider: "firecrawl" | "public-scraper";
@@ -81,9 +86,19 @@ export function createWebSearch({
       if (!sources.length) throw new Error("No usable public sources were found");
       const context = sources.map((source, i) => {
         const page = pages.find((p) => p.url === source.url);
-        return `[${i + 1}] ${source.title}\n${source.url}\n${page?.markdown ? "Scraped page:" : "Search excerpt only:"} ${(page?.markdown || page?.description || "").slice(0, 1900)}`;
+        const markdown = page?.markdown;
+        const pageRead = hasReadablePageText(markdown);
+        return `[${i + 1}] ${source.title}\n${source.url}\n${pageRead ? "Scraped page:" : "Search excerpt only:"} ${(pageRead ? markdown : page?.description || "").slice(0, 1900)}`;
       }).join("\n\n").slice(0, 6500);
-      const result: SearchResult = { sources, context, cached: false, provider };
+      const result: SearchResult = {
+        sources: sources.map((source) => {
+          const page = pages.find((candidate) => candidate.url === source.url);
+          return { ...source, retrieval: hasReadablePageText(page?.markdown) ? "page" : "search_excerpt" };
+        }),
+        context,
+        cached: false,
+        provider,
+      };
       if (cache.size >= 100) cache.delete(cache.keys().next().value!);
       cache.set(key, { expires: now() + cacheTtlMs, result });
       return result;

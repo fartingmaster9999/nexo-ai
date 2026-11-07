@@ -413,7 +413,7 @@ test("Agent searches only when the model requests it and continues with bounded 
       return {
         context: "Release notes published recently.",
         sources: [
-          { title: "Release notes", url: "https://example.com/releases/latest" },
+          { title: "Release notes", url: "https://example.com/releases/latest", retrieval: "search_excerpt" },
           { title: "Private target", url: "http://127.0.0.1/private" },
         ],
       };
@@ -427,6 +427,7 @@ test("Agent searches only when the model requests it and continues with bounded 
     assert.equal(response.status, 200);
     const events = await readEvents(response);
     assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "The latest release changed the interface.");
+    assert.equal(events.find((event) => event.sources)?.sources[0].retrieval, "search_excerpt");
     assert.equal(events.some((event) => event.sources?.some((source) => source.url === "http://127.0.0.1/private")), false);
     assert.equal(events.at(-1).done, true);
   });
