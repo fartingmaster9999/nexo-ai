@@ -612,26 +612,38 @@ test("Agent reports unavailable search without claiming facts were verified", as
   });
 });
 
-test("Agent sanitizes provider errors instead of exposing upstream bodies", async () => {
-  for (const [status, expected] of [[401, /could not authorize/], [429, /temporarily rate-limited/]]) {
-    await withServer(createSseApp({
-      fetchImpl: async () => new Response("SENSITIVE_PROVIDER_BODY", { status }),
-    }), async (url) => {
-      const response = await fetch(url, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
-      });
-      const body = await response.text();
-      assert.match(body, expected);
-      assert.equal(body.includes("SENSITIVE_PROVIDER_BODY"), false);
+test("Agent sanitizes failed image requests without emitting image bytes or provider errors", async () => {
+  const image = {
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==",
+  };
+  const providerError = `SENSITIVE_PROVIDER_BODY:${image.data}`;
+  await withServer(createSseApp({
+    fetchImpl: async () => new Response(providerError, { status: 401 }),
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, image }),
     });
-  }
+    const body = await response.text();
+    assert.match(body, /could not authorize/);
+    assert.equal(body.includes("SENSITIVE_PROVIDER_BODY"), false);
+    assert.equal(body.includes(image.data), false, "image bytes are absent from emitted error events");
+  });
 });
 
-test("closing the Agent response aborts the in-flight Gemini request", async () => {
+test("cancelling an image-bearing Agent request aborts its in-flight Gemini request", async () => {
+  const image = {
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==",
+  };
   let upstreamSignal;
+  let upstreamBody;
   await withServer(createSseApp({
     fetchImpl: async (_url, init) => {
       upstreamSignal = init.signal;
+      upstreamBody = JSON.parse(init.body);
       let source;
       const body = new ReadableStream({
         start(controller) {
@@ -651,21 +663,25 @@ test("closing the Agent response aborts the in-flight Gemini request", async () 
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, image }),
       signal: controller.signal,
     });
     const reader = response.body.getReader();
     const first = await reader.read();
-    assert.match(new TextDecoder().decode(first.value), /gemini-3\.8-flash/);
+    const emittedBeforeCancellation = new TextDecoder().decode(first.value);
+    assert.match(emittedBeforeCancellation, /gemini-3\.8-flash/);
+    assert.equal(emittedBeforeCancellation.includes(image.data), false, "emitted Agent events never contain image bytes");
     for (let attempt = 0; attempt < 50 && !upstreamSignal; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.ok(upstreamSignal, "Gemini request was started");
+    assert.deepEqual(upstreamBody.contents[0].parts[1], { inlineData: image });
     controller.abort();
     for (let attempt = 0; attempt < 50 && !upstreamSignal.aborted; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.equal(upstreamSignal.aborted, true);
+    assert.equal(emittedBeforeCancellation.includes(image.data), false);
     await reader.cancel().catch(() => {});
   });
 });

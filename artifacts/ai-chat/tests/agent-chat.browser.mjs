@@ -21,6 +21,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await evaluate(`(() => {
     const originalFetch = window.fetch.bind(window);
     window.__agentRequests = [];
+    window.__agentAbortObserved = false;
     window.fetch = async (input, init = {}) => {
       const url = typeof input === "string" ? input : input.url;
       if (url.endsWith("/api/agent")) {
@@ -113,6 +114,26 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
             headers: { "Content-Type": "text/event-stream" }
           });
         }
+        if (window.__agentRequests.length === 9) {
+          const events = [
+            { model: "gemini-3.8-flash" },
+            { activity: { id: "agent-finished", label: "Agent run was interrupted", kind: "info", status: "error" } },
+            { error: "Nexo Agent could not complete this request. Please try again." }
+          ];
+          return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
+            headers: { "Content-Type": "text/event-stream" }
+          });
+        }
+        if (window.__agentRequests.length === 10) {
+          return new Promise((_, reject) => {
+            const abort = () => {
+              window.__agentAbortObserved = true;
+              reject(new DOMException("Request stopped", "AbortError"));
+            };
+            if (init.signal?.aborted) abort();
+            else init.signal?.addEventListener("abort", abort, { once: true });
+          });
+        }
         const events = [
           {
             content: window.__agentRequests.length === 5
@@ -192,6 +213,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.equal(qwenRequests[1].body.agentHistory[0].callId, "qwen-browser-code");
   assert.match(qwenRequests[1].body.agentHistory[0].result, /qwen-run-ok/);
 
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-send-message"]'))`), "composer after Qwen response");
   await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
   await cdp("Input.insertText", { text: "Build and preview a small HTML page, then fix its runtime error." });
   await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
@@ -208,9 +230,33 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.equal(await evaluate(`document.querySelector('[data-testid="frame-preview"]').getAttribute("sandbox")`), "allow-scripts");
   assert.ok(await evaluate(`document.querySelector(".cm-content")?.textContent.includes("Corrected preview")`), "The revised HTML is shown in the workspace editor");
 
+  await cdp("DOM.setFileInputFiles", { nodeId: imageInput, files: [imagePath] });
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="image-attachment-preview"]'))`), "image attachment for failed Agent request");
+  await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
+  await cdp("Input.insertText", { text: "Analyze this image after a provider failure." });
+  await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
+  await waitFor(() => evaluate(`window.__agentRequests.length === 9`), "failed image-bearing Agent request");
+  await waitFor(() => evaluate(`document.body.textContent.includes("Nexo Agent could not complete this request. Please try again.")`), "safe Agent failure message");
+  const failedImageRequest = await evaluate(`window.__agentRequests[8]`);
+  assert.equal(failedImageRequest.body.image.data, imageBase64);
+  await waitFor(() => evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes("Analyze this image after a provider failure.")`), "failed image request saved to chat");
+  await delay(600);
+  assert.equal(await evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes(${JSON.stringify(imageBase64)})`), false, "image bytes are absent from saved chat state after failure");
+
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-send-message"]'))`), "composer after failed Agent request");
+  await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
+  await cdp("Input.insertText", { text: "Stop this image-bearing request." });
+  await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
+  await waitFor(() => evaluate(`window.__agentRequests.length === 10`), "image-bearing request to cancel");
+  assert.equal((await evaluate(`window.__agentRequests[9]`)).body.image.data, imageBase64);
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-stop-response"]'))`), "Agent stop control");
+  await evaluate(`document.querySelector('[data-testid="button-stop-response"]').click()`);
+  await waitFor(() => evaluate(`window.__agentAbortObserved`), "browser abort signal on cancelled Agent request");
+  assert.equal(await evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes(${JSON.stringify(imageBase64)})`), false, "image bytes remain absent from saved chat state after cancellation");
+
   console.log(liveTool
     ? "Live Agent browser check passed: image upload, Gemini-generated code execution, and continuation result."
-    : "Agent browser checks passed: image upload, Agent routing, isolated code execution, HTML preview diagnostics and revision, continuation result, workspace output, and activity panel.");
+    : "Agent browser checks passed: image upload, Agent routing, isolated code execution, HTML preview diagnostics and revision, provider failure and cancellation, continuation result, workspace output, and activity panel.");
   await delay(50);
 });
 } finally {
