@@ -94,6 +94,7 @@ export type AgentToolExchangeTool = typeof AgentToolExchangeTool[keyof typeof Ag
 export const AgentToolExchangeTool = {
   web_search: 'web_search',
   run_code: 'run_code',
+  write_project: 'write_project',
 } as const;
 
 export type AgentToolArgumentsLanguage = typeof AgentToolArgumentsLanguage[keyof typeof AgentToolArgumentsLanguage];
@@ -104,6 +105,16 @@ export const AgentToolArgumentsLanguage = {
   javascript: 'javascript',
   html: 'html',
 } as const;
+
+export interface AgentProjectFile {
+  /**
+     * @minLength 1
+     * @maxLength 160
+     */
+  path: string;
+  /** @maxLength 12000 */
+  content: string;
+}
 
 export interface AgentToolArguments {
   /**
@@ -117,6 +128,17 @@ export interface AgentToolArguments {
      * @maxLength 20000
      */
   code?: string;
+  /**
+     * Project file to run in the isolated browser.
+     * @minLength 1
+     * @maxLength 160
+     */
+  entrypoint?: string;
+  /**
+     * @minItems 1
+     * @maxItems 8
+     */
+  files?: AgentProjectFile[];
 }
 
 export type AgentSourceRetrieval = typeof AgentSourceRetrieval[keyof typeof AgentSourceRetrieval];
@@ -176,6 +198,11 @@ export interface AgentChatInput {
      * @maxItems 6
      */
   agentHistory?: AgentToolExchange[];
+  /**
+     * Only project files the user explicitly selected to share with Agent.
+     * @maxItems 8
+     */
+  projectFiles?: AgentProjectFile[];
   image?: ImageAttachment;
 }
 

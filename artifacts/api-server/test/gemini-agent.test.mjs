@@ -48,8 +48,9 @@ test("Qwen Agent request enables bounded autonomous build-and-test tools", () =>
   assert.equal(request.reasoning_format, "parsed");
   assert.equal(request.tool_choice, "auto");
   assert.equal(request.parallel_tool_calls, false);
-  assert.match(request.messages[0].content, /inspect the sandbox output, fix errors, and run it again/);
-  assert.deepEqual(request.tools.map((tool) => tool.function.name), ["web_search", "run_code"]);
+  assert.match(request.messages[0].content, /small app or multi-file project, use write_project/);
+  assert.deepEqual(request.tools.map((tool) => tool.function.name), ["web_search", "run_code", "write_project"]);
+  assert.deepEqual(request.tools.map((tool) => tool.function.name), ["web_search", "run_code", "write_project"]);
 });
 
 test("Qwen Agent decoder collects streamed tool arguments and rejects invalid JSON", async () => {
@@ -67,6 +68,18 @@ test("Qwen Agent decoder collects streamed tool arguments and rejects invalid JS
     })(), new AbortController().signal),
     /invalid Agent tool arguments/,
   );
+  const project = await collectGroqAgentResponse((async function* () {
+    yield { choices: [{ delta: { tool_calls: [{
+      index: 0,
+      id: "qwen-project",
+      function: { name: "write_project", arguments: JSON.stringify({
+        entrypoint: "index.html",
+        files: [{ path: "index.html", content: "<h1>Project</h1>" }],
+      }) },
+    }] } }] };
+  })(), new AbortController().signal);
+  assert.equal(project.calls[0].tool, "write_project");
+  assert.equal(project.calls[0].arguments.entrypoint, "index.html");
 });
 
 async function withServer(app, run) {
@@ -158,6 +171,14 @@ test("Agent decoder omits private thought text and validates bounded tool histor
   assert.equal(response.text, "Visible answer.");
   assert.deepEqual(response.calls, []);
   assert.equal(validateAgentHistory([]), null);
+  assert.equal(validateAgentHistory([{
+    tool: "write_project", callId: "project", thoughtSignature: "sig",
+    arguments: {
+      entrypoint: "index.html",
+      files: [{ path: "index.html", content: "<h1>Ready</h1>" }, { path: "styles.css", content: "body{}" }],
+    },
+    result: "The project preview loaded.",
+  }]), null);
   assert.match(validateAgentHistory([{
     tool: "run_code", callId: "x", thoughtSignature: "sig",
     arguments: { language: "powershell", code: "Write-Host 1" }, result: "no",
@@ -166,6 +187,22 @@ test("Agent decoder omits private thought text and validates bounded tool histor
     tool: "web_search", callId: "x", thoughtSignature: "sig",
     arguments: { query: "news" }, result: "x".repeat(8_001),
   }]), /invalid or too large/);
+  assert.match(validateAgentHistory([{
+    tool: "write_project", callId: "project", thoughtSignature: "sig",
+    arguments: { entrypoint: "../index.html", files: [{ path: "../index.html", content: "x" }] },
+    result: "x",
+  }]), /project history/);
+});
+
+test("Agent includes only user-selected project files in provider context", () => {
+  const projectFiles = [{ path: "src/main.js", content: "console.log('selected')" }];
+  const gemini = buildGeminiAgentRequest({ ...input, projectFiles });
+  const groq = buildGroqAgentRequest({ ...input, projectFiles });
+  assert.match(gemini.contents[0].parts[0].text, /src\/main\.js/);
+  assert.match(gemini.contents[0].parts[0].text, /selected/);
+  assert.doesNotMatch(gemini.contents[0].parts[0].text, /unselected/);
+  assert.match(groq.messages[1].content, /src\/main\.js/);
+  assert.doesNotMatch(groq.messages[1].content, /unselected/);
 });
 
 test("Agent route reports missing Gemini configuration without making an upstream call", async () => {
@@ -536,6 +573,75 @@ test("Agent sends code requests to the browser client and accepts its bounded ex
   assert.equal(requests[1].contents.at(-2).parts[0].functionCall.id, "code-1");
   assert.equal(requests[1].contents.at(-2).parts[0].thoughtSignature, "code-signature");
   assert.equal(requests[1].contents.at(-1).parts[0].functionResponse.response.result, "stdout: agent-ok");
+});
+
+test("Agent sends bounded project files to the browser client and accepts its run result", async () => {
+  const files = [
+    { path: "index.html", content: '<h1>Project</h1><link rel="stylesheet" href="styles.css">' },
+    { path: "styles.css", content: "h1 { color: navy; }" },
+  ];
+  const requests = [];
+  const fetchImpl = async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    return requests.length === 1
+      ? geminiResponse([modelEvent([{
+          functionCall: { name: "write_project", id: "project-1", args: { entrypoint: "index.html", files } },
+          thoughtSignature: "project-signature",
+        }])])
+      : geminiResponse([modelEvent([{ text: "The project preview is ready." }])]);
+  };
+  await withServer(createSseApp({ fetchImpl }), async (url) => {
+    const first = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const firstEvents = await readEvents(first);
+    const toolEvent = firstEvents.find((event) => event.agentTool)?.agentTool;
+    assert.equal(toolEvent.tool, "write_project");
+    assert.deepEqual(toolEvent.arguments, { files, entrypoint: "index.html" });
+    assert.equal(firstEvents.at(-1).done, true);
+
+    const continued = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        projectFiles: [{ path: "styles.css", content: "h1 { color: navy; }" }],
+        agentHistory: [{
+          tool: "write_project",
+          callId: toolEvent.callId,
+          thoughtSignature: toolEvent.thoughtSignature,
+          arguments: toolEvent.arguments,
+          result: "Project preview loaded with no browser errors.",
+        }],
+      }),
+    });
+    const continuationEvents = await readEvents(continued);
+    assert.equal(continuationEvents.filter((event) => event.content).map((event) => event.content).join(""), "The project preview is ready.");
+    assert.match(requests[1].contents[0].parts[0].text, /styles\.css/);
+    assert.doesNotMatch(requests[1].contents[0].parts[0].text, /not-selected\.js/);
+    assert.equal(requests[1].contents.at(-2).parts[0].functionCall.name, "write_project");
+    assert.equal(requests[1].contents.at(-1).parts[0].functionResponse.response.result, "Project preview loaded with no browser errors.");
+  });
+  assert.equal(requests.length, 2);
+});
+
+test("Agent rejects unselected project paths that escape the project boundary", async () => {
+  let calls = 0;
+  await withServer(createSseApp({ fetchImpl: async () => { calls++; return new Response(""); } }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        projectFiles: [{ path: "../private.js", content: "console.log('no')" }],
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /selected project files are invalid/i);
+  });
+  assert.equal(calls, 0);
 });
 
 test("Agent caps HTML previews at three runs and returns the limit to the model", async () => {

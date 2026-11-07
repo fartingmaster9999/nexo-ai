@@ -375,6 +375,19 @@ try {
   const recovered = await runPython('print("recovered after stop")');
   assert.ok(!recovered.error, recovered.error);
   assert.ok(recovered.outputs.some((item) => item.text === 'recovered after stop'));
+  await evaluate(`window.__workspaceFixture.open(false); window.__workspaceFixture.conversation('project-reopen-check'); window.__workspaceFixture.saveProject([
+    {path:'index.html',content:'<h1>Saved project</h1>'},
+    {path:'styles.css',content:'h1 { color: navy; }'}
+  ],'index.html',['styles.css'])`);
+  await waitFor(() => evaluate(`!document.querySelector('[data-testid="panel-workspace"]')`), 'close before reopening saved project');
+  await evaluate(`window.__workspaceFixture.open(true)`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="project-files-panel"]')?.textContent.includes("2 files")`), 'saved project reopens');
+  assert.equal(await evaluate(`document.querySelector('[aria-label="Share styles.css with Nexo"]')?.checked`), true, 'Selected project context survives workspace close and reopen');
+  await evaluate(`window.__workspaceFixture.open(false)`);
+  await waitFor(() => evaluate(`!document.querySelector('[data-testid="panel-workspace"]')`), 'close reopened project');
+  await evaluate(`window.__workspaceFixture.open(true)`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="project-files-panel"]')?.textContent.includes("Saved project")`), 'project survives a second workspace mount');
+  assert.equal(await evaluate(`document.querySelector('[aria-label="Share styles.css with Nexo"]')?.checked`), true, 'Selected files remain selected after a second reopen');
   await evaluate(`localStorage.setItem('nexo-conversation-v2:focus-check', ${JSON.stringify(JSON.stringify({
     conversation: { id: 'focus-check', title: 'Focus check', messages: [{ id: 'focus-message', role: 'user', content: 'Test keyboard focus.' }], createdAt: 1, updatedAt: 2 },
     updatedAt: 2,

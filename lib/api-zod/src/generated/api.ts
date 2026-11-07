@@ -95,6 +95,14 @@ export const streamAgentChatBodyAgentHistoryItemArgumentsQueryMax = 300;
 
 export const streamAgentChatBodyAgentHistoryItemArgumentsCodeMax = 20000;
 
+export const streamAgentChatBodyAgentHistoryItemArgumentsEntrypointMax = 160;
+
+export const streamAgentChatBodyAgentHistoryItemArgumentsFilesItemPathMax = 160;
+
+export const streamAgentChatBodyAgentHistoryItemArgumentsFilesItemContentMax = 12000;
+
+export const streamAgentChatBodyAgentHistoryItemArgumentsFilesMax = 8;
+
 export const streamAgentChatBodyAgentHistoryItemResultMax = 8000;
 
 export const streamAgentChatBodyAgentHistoryItemSourcesItemTitleMax = 300;
@@ -104,6 +112,12 @@ export const streamAgentChatBodyAgentHistoryItemSourcesItemUrlMax = 2048;
 export const streamAgentChatBodyAgentHistoryItemSourcesMax = 5;
 
 export const streamAgentChatBodyAgentHistoryMax = 6;
+
+export const streamAgentChatBodyProjectFilesItemPathMax = 160;
+
+export const streamAgentChatBodyProjectFilesItemContentMax = 12000;
+
+export const streamAgentChatBodyProjectFilesMax = 8;
 
 export const streamAgentChatBodyImageDataMin = 4;
 export const streamAgentChatBodyImageDataMax = 4194304;
@@ -121,13 +135,18 @@ export const StreamAgentChatBody = zod.object({
   "content": zod.string().min(1).max(streamAgentChatBodyMessagesItemContentMax)
 })).min(1).max(streamAgentChatBodyMessagesMax),
   "agentHistory": zod.array(zod.object({
-  "tool": zod.enum(['web_search', 'run_code']),
+  "tool": zod.enum(['web_search', 'run_code', 'write_project']),
   "callId": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemCallIdMax),
   "thoughtSignature": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemThoughtSignatureMax),
   "arguments": zod.object({
   "query": zod.string().min(streamAgentChatBodyAgentHistoryItemArgumentsQueryMin).max(streamAgentChatBodyAgentHistoryItemArgumentsQueryMax).optional(),
   "language": zod.enum(['python', 'javascript', 'html']).optional(),
-  "code": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsCodeMax).optional()
+  "code": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsCodeMax).optional(),
+  "entrypoint": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsEntrypointMax).optional().describe('Project file to run in the isolated browser.'),
+  "files": zod.array(zod.object({
+  "path": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsFilesItemPathMax),
+  "content": zod.string().max(streamAgentChatBodyAgentHistoryItemArgumentsFilesItemContentMax)
+})).min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsFilesMax).optional()
 }),
   "result": zod.string().max(streamAgentChatBodyAgentHistoryItemResultMax),
   "sources": zod.array(zod.object({
@@ -137,6 +156,10 @@ export const StreamAgentChatBody = zod.object({
   "retrievedAt": zod.coerce.date().optional().describe('When the search result was retrieved, not when the page was published')
 })).max(streamAgentChatBodyAgentHistoryItemSourcesMax).optional()
 })).max(streamAgentChatBodyAgentHistoryMax).optional().describe('Bounded prior tool call and result pairs for the current Agent run.'),
+  "projectFiles": zod.array(zod.object({
+  "path": zod.string().min(1).max(streamAgentChatBodyProjectFilesItemPathMax),
+  "content": zod.string().max(streamAgentChatBodyProjectFilesItemContentMax)
+})).max(streamAgentChatBodyProjectFilesMax).optional().describe('Only project files the user explicitly selected to share with Agent.'),
   "image": zod.object({
   "mimeType": zod.enum(['image/jpeg', 'image/png', 'image/webp']),
   "data": zod.string().min(streamAgentChatBodyImageDataMin).max(streamAgentChatBodyImageDataMax).regex(streamAgentChatBodyImageDataRegExp).describe('Base64-encoded image bytes without a data URL prefix')

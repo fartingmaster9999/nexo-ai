@@ -12,4 +12,5 @@ export type AgentToolExchangeTool = typeof AgentToolExchangeTool[keyof typeof Ag
 export const AgentToolExchangeTool = {
   web_search: 'web_search',
   run_code: 'run_code',
+  write_project: 'write_project',
 } as const;

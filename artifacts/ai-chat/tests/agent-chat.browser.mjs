@@ -138,12 +138,36 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
             else init.signal?.addEventListener("abort", abort, { once: true });
           });
         }
+        if (window.__agentRequests.length === 11) {
+          const files = [
+            { path: "index.html", content: "<!doctype html><html><head><title>Project</title><link rel=\\"stylesheet\\" href=\\"styles.css\\"></head><body><h1>Multi-file project</h1><script src=\\"app.js\\"></script></body></html>" },
+            { path: "styles.css", content: "body { color: navy; }" },
+            { path: "app.js", content: "document.body.dataset.projectReady = 'yes';" }
+          ];
+          const events = [
+            { agentTool: {
+              tool: "write_project",
+              callId: "browser-project-1",
+              thoughtSignature: "opaque-project-signature",
+              arguments: { entrypoint: "index.html", files },
+              history: []
+            } },
+            { done: true }
+          ];
+          return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
+            headers: { "Content-Type": "text/event-stream" }
+          });
+        }
         const events = [
           {
             content: window.__agentRequests.length === 5
               ? "Qwen Agent ran and checked its code."
               : window.__agentRequests.length === 8
                 ? "The HTML preview was corrected using its browser runtime diagnostics."
+                : window.__agentRequests.length === 12
+                  ? "Nexo saved and previewed the multi-file project."
+                  : window.__agentRequests.length === 13
+                    ? "The selected project file was included."
                 : "The isolated browser printed ${expectedOutput}."
           },
           { done: true }
@@ -265,9 +289,34 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await waitFor(() => evaluate(`window.__agentAbortObserved`), "browser abort signal on cancelled Agent request");
   assert.equal(await evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes(${JSON.stringify(imageBase64)})`), false, "image bytes remain absent from saved chat state after cancellation");
 
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-send-message"]'))`), "composer after cancelled request");
+  await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
+  await cdp("Input.insertText", { text: "Build a small multi-file browser project." });
+  await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
+  await waitFor(() => evaluate(`window.__agentRequests.length === 12`), "multi-file project execution", 30000);
+  await waitFor(() => evaluate(`document.body.textContent.includes("Nexo saved and previewed the multi-file project.")`), "project Agent response", 20000);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="project-files-panel"]')?.textContent.includes("3 files")`), "visible saved project files");
+  assert.equal(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute('sandbox')`), "allow-scripts");
+  assert.equal(await evaluate(`document.querySelector('[data-testid="project-files-panel"]')?.textContent.includes("index.html")`), true);
+  const storedProject = await evaluate(`Object.entries(localStorage).find(([key]) => key.startsWith("nexo-project-v1:"))?.[1]`);
+  assert.ok(storedProject);
+  assert.equal(JSON.parse(storedProject).files.length, 3);
+  assert.deepEqual(JSON.parse(storedProject).selectedPaths, [], "files are not shared with Agent until the user selects them");
+  assert.equal((await evaluate(`window.__agentRequests[11].body.projectFiles`)), undefined, "the generated project is not implicitly re-sent as selected context");
+
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-send-message"]'))`), "composer after project Agent response");
+  await evaluate(`document.querySelector('[aria-label="Share styles.css with Nexo"]').click()`);
+  await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
+  await cdp("Input.insertText", { text: "Revise the selected project style." });
+  await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
+  await waitFor(() => evaluate(`window.__agentRequests.length === 13`), "selected project context request");
+  const selectedContext = await evaluate(`window.__agentRequests[12].body.projectFiles`);
+  assert.deepEqual(selectedContext, [{ path: "styles.css", content: "body { color: navy; }" }], "only the explicitly selected file is sent to Agent");
+  assert.equal(await evaluate(`JSON.parse(Object.entries(localStorage).find(([key]) => key.startsWith("nexo-project-v1:"))[1]).selectedPaths.join(',')`), "styles.css");
+
   console.log(liveTool
     ? "Live Agent browser check passed: image upload, Gemini-generated code execution, and continuation result."
-    : "Agent browser checks passed: image upload, Agent routing, isolated code execution, HTML preview diagnostics and revision, provider failure and cancellation, continuation result, workspace output, and activity panel.");
+    : "Agent browser checks passed: image upload, isolated code execution, HTML diagnostics and revision, multi-file project save/preview/selection, provider failure and cancellation, workspace output, and activity panel.");
   await delay(50);
 });
 } finally {

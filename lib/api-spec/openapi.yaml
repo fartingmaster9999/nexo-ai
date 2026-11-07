@@ -267,6 +267,12 @@ components:
           description: Bounded prior tool call and result pairs for the current Agent run.
           items:
             $ref: "#/components/schemas/AgentToolExchange"
+        projectFiles:
+          type: array
+          maxItems: 8
+          description: Only project files the user explicitly selected to share with Agent.
+          items:
+            $ref: "#/components/schemas/AgentProjectFile"
         image:
           $ref: "#/components/schemas/ImageAttachment"
       required:
@@ -276,7 +282,7 @@ components:
       properties:
         tool:
           type: string
-          enum: [web_search, run_code]
+          enum: [web_search, run_code, write_project]
         callId:
           type: string
           minLength: 1
@@ -315,6 +321,31 @@ components:
           type: string
           minLength: 1
           maxLength: 20000
+        entrypoint:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: Project file to run in the isolated browser.
+        files:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/AgentProjectFile"
+      additionalProperties: false
+    AgentProjectFile:
+      type: object
+      properties:
+        path:
+          type: string
+          minLength: 1
+          maxLength: 160
+        content:
+          type: string
+          maxLength: 12000
+      required:
+        - path
+        - content
       additionalProperties: false
     AgentSource:
       type: object

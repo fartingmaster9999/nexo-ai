@@ -6,6 +6,15 @@ import { copyRawCode, rawCodeFromSource } from '../src/lib/code-clipboard.ts';
 import { makePreviewHtml, sanitizePreviewDiagnostic } from '../src/lib/code-runner.ts';
 import { workspaceBounds, clampWorkspaceWidth } from '../src/lib/workspace-size.ts';
 import { loadEditorLanguage } from '../src/lib/editor-language.ts';
+import {
+  bundleHtmlProject,
+  createSavedProject,
+  deleteSavedProject,
+  readSavedProject,
+  selectedProjectFiles,
+  validateProjectFiles,
+  writeSavedProject,
+} from '../src/lib/project-workspace.ts';
 
 test('clipboard receives exact raw bytes and does not succeed before write resolves', async () => {
   const code = '\tprint("✓")  \r\n\n';
@@ -70,6 +79,49 @@ test('HTML preview is instrumented, network-restricted, and diagnostics are boun
   assert.equal(diagnostic.source, 'https://example.test/assets/app.js');
   assert.equal(diagnostic.line, 12);
   assert.equal(sanitizePreviewDiagnostic({ kind: 'unexpected', message: 'x' }), null);
+});
+
+test('project files are bounded, path-safe, isolated per conversation, and share only selections', () => {
+  const files = [
+    { path: 'index.html', content: '<h1>Project</h1>' },
+    { path: 'src/app.js', content: 'console.log("app")' },
+  ];
+  assert.throws(() => validateProjectFiles([{ path: '../secret', content: 'x' }]), /relative paths|letters, numbers/);
+  assert.throws(() => validateProjectFiles([{ path: 'x.js', content: 'x'.repeat(12_001) }]), /at most 12,000/);
+  assert.throws(() => validateProjectFiles(Array.from({ length: 9 }, (_, index) => ({ path: `${index}.js`, content: '' }))), /1–8 files/);
+
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  };
+  const project = createSavedProject(files, 'index.html', ['src/app.js']);
+  writeSavedProject(storage, 'chat/one', project);
+  assert.deepEqual(readSavedProject(storage, 'chat/one'), project);
+  assert.deepEqual(readSavedProject(storage, 'chat/two'), null);
+  assert.deepEqual(selectedProjectFiles(project), [files[1]]);
+  deleteSavedProject(storage, 'chat/one');
+  assert.deepEqual(readSavedProject(storage, 'chat/one'), null, 'deleting a conversation also removes its project record');
+});
+
+test('HTML project preview embeds only local CSS and classic JavaScript assets', () => {
+  const html = bundleHtmlProject([
+    { path: 'site/index.html', content: '<html><head><link rel="stylesheet" href="../styles/site.css"></head><body><h1>Local project</h1><script src="../scripts/app.js"></script></body></html>' },
+    { path: 'styles/site.css', content: 'h1 { color: navy; }' },
+    { path: 'scripts/app.js', content: 'document.body.dataset.loaded = "yes";' },
+  ], 'site/index.html');
+  assert.match(html, /<style>h1 \{ color: navy; \}<\/style>/);
+  assert.match(html, /<script>document\.body\.dataset\.loaded = "yes";<\/script>/);
+  assert.doesNotMatch(html, /href="\.\.\/styles/);
+  assert.doesNotMatch(html, /src="\.\.\/scripts/);
+  assert.throws(() => bundleHtmlProject([
+    { path: 'index.html', content: '<link rel="stylesheet" href="missing.css">' },
+  ], 'index.html'), /stylesheet.*not found/);
+  assert.throws(() => bundleHtmlProject([
+    { path: 'index.html', content: '<script type="module" src="app.js"></script>' },
+    { path: 'app.js', content: 'export {}' },
+  ], 'index.html'), /does not support JavaScript modules/);
 });
 
 test('editor modes are selected dynamically and repeated loads share a promise', async () => {

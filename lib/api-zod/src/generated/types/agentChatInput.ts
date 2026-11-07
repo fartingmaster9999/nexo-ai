@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AgentChatInputAgentProvider } from './agentChatInputAgentProvider';
+import type { AgentProjectFile } from './agentProjectFile';
 import type { AgentToolExchange } from './agentToolExchange';
 import type { ChatMessage } from './chatMessage';
 import type { ImageAttachment } from './imageAttachment';
@@ -30,5 +31,10 @@ export interface AgentChatInput {
      * @maxItems 6
      */
   agentHistory?: AgentToolExchange[];
+  /**
+     * Only project files the user explicitly selected to share with Agent.
+     * @maxItems 8
+     */
+  projectFiles?: AgentProjectFile[];
   image?: ImageAttachment;
 }

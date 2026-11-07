@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AgentProjectFile } from './agentProjectFile';
 import type { AgentToolArgumentsLanguage } from './agentToolArgumentsLanguage';
 
 export interface AgentToolArguments {
@@ -19,4 +20,15 @@ export interface AgentToolArguments {
      * @maxLength 20000
      */
   code?: string;
+  /**
+     * Project file to run in the isolated browser.
+     * @minLength 1
+     * @maxLength 160
+     */
+  entrypoint?: string;
+  /**
+     * @minItems 1
+     * @maxItems 8
+     */
+  files?: AgentProjectFile[];
 }

@@ -1,11 +1,12 @@
 import type { Activity, Source, Notice } from '../components/answer-details';
 import type { RunLanguage } from './code-runner';
+import { validateProjectFiles, type ProjectFile } from './project-workspace';
 
 export type AgentToolExchange = {
-  tool: 'web_search' | 'run_code';
+  tool: 'web_search' | 'run_code' | 'write_project';
   callId: string;
   thoughtSignature: string;
-  arguments: { query?: string; language?: RunLanguage; code?: string };
+  arguments: { query?: string; language?: RunLanguage; code?: string; entrypoint?: string; files?: ProjectFile[] };
   result: string;
   sources?: Source[];
 };
@@ -15,23 +16,39 @@ export type AgentToolRequest = {
   thoughtSignature: string;
   arguments: { language: RunLanguage; code: string };
   history: AgentToolExchange[];
+} | {
+  tool: 'write_project';
+  callId: string;
+  thoughtSignature: string;
+  arguments: { entrypoint: string; files: ProjectFile[] };
+  history: AgentToolExchange[];
 };
 export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentProvider?: 'gemini' | 'groq'; agentTool?: AgentToolRequest };
 
 function isAgentToolRequest(value: unknown): value is AgentToolRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const tool = value as Record<string, unknown>;
-  if (tool.tool !== 'run_code' || typeof tool.callId !== 'string' || !tool.callId || tool.callId.length > 128 ||
+  if ((tool.tool !== 'run_code' && tool.tool !== 'write_project') ||
+      typeof tool.callId !== 'string' || !tool.callId || tool.callId.length > 128 ||
       typeof tool.thoughtSignature !== 'string' || !tool.thoughtSignature || tool.thoughtSignature.length > 4096 ||
       !tool.arguments || typeof tool.arguments !== 'object' || Array.isArray(tool.arguments) ||
       !Array.isArray(tool.history) || tool.history.length > 6) return false;
   const args = tool.arguments as Record<string, unknown>;
-  if (!['python', 'javascript', 'html'].includes(String(args.language)) ||
-      typeof args.code !== 'string' || !args.code.trim() || args.code.length > 20_000) return false;
+  if (tool.tool === 'run_code') {
+    if (!['python', 'javascript', 'html'].includes(String(args.language)) ||
+        typeof args.code !== 'string' || !args.code.trim() || args.code.length > 20_000) return false;
+  } else {
+    try {
+      const files = validateProjectFiles(args.files);
+      if (typeof args.entrypoint !== 'string' || !files.some((file) => file.path === args.entrypoint)) return false;
+    } catch {
+      return false;
+    }
+  }
   return tool.history.every((entry) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
     const exchange = entry as Record<string, unknown>;
-    return (exchange.tool === 'web_search' || exchange.tool === 'run_code')
+    return (exchange.tool === 'web_search' || exchange.tool === 'run_code' || exchange.tool === 'write_project')
       && typeof exchange.callId === 'string'
       && typeof exchange.thoughtSignature === 'string'
       && exchange.arguments !== null && typeof exchange.arguments === 'object'

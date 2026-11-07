@@ -22,6 +22,15 @@ import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, t
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
 import { executeCode, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
 import type { AgentWorkspaceTask } from '@/components/code-workspace';
+import {
+  bundleHtmlProject,
+  createSavedProject,
+  deleteSavedProject,
+  projectLanguage,
+  readSavedProject,
+  selectedProjectFiles,
+  writeSavedProject,
+} from '@/lib/project-workspace';
 import { useConversations } from '@/hooks/use-conversations';
 import { hasSentUserMessage, type Conversation } from '@/lib/conversation-storage';
 import { prepareRequestMessages } from '@/lib/request-context';
@@ -293,6 +302,8 @@ function Home() {
       activeStreamId.current = null;
       setStreaming(false);
     }
+    try { deleteSavedProject(localStorage, conversation.id); }
+    catch { setError('The conversation was deleted, but its saved project files could not be removed from this browser.'); }
     setConversations((items) => items.filter((item) => item.id !== conversation.id));
     persistConversations();
     if (activeId === conversation.id) {
@@ -501,6 +512,16 @@ function Home() {
         };
         if (requestAgent && agentProvider.current === 'groq') requestBody.agentProvider = agentProvider.current;
         if (requestAgent && agentHistory.length) requestBody.agentHistory = agentHistory;
+        if (requestAgent) {
+          let savedProject = null;
+          try {
+            savedProject = readSavedProject(localStorage, conversationId);
+          } catch (error) {
+            throw new Error(error instanceof Error ? error.message : 'Saved project data could not be read.');
+          }
+          const sharedFiles = selectedProjectFiles(savedProject);
+          if (sharedFiles.length) requestBody.projectFiles = sharedFiles;
+        }
         if (encodedImage && agentProvider.current === 'gemini') requestBody.image = encodedImage;
         const endpoint = requestAgent ? '/api/agent' : requestImage ? '/api/chat/image' : '/api/chat';
         connectTimeout = window.setTimeout(() => controller.abort(new Error('The server did not respond in time. Please try again.')), 30000);
@@ -533,12 +554,39 @@ function Home() {
         if (agentHistory.length >= 6 || agentToolCalls >= 6) throw new Error('Nexo Agent reached its tool limit. Try a more focused request.');
         agentToolCalls += 1;
 
+        const isProject = tool.tool === 'write_project';
+        let projectEntrypoint: string | undefined;
+        let projectFiles: AgentWorkspaceTask['projectFiles'];
+        let language: AgentWorkspaceTask['language'];
+        let code: string;
+        if (tool.tool === 'write_project') {
+          projectEntrypoint = tool.arguments.entrypoint;
+          projectFiles = tool.arguments.files;
+          language = projectLanguage(projectEntrypoint);
+          code = projectFiles.find((file) => file.path === projectEntrypoint)?.content ?? '';
+        } else {
+          language = tool.arguments.language;
+          code = tool.arguments.code;
+        }
+        let projectStorageError = '';
+        if (projectFiles && projectEntrypoint) {
+          let selectedPaths: string[] = [];
+          try { selectedPaths = readSavedProject(localStorage, conversationId)?.selectedPaths ?? []; }
+          catch (error) { projectStorageError = error instanceof Error ? error.message : 'Saved project data could not be read.'; }
+          const nextProject = createSavedProject(projectFiles, projectEntrypoint, selectedPaths);
+          try {
+            if (!projectStorageError) writeSavedProject(localStorage, conversationId, nextProject);
+          } catch {
+            projectStorageError = 'Project changes could not be saved in this browser. Export a backup before leaving.';
+          }
+        }
         const task: AgentWorkspaceTask = {
           id: tool.callId,
-          language: tool.arguments.language,
-          code: tool.arguments.code,
+          language,
+          code,
           outputs: [],
           status: 'running',
+          ...(isProject ? { projectFiles, projectEntrypoint, projectStorageError: projectStorageError || undefined } : {}),
         };
         setAgentCodeTask(task);
         setWorkspaceOpen(true);
@@ -548,9 +596,12 @@ function Home() {
         let previewId: string | undefined;
         let previewDiagnostics: PreviewDiagnostic[] = [];
         try {
+          const executionCode = projectFiles && projectEntrypoint && language === 'html'
+            ? bundleHtmlProject(projectFiles, projectEntrypoint)
+            : code;
           const execution = await executeCode({
-            language: tool.arguments.language,
-            code: tool.arguments.code,
+            language,
+            code: executionCode,
             signal: controller.signal,
           });
           outputs = execution.outputs;
@@ -591,19 +642,21 @@ function Home() {
             : 'HTML preview loaded in the isolated browser; no runtime errors were reported.'
           : '';
         const resultText = [
+          projectStorageError ? `Project save error: ${projectStorageError}` : '',
           executionError ? `Execution error: ${executionError}` : '',
           outputText,
           previewText,
         ].filter(Boolean).join('\n').slice(0, 8000) || 'Execution completed with no text output.';
-        const codeHasErrors = Boolean(executionError || hasPreviewErrors);
-        const activityId = `agent-code-${tool.callId}`;
+        const codeHasErrors = Boolean(projectStorageError || executionError || hasPreviewErrors);
+        const activityId = `${isProject ? 'agent-project' : 'agent-code'}-${tool.callId}`;
         patchLast((message) => {
           const list = message.activity ?? [];
           const updated: Activity = {
             id: activityId,
             label: codeHasErrors
-              ? previewDiagnostics.length ? 'HTML preview reported runtime errors' : 'Browser code run returned an error'
-              : 'Code finished in the isolated browser',
+              ? projectStorageError ? 'Project could not be saved in this browser'
+                : previewDiagnostics.length ? 'HTML preview reported runtime errors' : 'Browser code run returned an error'
+              : isProject ? 'Project saved and run in the isolated browser' : 'Code finished in the isolated browser',
             kind: 'code',
             status: codeHasErrors ? 'error' : 'complete',
           };
@@ -615,10 +668,12 @@ function Home() {
           };
         });
         agentHistory = [...tool.history, {
-          tool: 'run_code',
+          tool: tool.tool,
           callId: tool.callId,
           thoughtSignature: tool.thoughtSignature,
-          arguments: { language: tool.arguments.language, code: tool.arguments.code },
+          arguments: isProject
+            ? { files: projectFiles, entrypoint: projectEntrypoint }
+            : { language: tool.arguments.language, code: tool.arguments.code },
           result: resultText,
         }];
       }

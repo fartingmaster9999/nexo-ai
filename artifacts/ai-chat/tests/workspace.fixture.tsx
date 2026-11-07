@@ -4,6 +4,7 @@ import { flushSync } from 'react-dom';
 import { MessageMarkdown } from '../src/components/message-markdown';
 import { SettingsDialog } from '../src/components/settings-dialog';
 import { executeCode } from '../src/lib/code-runner';
+import { createSavedProject, writeSavedProject } from '../src/lib/project-workspace';
 import type { RunLanguage } from '../src/lib/code-runner';
 import '../src/index.css';
 import '../src/nexo.css';
@@ -30,6 +31,8 @@ function Fixture() {
       openSettings: () => flushSync(() => setSettingsOpen(true)),
       generated: (value: RunLanguage, text: string) => flushSync(() => { setLanguage(value); setCode(text); }),
       conversation: (value: string) => flushSync(() => setConversation(value)),
+      saveProject: (files: { path: string; content: string }[], entrypoint: string, selectedPaths: string[] = []) =>
+        writeSavedProject(localStorage, conversation, createSavedProject(files, entrypoint, selectedPaths)),
       execute: executeCode,
     },
   });

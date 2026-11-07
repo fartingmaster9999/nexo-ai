@@ -16,6 +16,16 @@ import { CopyCodeButton } from './copy-code-button';
 import { useEditorLanguage } from '@/hooks/use-editor-language';
 import { useWorkspaceSize } from '@/hooks/use-workspace-size';
 import { useFocusTrap } from '@/hooks/use-focus-trap';
+import { ProjectFilesPanel } from './project-files-panel';
+import {
+  bundleHtmlProject,
+  createSavedProject,
+  projectLanguage,
+  readSavedProject,
+  writeSavedProject,
+  type ProjectFile,
+  type SavedProject,
+} from '@/lib/project-workspace';
 import './code-workspace.css';
 
 type Draft = { language: RunLanguage; code: string; edited: boolean };
@@ -29,6 +39,9 @@ export type AgentWorkspaceTask = {
   previewHtml?: string;
   previewId?: string;
   previewDiagnostics?: PreviewDiagnostic[];
+  projectFiles?: ProjectFile[];
+  projectEntrypoint?: string;
+  projectStorageError?: string;
 };
 const DRAFT_KEY = 'nexo-code-drafts-v1';
 const WRAP_KEY = 'nexo-code-wrap-v1';
@@ -70,6 +83,8 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const [previewComplete, setPreviewComplete] = useState(false);
   const [hasRun, setHasRun] = useState(false);
   const [storageError, setStorageError] = useState('');
+  const [project, setProject] = useState<SavedProject | null>(null);
+  const [activeProjectPath, setActiveProjectPath] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const consoleRef = useRef<HTMLDivElement>(null);
   const previewFrameRef = useRef<HTMLIFrameElement>(null);
@@ -104,6 +119,54 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   }, [wrapLines]);
 
   const genCode = generated?.code; const genLang = generated?.language;
+  useEffect(() => {
+    if (!conversationId) {
+      setProject(null);
+      setActiveProjectPath('');
+      return;
+    }
+    try {
+      const saved = readSavedProject(localStorage, conversationId);
+      setProject(saved);
+      setActiveProjectPath(saved?.entrypoint ?? saved?.files[0]?.path ?? '');
+      setStorageError('');
+    } catch (error) {
+      setProject(null);
+      setActiveProjectPath('');
+      setStorageError(error instanceof Error ? error.message : 'Saved project data could not be read.');
+    }
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!agentCode?.projectFiles || !agentCode.projectEntrypoint) return;
+    let previous: SavedProject | null = null;
+    let persistenceError = agentCode.projectStorageError ?? '';
+    try {
+      previous = conversationId ? readSavedProject(localStorage, conversationId) : null;
+    } catch (error) {
+      persistenceError ||= error instanceof Error ? error.message : 'Saved project data could not be read.';
+    }
+    const next = createSavedProject(agentCode.projectFiles, agentCode.projectEntrypoint, previous?.selectedPaths ?? []);
+    setProject(next);
+    setActiveProjectPath(next.entrypoint);
+    if (conversationId && !persistenceError) {
+      try { writeSavedProject(localStorage, conversationId, next); }
+      catch { persistenceError = 'Project changes could not be saved in this browser. Export a backup before leaving.'; }
+    }
+    setStorageError(persistenceError);
+  }, [agentCode?.id, agentCode?.projectFiles, agentCode?.projectEntrypoint, conversationId]);
+
+  const saveProject = (next: SavedProject | null) => {
+    setProject(next);
+    if (!conversationId) return;
+    try {
+      if (next) writeSavedProject(localStorage, conversationId, next);
+      else localStorage.removeItem(`nexo-project-v1:${encodeURIComponent(conversationId)}`);
+      setStorageError('');
+    } catch {
+      setStorageError('Project changes could not be saved in this browser. Export a backup before leaving.');
+    }
+  };
   useEffect(() => {
     if (agentCode) return;
     if (genCode === undefined || !genLang) return;
@@ -276,6 +339,107 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose, returnFocus]);
 
+  const stop = () => {
+    const current = abortRef.current;
+    if (!current) return;
+    abortRef.current = null;
+    current.abort();
+    flushOutputBatch();
+    setRunning(false);
+    setRunStatus('');
+    const stopped = [...outputsRef.current, { kind: 'status' as const, text: 'Stopped.' }];
+    outputsRef.current = stopped;
+    setOutputs(stopped);
+  };
+
+  const updateProject = (next: SavedProject | null) => {
+    saveProject(next);
+    if (next && !next.files.some((file) => file.path === activeProjectPath)) {
+      setActiveProjectPath(next.entrypoint);
+    }
+  };
+  const handleAddProjectFile = () => {
+    const path = window.prompt('New project file path', `file-${(project?.files.length ?? 0) + 1}.js`)?.trim();
+    if (!path || !project) return;
+    try {
+      const next = createSavedProject(
+        [...project.files, { path, content: '' }],
+        project.entrypoint,
+        project.selectedPaths,
+      );
+      updateProject(next);
+      setActiveProjectPath(path);
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : 'The file could not be added.');
+    }
+  };
+  const handleDeleteProjectFile = (path: string) => {
+    if (!project) return;
+    const files = project.files.filter((file) => file.path !== path);
+    if (files.length === 0) {
+      updateProject(null);
+      setActiveProjectPath('');
+      setPreview(null);
+      return;
+    }
+    const entrypoint = project.entrypoint === path ? files[0].path : project.entrypoint;
+    const next = createSavedProject(files, entrypoint, project.selectedPaths.filter((selected) => selected !== path));
+    updateProject(next);
+  };
+  const exportProject = () => {
+    if (!project) return;
+    try {
+      const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'nexo-project.json';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setStorageError('The project could not be exported from this browser.');
+    }
+  };
+  const toggleProjectContext = (path: string, selected: boolean) => {
+    if (!project) return;
+    updateProject(createSavedProject(
+      project.files,
+      project.entrypoint,
+      selected
+        ? [...project.selectedPaths, path]
+        : project.selectedPaths.filter((item) => item !== path),
+    ));
+  };
+
+  const askFix = () => {
+    flushOutputBatch();
+    const currentOutputs = outputsRef.current;
+    const projectShared = project?.files.filter((file) => project.selectedPaths.includes(file.path)) ?? [];
+    if (project && projectShared.length === 0) {
+      setRunError('Select at least one project file to share with Nexo before asking for a fix.');
+      return;
+    }
+    const previewErrors = previewDiagnosticsRef.current.map((diagnostic) =>
+      `${diagnostic.kind}: ${diagnostic.message}${diagnostic.source ? ` (${diagnostic.source}${diagnostic.line ? `:${diagnostic.line}` : ''})` : ''}`
+    );
+    const errs = [
+      runError,
+      ...currentOutputs.filter((o) => o.kind === 'stderr').map((o) => o.text ?? ''),
+      ...previewErrors,
+    ].filter(Boolean).join('\n');
+    const out = currentOutputs.filter((o) => o.kind === 'stdout').map((o) => o.text ?? '').join('').slice(-800);
+    const summary = (errs || out || (hasRun ? 'It ran without visible output.' : 'Not run yet.')).slice(0, 2000);
+    if (project) {
+      onAskFix(`Please fix the selected project files in my workspace and return the complete corrected project. The selected files are attached as project context. Use the current browser run result to guide the fix.\n\n${errs ? 'Errors' : 'Console'}:\n${summary}`);
+    } else {
+      const fence = draft.language === 'html' ? 'html' : draft.language;
+      onAskFix(`Please fix this ${LANG_LABEL[draft.language]} code from my workspace and return the full corrected version.\n\n\`\`\`${fence}\n${draft.code.slice(0, 8000)}\n\`\`\`\n\n${errs ? 'Errors' : 'Console'}:\n${summary}`);
+    }
+  };
+
+  const activeProjectFile = project?.files.find((file) => file.path === activeProjectPath);
+  const workspaceLanguage = project ? projectLanguage(project.entrypoint) : draft.language;
+  const workspaceCode = activeProjectFile?.content ?? draft.code;
   const run = async () => {
     abortRef.current?.abort();
     flushOutputBatch();
@@ -288,9 +452,15 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     previewDiagnosticsRef.current = [];
     setPreviewDiagnostics([]);
     try {
+      const code = project
+        ? workspaceLanguage === 'html'
+          ? bundleHtmlProject(project.files, project.entrypoint)
+          : project.files.find((file) => file.path === project.entrypoint)?.content ?? ''
+        : draft.code;
+      if (!code.trim()) throw new Error('The selected project entry file is empty.');
       const res = await executeCode({
-        language: draft.language,
-        code: draft.code,
+        language: workspaceLanguage,
+        code,
         signal: ctrl.signal,
         onOutput: (output) => {
           if (abortRef.current !== ctrl) return;
@@ -328,35 +498,6 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       }
     }
   };
-  const stop = () => {
-    const current = abortRef.current;
-    if (!current) return;
-    abortRef.current = null;
-    current.abort();
-    flushOutputBatch();
-    setRunning(false);
-    setRunStatus('');
-    const stopped = [...outputsRef.current, { kind: 'status' as const, text: 'Stopped.' }];
-    outputsRef.current = stopped;
-    setOutputs(stopped);
-  };
-
-  const askFix = () => {
-    flushOutputBatch();
-    const currentOutputs = outputsRef.current;
-    const previewErrors = previewDiagnosticsRef.current.map((diagnostic) =>
-      `${diagnostic.kind}: ${diagnostic.message}${diagnostic.source ? ` (${diagnostic.source}${diagnostic.line ? `:${diagnostic.line}` : ''})` : ''}`
-    );
-    const errs = [
-      runError,
-      ...currentOutputs.filter((o) => o.kind === 'stderr').map((o) => o.text ?? ''),
-      ...previewErrors,
-    ].filter(Boolean).join('\n');
-    const out = currentOutputs.filter((o) => o.kind === 'stdout').map((o) => o.text ?? '').join('').slice(-800);
-    const summary = (errs || out || (hasRun ? 'It ran without visible output.' : 'Not run yet.')).slice(0, 2000);
-    const fence = draft.language === 'html' ? 'html' : draft.language;
-    onAskFix(`Please fix this ${LANG_LABEL[draft.language]} code from my workspace and return the full corrected version.\n\n\`\`\`${fence}\n${draft.code.slice(0, 8000)}\n\`\`\`\n\n${errs ? 'Errors' : 'Console'}:\n${summary}`);
-  };
 
   return (
     <aside ref={panelRef} id="code-workspace" className="workspace workspace-resizable" style={{ ['--workspace-width' as string]: `${workspaceSize.width}px` }} aria-label="Code workspace" data-testid="panel-workspace" tabIndex={-1}>
@@ -368,26 +509,30 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         <Terminal size={15} aria-hidden="true" className="ws-icon" />
         <span className="ws-title">Workspace</span>
         {agentCode && <span className="ws-agent-label" role="status">{agentCode.status === 'running' ? 'Agent running' : 'Agent result'}</span>}
-        <select className="ws-select" value={draft.language} aria-label="Language" onChange={(e) => setDraft({ language: e.target.value as RunLanguage })} data-testid="select-language">
-          {(Object.keys(LANG_LABEL) as RunLanguage[]).map((l) => <option key={l} value={l}>{LANG_LABEL[l]}</option>)}
-        </select>
+        {project
+          ? <span className="ws-project-label">{project.files.length} project {project.files.length === 1 ? 'file' : 'files'}</span>
+          : <select className="ws-select" value={draft.language} aria-label="Language" onChange={(e) => setDraft({ language: e.target.value as RunLanguage })} data-testid="select-language">
+              {(Object.keys(LANG_LABEL) as RunLanguage[]).map((l) => <option key={l} value={l}>{LANG_LABEL[l]}</option>)}
+            </select>}
         <button type="button" className={`ws-btn wrap-toggle ${wrapLines ? 'is-on' : ''}`} aria-label="Wrap code lines"
           aria-pressed={wrapLines} title="Toggle soft line wrapping" onClick={() => setWrapLines((value) => !value)} data-testid="button-toggle-wrap">Wrap</button>
         {running ? (
           <button type="button" className="ws-btn stop" onClick={stop} data-testid="button-stop-code"><Square size={13} /> Stop</button>
         ) : (
-          <button type="button" className="ws-btn run" onClick={() => void run()} disabled={!draft.code.trim() || agentCode?.status === 'running'} data-testid="button-run-code"><Play size={13} /> Run</button>
+          <button type="button" className="ws-btn run" onClick={() => void run()}
+            disabled={project ? !activeProjectFile?.content.trim() || agentCode?.status === 'running' : !draft.code.trim() || agentCode?.status === 'running'}
+            data-testid="button-run-code"><Play size={13} /> {project ? 'Run project' : 'Run'}</button>
         )}
         <button type="button" className="icon-btn" onClick={close} aria-label="Close workspace" data-testid="button-close-workspace"><X size={16} /></button>
       </header>
       {storageError && <div className="ws-banner" role="alert">{storageError}</div>}
-      {editorLanguage.loading && <div className="ws-language-status" role="status">Loading {LANG_LABEL[draft.language]} highlighting… You can keep editing.</div>}
-      {editorLanguage.error && <div className="ws-language-status" role="status">
-        Highlighting could not load. Plain-text editing is still available.
-        <button type="button" onClick={editorLanguage.retry}>Retry highlighting</button>
-      </div>}
+      {!project && editorLanguage.loading && <div className="ws-language-status" role="status">Loading {LANG_LABEL[draft.language]} highlighting… You can keep editing.</div>}
+      {!project && editorLanguage.error && <div className="ws-language-status" role="status">
+          Highlighting could not load. Plain-text editing is still available.
+          <button type="button" onClick={editorLanguage.retry}>Retry highlighting</button>
+        </div>}
 
-      {snippets.length > 1 && (
+      {!project && snippets.length > 1 && (
         <div className="ws-snippets" role="tablist" aria-label="Generated snippets">
           {snippets.map((s, i) => (
             <button key={i} type="button" role="tab" aria-selected={i === sel} className={i === sel ? 'is-on' : ''} onClick={() => setSel(i)} data-testid={`tab-snippet-${i}`}>
@@ -396,28 +541,48 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
           ))}
         </div>
       )}
-      {differs && (
+      {!project && differs && (
         <div className="ws-banner" data-testid="status-generated-differs">
           <span>Your edits are kept. Nexo has a newer generated version.</span>
           <button type="button" onClick={() => setDrafts((d) => ({ ...d, [key]: { language: generated!.language, code: generated!.code, edited: false } }))} data-testid="button-load-generated"><Download size={12} /> Load generated version</button>
         </div>
       )}
 
-      <div className="ws-editor">
-        <CodeMirror value={draft.code} height="100%" theme={isLight ? 'light' : 'dark'} extensions={editorExtensions}
-          onChange={(v) => { if (v !== draft.code) setDraft({ code: v }); }} aria-label="Code editor" data-testid="editor-code" />
-      </div>
+      {project ? (
+        <ProjectFilesPanel
+          files={project.files}
+          activePath={activeProjectPath}
+          selectedPaths={project.selectedPaths}
+          isLight={isLight}
+          disabled={running || agentCode?.status === 'running'}
+          onSelect={setActiveProjectPath}
+          onChange={(path, content) => updateProject(createSavedProject(
+            project.files.map((file) => file.path === path ? { ...file, content } : file),
+            project.entrypoint,
+            project.selectedPaths,
+          ))}
+          onToggleContext={toggleProjectContext}
+          onDelete={handleDeleteProjectFile}
+          onAdd={handleAddProjectFile}
+          onExport={exportProject}
+        />
+      ) : (
+        <div className="ws-editor">
+          <CodeMirror value={draft.code} height="100%" theme={isLight ? 'light' : 'dark'} extensions={editorExtensions}
+            onChange={(v) => { if (v !== draft.code) setDraft({ code: v }); }} aria-label="Code editor" data-testid="editor-code" />
+        </div>
+      )}
 
       <div className="ws-out">
         <div className="ws-out-head">
-          <span>{draft.language === 'html' ? 'Preview' : 'Console'}</span>
+          <span>{workspaceLanguage === 'html' ? 'Preview' : 'Console'}</span>
           <span className="ws-out-actions">
-            <CopyCodeButton text={draft.code} label="Copy workspace code" />
-            <button type="button" className="ws-mini" onClick={() => setDraft({ code: STARTERS[draft.language] })} title="Replace with starter" data-testid="button-reset-code"><RotateCcw size={11} /> Starter</button>
+            <CopyCodeButton text={workspaceCode} label={project && activeProjectFile ? `Copy ${activeProjectFile.path}` : 'Copy workspace code'} />
+            {!project && <button type="button" className="ws-mini" onClick={() => setDraft({ code: STARTERS[draft.language] })} title="Replace with starter" data-testid="button-reset-code"><RotateCcw size={11} /> Starter</button>}
             <button type="button" className="ws-mini accent" disabled={!canAsk} onClick={askFix} title={canAsk ? 'Send code and output to Nexo' : 'Wait for the current reply to finish'} data-testid="button-ask-fix"><Wrench size={11} /> Ask Nexo to fix</button>
           </span>
         </div>
-        {draft.language === 'html' && preview ? (
+        {workspaceLanguage === 'html' && preview ? (
           <div className="ws-preview-pane" data-testid="preview-pane">
             <iframe
               key={previewId ?? 'html-preview'}
@@ -454,7 +619,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
               ? <img key={i} src={o.dataUrl} alt={`Plot output ${i + 1}`} className="c-img" />
               : <pre key={i} className={`c-${o.kind}`}>{o.text}</pre>)}
             {running && <p className="c-status c-live" data-testid="status-run">{runStatus || 'Running…'}</p>}
-            {hasRun && !running && !runError && outputs.length === 0 && draft.language !== 'html' && <p className="c-status">Finished with no output.</p>}
+            {hasRun && !running && !runError && outputs.length === 0 && workspaceLanguage !== 'html' && <p className="c-status">Finished with no output.</p>}
             {runError && <pre className="c-stderr" role="alert">{runError}</pre>}
           </div>
         )}

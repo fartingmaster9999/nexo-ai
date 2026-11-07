@@ -10,7 +10,7 @@ import { availableModels, CODING_FALLBACK } from "../lib/model-routing";
 import {
   buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError, geminiAgentErrorMessage,
   GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_MODEL, MAX_AGENT_CODE_CHARS, MAX_AGENT_HTML_PREVIEW_RUNS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
-  requestGeminiAgentStream, validateAgentHistory,
+  requestGeminiAgentStream, validateAgentHistory, validateAgentProjectFiles,
 } from "../lib/gemini-agent";
 import { buildGroqAgentRequest, collectGroqAgentResponse, GROQ_AGENT_MODEL } from "../lib/groq-agent";
 import { CHAT_DEADLINE_MS, getChatClient, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
@@ -35,6 +35,10 @@ function sameToolArguments(left: AgentToolExchange, right: { tool: string; argum
   if (left.tool !== right.tool) return false;
   if (left.tool === "web_search") {
     return String(left.arguments.query).trim().toLowerCase() === String(right.arguments.query).trim().toLowerCase();
+  }
+  if (left.tool === "write_project") {
+    return left.arguments.entrypoint === right.arguments.entrypoint &&
+      JSON.stringify(left.arguments.files) === JSON.stringify(right.arguments.files);
   }
   return left.arguments.language === right.arguments.language && left.arguments.code === right.arguments.code;
 }
@@ -139,6 +143,11 @@ export function createAgentRouter({
         res.status(400).json({ error: "The image data is invalid. Choose a JPEG, PNG, or WebP image under 3 MB." });
         return;
       }
+    }
+    if (parsed.data.projectFiles && parsed.data.projectFiles.length &&
+        !validateAgentProjectFiles(parsed.data.projectFiles)) {
+      res.status(400).json({ error: "The selected project files are invalid or exceed the safe size limit." });
+      return;
     }
     const history: AgentToolExchange[] = (parsed.data.agentHistory ?? []).map((exchange) => ({
       ...exchange,
@@ -382,6 +391,40 @@ export function createAgentRouter({
             ...(sources?.length ? { sources } : {}),
           });
           continue;
+        }
+
+        if (call.tool === "write_project") {
+          const files = validateAgentProjectFiles(call.arguments.files);
+          const entrypoint = call.arguments.entrypoint;
+          if (!files || typeof entrypoint !== "string" || !files.some((file) => file.path === entrypoint)) {
+            throw new AgentPublicError("Nexo Agent returned an invalid or oversized project. Please try a smaller request.");
+          }
+          const arguments_ = { files, entrypoint };
+          const previous = history.find((exchange) => sameToolArguments(exchange, { tool: call.tool, arguments: arguments_ }));
+          if (previous) {
+            history.push({
+              tool: call.tool,
+              callId: call.callId,
+              thoughtSignature: call.thoughtSignature,
+              arguments: arguments_,
+              result: safeResultText(`This exact project was already saved and run. Reuse the previous result instead of sending it again:\n${previous.result}`),
+            });
+            await emit({ activity: { id: `agent-project-${call.callId}`, label: "Reused the earlier project run", kind: "code", status: "complete" } });
+            continue;
+          }
+          await emit({ activity: { id: `agent-project-${call.callId}`, label: "Saving and running the project in the isolated browser…", kind: "code", status: "running" } });
+          await emit({
+            agentTool: {
+              tool: call.tool,
+              callId: call.callId,
+              thoughtSignature: call.thoughtSignature,
+              arguments: arguments_,
+              history,
+            },
+          });
+          await emit({ done: true });
+          res.end();
+          return;
         }
 
         const language = call.arguments.language;

@@ -5,6 +5,7 @@
 .workspace-resizer:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: -2px; }
 .workspace.workspace-resizable .ws-head { flex-shrink: 0; min-width: 0; flex-wrap: wrap; height: auto; padding-block: 6px; }
 .workspace.workspace-resizable .ws-agent-label { margin-left: 2px; color: hsl(var(--primary)); font-size: 10px; font-weight: 600; letter-spacing: .03em; white-space: nowrap; }
+.workspace.workspace-resizable .ws-project-label { margin-left: 4px; color: hsl(var(--muted-foreground)); font: 10px var(--app-font-mono); white-space: nowrap; }
 .workspace.workspace-resizable .ws-editor { min-height: 80px; }
 .workspace.workspace-resizable .ws-out { min-height: 100px; }
 .workspace.workspace-resizable .ws-out-head { flex-wrap: wrap; }
