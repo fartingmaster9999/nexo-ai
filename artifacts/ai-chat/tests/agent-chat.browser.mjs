@@ -32,8 +32,8 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
             { model: "gemini-3.8-flash" },
             { activity: { id: "agent-code-call-1", label: "Running javascript code in the isolated browser…", kind: "code", status: "running" } },
             { sources: [
-              { title: "Page source", url: "https://example.com/page", retrieval: "page" },
-              { title: "Search result", url: "https://example.com/snippet", retrieval: "search_excerpt" }
+              { title: "Page source", url: "https://example.com/page", retrieval: "page", retrievedAt: "2026-11-06T18:30:00.000Z" },
+              { title: "Search result", url: "https://example.com/snippet", retrieval: "search_excerpt", retrievedAt: "2026-11-06T18:30:00.000Z" }
             ] },
             { agentTool: {
               tool: "run_code",
@@ -198,8 +198,9 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   if (!liveTool) {
     assert.equal(await evaluate(`document.body.textContent.includes("Page read")`), true);
     assert.equal(await evaluate(`document.body.textContent.includes("Search excerpt")`), true);
+    assert.equal(await evaluate(`document.body.textContent.includes("Retrieved") && document.body.textContent.includes("2026")`), true);
     assert.equal(await evaluate(`document.querySelector('.activity-sources a[href="https://example.com/page"]')?.textContent.includes("Page read")`), true);
-    await waitFor(() => evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes('"retrieval":"search_excerpt"')`), "saved source retrieval labels");
+    await waitFor(() => evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes('"retrievedAt":"2026-11-06T18:30:00.000Z"')`), "saved source retrieval time");
   }
   assert.equal(await evaluate(`document.body.textContent.includes("private reasoning")`), false);
 

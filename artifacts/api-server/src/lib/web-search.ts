@@ -14,6 +14,7 @@ export type SearchResult = {
   context: string;
   cached: boolean;
   provider: "firecrawl" | "public-scraper";
+  retrievedAt: string;
 };
 type WebSearchDependencies = {
   firecrawlSearch?: (init: RequestInit) => Promise<Response>;
@@ -90,6 +91,7 @@ export function createWebSearch({
         const pageRead = hasReadablePageText(markdown);
         return `[${i + 1}] ${source.title}\n${source.url}\n${pageRead ? "Scraped page:" : "Search excerpt only:"} ${(pageRead ? markdown : page?.description || "").slice(0, 1900)}`;
       }).join("\n\n").slice(0, 6500);
+      const retrievedAtMs = now();
       const result: SearchResult = {
         sources: sources.map((source) => {
           const page = pages.find((candidate) => candidate.url === source.url);
@@ -98,9 +100,10 @@ export function createWebSearch({
         context,
         cached: false,
         provider,
+        retrievedAt: new Date(retrievedAtMs).toISOString(),
       };
       if (cache.size >= 100) cache.delete(cache.keys().next().value!);
-      cache.set(key, { expires: now() + cacheTtlMs, result });
+      cache.set(key, { expires: retrievedAtMs + cacheTtlMs, result });
       return result;
     })();
     pending.set(key, task);

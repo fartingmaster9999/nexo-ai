@@ -43,17 +43,29 @@ function safeResultText(result: string) {
   return result.slice(0, MAX_AGENT_RESULT_CHARS);
 }
 
-function cleanSources(sources: { title: string; url: string; retrieval?: "page" | "search_excerpt" }[]) {
+function cleanSources(
+  sources: { title: string; url: string; retrieval?: "page" | "search_excerpt"; retrievedAt?: string | Date }[],
+  retrievedAt?: string | Date,
+) {
   return sources
     .filter((source) => isPublicUrl(source.url))
     .slice(0, 5)
-    .map((source) => ({
-      title: source.title.slice(0, 300),
-      url: source.url.slice(0, 2048),
-      ...(source.retrieval === "page" || source.retrieval === "search_excerpt"
-        ? { retrieval: source.retrieval }
-        : {}),
-    }));
+    .map((source) => {
+      const timestamp = normalizeTimestamp(source.retrievedAt) ?? normalizeTimestamp(retrievedAt);
+      return {
+        title: source.title.slice(0, 300),
+        url: source.url.slice(0, 2048),
+        ...(source.retrieval === "page" || source.retrieval === "search_excerpt"
+          ? { retrieval: source.retrieval }
+          : {}),
+        ...(timestamp ? { retrievedAt: timestamp } : {}),
+      };
+    });
+}
+
+function normalizeTimestamp(value: unknown): Date | undefined {
+  const timestamp = value instanceof Date ? value : typeof value === "string" ? new Date(value) : undefined;
+  return timestamp && Number.isFinite(timestamp.getTime()) ? timestamp : undefined;
 }
 
 export function createAgentRouter({
@@ -312,7 +324,7 @@ export function createAgentRouter({
           const previous = history.find((exchange) => sameToolArguments(exchange, { tool: call.tool, arguments: arguments_ }));
           const activityId = `agent-search-${call.callId}`;
           let result = "";
-          let sources: AgentToolExchange["sources"] = [];
+          let sources: NonNullable<AgentToolExchange["sources"]> = [];
           await emit({ activity: { id: activityId, label: previous ? "Reusing an earlier web search" : "Searching the web for current information…", kind: "search", status: "running" } });
           try {
             if (previous) {
@@ -321,7 +333,7 @@ export function createAgentRouter({
               await emit({ activity: { id: activityId, label: "Reused an earlier web search", kind: "search", status: "complete" } });
             } else {
               const searchResult = await search(arguments_.query);
-              sources = cleanSources(searchResult.sources);
+              sources = cleanSources(searchResult.sources, searchResult.retrievedAt);
               result = searchResult.context.slice(0, MAX_AGENT_RESULT_CHARS);
               if (sources.length) await emit({ sources });
               await emit({ activity: { id: activityId, label: `Found ${sources.length} public source${sources.length === 1 ? "" : "s"}`, kind: "search", status: "complete" } });

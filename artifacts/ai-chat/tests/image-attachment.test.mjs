@@ -41,23 +41,25 @@ test("conversation history keeps only the image-attached marker, never image byt
   assert.equal(JSON.stringify(conversation).includes("private-base64"), false);
 });
 
-test("conversation history preserves retrieval labels and legacy source links", () => {
+test("conversation history preserves retrieval times, labels, and legacy source links", () => {
   const conversation = parseConversation({
     id: "chat", title: "search", createdAt: 1, updatedAt: 2,
     messages: [{
       role: "assistant",
       content: "Here is the latest.",
       sources: [
-        { title: "Read page", url: "https://example.com/read", retrieval: "page" },
+        { title: "Read page", url: "https://example.com/read", retrieval: "page", retrievedAt: "2026-11-06T18:30:00.000Z" },
         { title: "Search result", url: "https://example.com/snippet", retrieval: "search_excerpt" },
+        { title: "Invalid date", url: "https://example.com/invalid-date", retrievedAt: "not a date" },
         { title: "Legacy source", url: "https://example.com/legacy" },
         { title: "Invalid label", url: "https://example.com/invalid", retrieval: "unknown" },
       ],
     }],
   });
   assert.deepEqual(conversation.messages[0].sources, [
-    { title: "Read page", url: "https://example.com/read", retrieval: "page" },
+    { title: "Read page", url: "https://example.com/read", retrieval: "page", retrievedAt: "2026-11-06T18:30:00.000Z" },
     { title: "Search result", url: "https://example.com/snippet", retrieval: "search_excerpt" },
+    { title: "Invalid date", url: "https://example.com/invalid-date" },
     { title: "Legacy source", url: "https://example.com/legacy" },
     { title: "Invalid label", url: "https://example.com/invalid" },
   ]);

@@ -31,6 +31,7 @@ export function parseConversation(value: unknown): Conversation | null {
       title: s.title,
       url: s.url,
       ...(s.retrieval === 'page' || s.retrieval === 'search_excerpt' ? { retrieval: s.retrieval } : {}),
+      ...(typeof s.retrievedAt === 'string' && Number.isFinite(Date.parse(s.retrievedAt)) ? { retrievedAt: s.retrievedAt } : {}),
     })) : [],
     notices: Array.isArray(m.notices) ? m.notices.filter(n => n && typeof n.id === 'string' && typeof n.message === 'string') : [],
   })) };

@@ -4,7 +4,7 @@ import { splitReasoning } from '../lib/reasoning-sections';
 import type { QuizProgress } from '../lib/interactive-widgets';
 
 export type Activity = { id: string; label: string; kind?: 'search' | 'thinking' | 'info' | 'code'; status?: 'running' | 'complete' | 'error' };
-export type Source = { title: string; url: string; retrieval?: 'page' | 'search_excerpt' };
+export type Source = { title: string; url: string; retrieval?: 'page' | 'search_excerpt'; retrievedAt?: string };
 export type Notice = { id: string; message: string; model?: string };
 export type ChatMessage = {
   id?: string;
@@ -60,6 +60,11 @@ function NormalFigure() {
       </span>
     </span>
   );
+}
+
+function formatRetrievedAt(value: string | undefined) {
+  if (!value || !Number.isFinite(Date.parse(value))) return null;
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
 /** Single status indicator: search takes precedence, then deepthink, then normal. */
@@ -157,11 +162,15 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
                     : source.retrieval === 'search_excerpt'
                       ? 'Search excerpt'
                       : 'Retrieval level unavailable';
+                  const retrievedAt = formatRetrievedAt(source.retrievedAt);
                   return (
                     <li key={source.url}>
                       <a href={source.url} target="_blank" rel="noopener noreferrer">
-                        <span>{source.title}</span>
-                        <small className={`source-retrieval${source.retrieval ? ` is-${source.retrieval.replace('_', '-')}` : ' is-unknown'}`}>{retrievalLabel}</small>
+                        <span className="source-title">{source.title}</span>
+                        <span className="source-meta">
+                          <small className={`source-retrieval${source.retrieval ? ` is-${source.retrieval.replace('_', '-')}` : ' is-unknown'}`}>{retrievalLabel}</small>
+                          {retrievedAt && <small className="source-retrieved-at" data-testid={`source-retrieved-at-${encodeURIComponent(source.url)}`}>Retrieved {retrievedAt}</small>}
+                        </span>
                       </a>
                     </li>
                   );

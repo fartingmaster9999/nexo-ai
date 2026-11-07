@@ -481,6 +481,7 @@ function Home() {
                 title: String(src.title ?? ''),
                 url: src.url,
                 ...(src.retrieval === 'page' || src.retrieval === 'search_excerpt' ? { retrieval: src.retrieval } : {}),
+                ...(typeof src.retrievedAt === 'string' && Number.isFinite(Date.parse(src.retrievedAt)) ? { retrievedAt: src.retrievedAt } : {}),
               };
               const existingIndex = list.findIndex((source) => source.url === clean.url);
               if (existingIndex === -1) list.push(clean);

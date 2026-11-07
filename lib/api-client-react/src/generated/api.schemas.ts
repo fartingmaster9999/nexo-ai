@@ -133,6 +133,8 @@ export interface AgentSource {
   /** @maxLength 2048 */
   url: string;
   retrieval?: AgentSourceRetrieval;
+  /** When the search result was retrieved, not when the page was published */
+  retrievedAt?: string;
 }
 
 export interface AgentToolExchange {

@@ -329,6 +329,10 @@ components:
         retrieval:
           type: string
           enum: [page, search_excerpt]
+        retrievedAt:
+          type: string
+          format: date-time
+          description: When the search result was retrieved, not when the page was published
       required:
         - title
         - url

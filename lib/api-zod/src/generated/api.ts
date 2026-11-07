@@ -133,7 +133,8 @@ export const StreamAgentChatBody = zod.object({
   "sources": zod.array(zod.object({
   "title": zod.string().max(streamAgentChatBodyAgentHistoryItemSourcesItemTitleMax),
   "url": zod.string().url().max(streamAgentChatBodyAgentHistoryItemSourcesItemUrlMax),
-  "retrieval": zod.enum(['page', 'search_excerpt']).optional()
+  "retrieval": zod.enum(['page', 'search_excerpt']).optional(),
+  "retrievedAt": zod.coerce.date().optional().describe('When the search result was retrieved, not when the page was published')
 })).max(streamAgentChatBodyAgentHistoryItemSourcesMax).optional()
 })).max(streamAgentChatBodyAgentHistoryMax).optional().describe('Bounded prior tool call and result pairs for the current Agent run.'),
   "image": zod.object({

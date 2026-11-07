@@ -412,6 +412,7 @@ test("Agent searches only when the model requests it and continues with bounded 
       searches.push(query);
       return {
         context: "Release notes published recently.",
+        retrievedAt: "2026-11-06T18:30:00.000Z",
         sources: [
           { title: "Release notes", url: "https://example.com/releases/latest", retrieval: "search_excerpt" },
           { title: "Private target", url: "http://127.0.0.1/private" },
@@ -428,6 +429,7 @@ test("Agent searches only when the model requests it and continues with bounded 
     const events = await readEvents(response);
     assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "The latest release changed the interface.");
     assert.equal(events.find((event) => event.sources)?.sources[0].retrieval, "search_excerpt");
+    assert.equal(events.find((event) => event.sources)?.sources[0].retrievedAt, "2026-11-06T18:30:00.000Z");
     assert.equal(events.some((event) => event.sources?.some((source) => source.url === "http://127.0.0.1/private")), false);
     assert.equal(events.at(-1).done, true);
   });
@@ -562,7 +564,11 @@ test("Agent reuses prior search and code results instead of repeating tool side 
     fetchImpl,
     search: async () => {
       searchCalls++;
-      return { context: "Release details.", sources: [{ title: "Release", url: "https://example.com/release" }] };
+      return {
+        context: "Release details.",
+        retrievedAt: "2026-11-06T18:30:00.000Z",
+        sources: [{ title: "Release", url: "https://example.com/release" }],
+      };
     },
   }), async (url) => {
     const response = await fetch(url, {

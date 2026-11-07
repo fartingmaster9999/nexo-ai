@@ -137,11 +137,18 @@ test("successful results are cached until their deterministic expiry", async () 
     firecrawlSearch: async () => { calls++; return firecrawlResponse([usablePage()]); },
   });
 
-  assert.equal((await search("cache me")).cached, false);
-  assert.equal((await search(" CACHE ME ")).cached, true);
+  const fresh = await search("cache me");
+  assert.equal(fresh.cached, false);
+  assert.equal(fresh.retrievedAt, new Date(5000).toISOString());
+  const cached = await search(" CACHE ME ");
+  assert.equal(cached.cached, true);
+  assert.equal(cached.retrievedAt, fresh.retrievedAt, "cached results retain their original retrieval time");
   assert.equal(calls, 1);
   clock += 101;
-  assert.equal((await search("cache me")).cached, false);
+  const refreshed = await search("cache me");
+  assert.equal(refreshed.cached, false);
+  assert.equal(refreshed.retrievedAt, new Date(clock).toISOString());
+  assert.notEqual(refreshed.retrievedAt, fresh.retrievedAt);
   assert.equal(calls, 2);
 });
 
