@@ -39,8 +39,8 @@ A successful fallback should be described as a model switch that allows continue
 
 **How to apply:** Announce the fallback only after the provider accepts its stream, use a neutral informational notice, and reserve the blocking usage-limit error for failure of every eligible model. Normalize older saved fallback notices when displaying them.
 
-For Nexo Agent only, transient Gemini 3.8 failures may fall back to Gemini 3.6. Keep the fallback within Gemini, announce it, and preserve the selected thinking level. Do not switch models after a tool has run; retry the same model first so opaque tool signatures remain with their originating model.
+For Nexo Agent, transient non-rate-limit Gemini 3.8 failures may fall back to Gemini 3.6 before tools run. When Gemini is rate-limited, switch to Groq Qwen3.8 27B, announce the fallback, and keep the run on Groq through later tool continuations.
 
-**Why:** Gemini 3.8 intermittently returned 429/503 errors or stalled during live requests, while 3.6 supported the same function-calling and thinking features. Tool signatures may not be portable across model versions.
+**Why:** The user explicitly wants Agent runs to continue on Qwen3.8 27B after Gemini rate limits. Groq's tool-call format differs from Gemini's, so continuation history must be converted and kept with the selected provider.
 
-**How to apply:** Limit cross-model fallback to the start of an Agent run. For stalled continuations, retry the selected model once and report a clear failure if it still does not respond.
+**How to apply:** Preserve same-provider continuation histories; convert prior Agent tool exchanges when switching once, then do not switch back. Qwen fallback cannot inspect attached images; tell the user rather than pretending it can. Agent-built code may run autonomously only in the existing isolated browser sandbox, never on the API server or project filesystem.

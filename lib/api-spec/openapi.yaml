@@ -120,7 +120,7 @@ paths:
       operationId: streamAgentChat
       tags: [agent]
       summary: Stream an Agent-mode response
-      description: Gemini can analyze an optional image, then selectively request external web search or browser-only code execution. Tool activity, sources, generated code, and bounded results are returned as SSE events; private model reasoning and image bytes are not exposed.
+      description: Gemini can analyze an optional image, then selectively request external web search or browser-only code execution. Gemini rate limits switch the run to Groq Qwen3.8 27B, which continues with the same tools and bounded history. Tool activity, sources, generated code, and results are returned as SSE events; private model reasoning and image bytes are not exposed.
       requestBody:
         required: true
         content:
@@ -129,7 +129,7 @@ paths:
               $ref: "#/components/schemas/AgentChatInput"
       responses:
         "200":
-          description: Server-sent JSON events containing answer text, tool activity, sources, a browser code request, completion, or a safe error.
+          description: Server-sent JSON events containing answer text, provider/model changes, tool activity, sources, a browser code request, completion, or a safe error.
           content:
             text/event-stream: {}
         "400":
@@ -145,7 +145,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
         "429":
-          description: Gemini rate limit reached
+          description: Gemini or Groq Agent rate limit reached
           content:
             application/json:
               schema:
@@ -157,7 +157,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
         "503":
-          description: Gemini is not configured
+          description: Gemini or Groq Agent fallback is not configured
           content:
             application/json:
               schema:
@@ -209,7 +209,7 @@ components:
         deepthink:
           type: boolean
           default: false
-          description: Use high Gemini thinking level instead of medium
+          description: Use high thinking level instead of medium
         timeZone:
           type: string
           maxLength: 100
@@ -246,7 +246,11 @@ components:
         deepthink:
           type: boolean
           default: false
-          description: Use high Gemini thinking level instead of medium
+          description: Use high thinking level instead of medium
+        agentProvider:
+          type: string
+          enum: [gemini, groq]
+          description: Continue an Agent run on its selected provider after a rate-limit fallback
         timeZone:
           type: string
           maxLength: 100
@@ -260,7 +264,7 @@ components:
         agentHistory:
           type: array
           maxItems: 6
-          description: Bounded prior tool call and result pairs for the current turn, including Gemini's opaque continuation signature.
+          description: Bounded prior tool call and result pairs for the current Agent run.
           items:
             $ref: "#/components/schemas/AgentToolExchange"
         image:

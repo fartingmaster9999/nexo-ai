@@ -432,6 +432,7 @@ function Home() {
     try {
       let agentHistory: AgentToolExchange[] = [];
       let agentToolCalls = 0;
+      const agentProvider: { current: 'gemini' | 'groq' } = { current: 'gemini' };
       const nextAgentTool: { current: AgentToolRequest | null } = { current: null };
       const encodedImage = requestImage ? {
         mimeType: requestImage.mimeType,
@@ -443,6 +444,9 @@ function Home() {
         if (eventData.agentTool) {
           if (!requestAgent) throw new Error('The server returned an unexpected Agent tool request.');
           nextAgentTool.current = eventData.agentTool;
+        }
+        if (eventData.agentProvider === 'gemini' || eventData.agentProvider === 'groq') {
+          agentProvider.current = eventData.agentProvider;
         }
         if (typeof eventData.content === 'string') {
           received += eventData.content;
@@ -484,8 +488,9 @@ function Home() {
           deepthink: requestDeepthink,
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         };
+        if (requestAgent && agentProvider.current === 'groq') requestBody.agentProvider = agentProvider.current;
         if (requestAgent && agentHistory.length) requestBody.agentHistory = agentHistory;
-        if (encodedImage) requestBody.image = encodedImage;
+        if (encodedImage && agentProvider.current === 'gemini') requestBody.image = encodedImage;
         const endpoint = requestAgent ? '/api/agent' : requestImage ? '/api/chat/image' : '/api/chat';
         connectTimeout = window.setTimeout(() => controller.abort(new Error('The server did not respond in time. Please try again.')), 30000);
         const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}${endpoint}`, {
@@ -872,7 +877,7 @@ function Home() {
                   <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
                     <span className="mode-toggle-icon deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink{deepthink ? ' on' : ''}</span>
                   </button>
-                  <button type="button" aria-pressed={agentMode} aria-label={`Agent mode ${agentMode ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original route' : agentMode ? 'Agent is on: Gemini may search the web or run code in the browser' : 'Turn on Agent mode for Gemini-assisted web search and browser code'} onClick={() => setAgentMode((value) => !value)} data-testid="toggle-agent">
+                  <button type="button" aria-pressed={agentMode} aria-label={`Agent mode ${agentMode ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original route' : agentMode ? 'Agent is on: Gemini can search and run code; Qwen continues if Gemini is rate-limited' : 'Turn on Agent mode for web search and sandboxed build-and-run tasks'} onClick={() => setAgentMode((value) => !value)} data-testid="toggle-agent">
                     <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent{agentMode ? ' on' : ''}</span>
                   </button>
                 </div>

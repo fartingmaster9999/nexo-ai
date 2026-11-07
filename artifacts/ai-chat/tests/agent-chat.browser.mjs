@@ -58,8 +58,25 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
             headers: { "Content-Type": "text/event-stream" }
           });
         }
+        if (window.__agentRequests.length === 4) {
+          const events = [
+            { model: "qwen/qwen3.8-27b", agentProvider: "groq" },
+            { notice: { id: "gemini-agent-qwen-fallback", message: "Gemini is rate-limited; Qwen is continuing.", model: "qwen/qwen3.8-27b" } },
+            { agentTool: {
+              tool: "run_code",
+              callId: "qwen-browser-code",
+              thoughtSignature: "groq-agent-v1",
+              arguments: { language: "javascript", code: "console.log('qwen-run-ok')" },
+              history: []
+            } },
+            { done: true }
+          ];
+          return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
+            headers: { "Content-Type": "text/event-stream" }
+          });
+        }
         const events = [
-          { content: "The isolated browser printed ${expectedOutput}." },
+          { content: window.__agentRequests.length === 5 ? "Qwen Agent ran and checked its code." : "The isolated browser printed ${expectedOutput}." },
           { done: true }
         ];
         return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
@@ -119,6 +136,17 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await evaluate(`document.querySelector('[data-testid="button-stop-response"]').click()`);
   await waitFor(() => evaluate(`document.querySelector('[data-testid="panel-workspace"]')?.textContent.includes("Stopped by you.")`), "Agent code cancellation");
   assert.equal(await evaluate(`window.__agentRequests.length`), 3, "stopped browser code is not sent for another model turn");
+
+  await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
+  await cdp("Input.insertText", { text: "Build and test a small JavaScript example." });
+  await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
+  await waitFor(() => evaluate(`window.__agentRequests.length === 5`), "Qwen Agent code continuation", 20000);
+  await waitFor(() => evaluate(`document.body.textContent.includes("Qwen Agent ran and checked its code.")`), "Qwen Agent final answer", 20000);
+  const qwenRequests = await evaluate(`window.__agentRequests.slice(3)`);
+  assert.equal(qwenRequests[0].body.agentProvider, undefined, "new Agent tasks start with Gemini");
+  assert.equal(qwenRequests[1].body.agentProvider, "groq", "the provider fallback persists for code execution follow-up");
+  assert.equal(qwenRequests[1].body.agentHistory[0].callId, "qwen-browser-code");
+  assert.match(qwenRequests[1].body.agentHistory[0].result, /qwen-run-ok/);
 
   console.log(liveTool
     ? "Live Agent browser check passed: image upload, Gemini-generated code execution, and continuation result."

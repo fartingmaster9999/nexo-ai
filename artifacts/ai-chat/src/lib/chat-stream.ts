@@ -16,7 +16,7 @@ export type AgentToolRequest = {
   arguments: { language: RunLanguage; code: string };
   history: AgentToolExchange[];
 };
-export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentTool?: AgentToolRequest };
+export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentProvider?: 'gemini' | 'groq'; agentTool?: AgentToolRequest };
 
 function isAgentToolRequest(value: unknown): value is AgentToolRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -60,6 +60,9 @@ export class ChatEventDecoder {
       const event = value as StreamEvent;
       for (const key of ['content', 'reasoning', 'error', 'model'] as const) {
         if (event[key] !== undefined && typeof event[key] !== 'string') throw new Error('The server sent an invalid response event.');
+      }
+      if (event.agentProvider !== undefined && event.agentProvider !== 'gemini' && event.agentProvider !== 'groq') {
+        throw new Error('The server sent an invalid Agent provider.');
       }
       if (event.done !== undefined && typeof event.done !== 'boolean') throw new Error('The server sent an invalid response event.');
       if (event.agentTool !== undefined && !isAgentToolRequest(event.agentTool)) {

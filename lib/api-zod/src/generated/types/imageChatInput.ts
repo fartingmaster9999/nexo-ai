@@ -9,7 +9,7 @@ import type { ChatMessage } from './chatMessage';
 import type { ImageAttachment } from './imageAttachment';
 
 export interface ImageChatInput {
-  /** Use high Gemini thinking level instead of medium */
+  /** Use high thinking level instead of medium */
   deepthink?: boolean;
   /**
      * Browser IANA timezone, validated by the server for current-time context

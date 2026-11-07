@@ -7,6 +7,7 @@
  */
 
 export * from './agentChatInput';
+export * from './agentChatInputAgentProvider';
 export * from './agentSource';
 export * from './agentToolArguments';
 export * from './agentToolArgumentsLanguage';

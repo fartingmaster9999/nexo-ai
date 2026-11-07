@@ -7,6 +7,8 @@ import {
   buildGeminiAgentRequest, collectAgentResponse, GEMINI_AGENT_MODEL,
   requestGeminiAgentStream, validateAgentHistory,
 } from "../src/lib/gemini-agent.ts";
+import { buildGroqAgentRequest, collectGroqAgentResponse, GROQ_AGENT_MODEL } from "../src/lib/groq-agent.ts";
+import { CODING_FALLBACK } from "../src/lib/model-routing.ts";
 import { createAgentRouter } from "../src/routes/agent.ts";
 
 const input = {
@@ -23,12 +25,13 @@ function geminiResponse(events, status = 200) {
   return new Response(body, { status, headers: { "Content-Type": "text/event-stream" } });
 }
 
-function createSseApp({ getApiKey = () => "test-only-key", fetchImpl, search, providerIdleMs } = {}) {
+function createSseApp({ getApiKey = () => "test-only-key", getGroqClient, fetchImpl, search, providerIdleMs } = {}) {
   const app = express();
   app.use(pinoHttp({ logger: pino({ level: "silent" }) }));
   app.use(express.json({ limit: "5mb" }));
   app.use("/api", createAgentRouter({
     getApiKey,
+    getGroqClient,
     fetchImpl,
     search,
     now: () => new Date("2026-11-06T18:30:00Z"),
@@ -36,6 +39,35 @@ function createSseApp({ getApiKey = () => "test-only-key", fetchImpl, search, pr
   }));
   return app;
 }
+
+test("Qwen Agent request enables bounded autonomous build-and-test tools", () => {
+  const request = buildGroqAgentRequest({ ...input, deepthink: true }, new Date("2026-11-06T18:30:00Z"));
+  assert.equal(GROQ_AGENT_MODEL, CODING_FALLBACK);
+  assert.equal(request.model, CODING_FALLBACK);
+  assert.equal(request.reasoning_effort, "high");
+  assert.equal(request.reasoning_format, "parsed");
+  assert.equal(request.tool_choice, "auto");
+  assert.equal(request.parallel_tool_calls, false);
+  assert.match(request.messages[0].content, /inspect the sandbox output, fix errors, and run it again/);
+  assert.deepEqual(request.tools.map((tool) => tool.function.name), ["web_search", "run_code"]);
+});
+
+test("Qwen Agent decoder collects streamed tool arguments and rejects invalid JSON", async () => {
+  const chunks = async function* () {
+    yield { choices: [{ delta: { tool_calls: [{ index: 0, id: "qwen-call", function: { name: "run_code", arguments: "{\"language\":\"javascript\"," } }] } }] };
+    yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "\"code\":\"console.log(2+2)\"}" } }] } }] };
+  };
+  const result = await collectGroqAgentResponse(chunks(), new AbortController().signal);
+  assert.equal(result.calls[0].tool, "run_code");
+  assert.deepEqual(result.calls[0].arguments, { language: "javascript", code: "console.log(2+2)" });
+  assert.equal(result.calls[0].thoughtSignature, "groq-agent-v1");
+  await assert.rejects(
+    collectGroqAgentResponse((async function* () {
+      yield { choices: [{ delta: { tool_calls: [{ index: 0, id: "bad", function: { name: "run_code", arguments: "{" } }] } }] };
+    })(), new AbortController().signal),
+    /invalid Agent tool arguments/,
+  );
+});
 
 async function withServer(app, run) {
   const server = app.listen(0, "127.0.0.1");
@@ -220,29 +252,6 @@ test("Agent visibly switches to the supported fallback model after repeated Gemi
   assert.equal(fallbackRequest.generationConfig.thinkingConfig.thinkingLevel, "high");
 });
 
-test("Agent tries the supported fallback model after the primary model is rate limited", async () => {
-  let calls = 0;
-  const urls = [];
-  await withServer(createSseApp({
-    fetchImpl: async (url) => {
-      calls++;
-      urls.push(String(url));
-      return calls <= 2
-        ? new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } })
-        : geminiResponse([modelEvent([{ text: "Recovered on fallback." }])]);
-    },
-  }), async (url) => {
-    const response = await fetch(url, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
-    });
-    const events = await readEvents(response);
-    assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Recovered on fallback.");
-    assert.match(events.find((event) => event.notice)?.notice.message ?? "", /switched to Gemini 3\.6 Flash/);
-  });
-  assert.equal(calls, 3);
-  assert.match(urls[2], /models\/gemini-3\.6-flash:/);
-});
-
 test("Agent switches models when the primary stream stalls before its first event", async () => {
   let calls = 0;
   const urls = [];
@@ -315,6 +324,73 @@ test("Agent retries the same model after a stalled tool continuation", async () 
   });
   assert.equal(calls, 2);
   assert.equal(urls.every((url) => url.includes("/models/gemini-3.8-flash:")), true);
+});
+
+test("Gemini rate limits switch Agent to Qwen and keep code-tool history on Groq", async () => {
+  let geminiCalls = 0;
+  const groqRequests = [];
+  const groqClient = {
+    models: { list: async () => ({ data: [{ id: CODING_FALLBACK }] }) },
+    chat: { completions: { create: async (request) => {
+      groqRequests.push(request);
+      const callNumber = groqRequests.length;
+      return (async function* () {
+        if (callNumber === 1) {
+          yield { choices: [{ delta: { tool_calls: [{
+            index: 0,
+            id: "qwen-code-1",
+            type: "function",
+            function: { name: "run_code", arguments: '{"language":"javascript","code":"console.log(2+2)"}' },
+          }] } }] };
+        } else {
+          yield { choices: [{ delta: { content: "I built and tested the code successfully." } }] };
+        }
+      })();
+    } } },
+  };
+  await withServer(createSseApp({
+    fetchImpl: async () => {
+      geminiCalls++;
+      return new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } });
+    },
+    getGroqClient: () => groqClient,
+  }), async (url) => {
+    const firstResponse = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const firstEvents = await readEvents(firstResponse);
+    assert.equal(firstResponse.status, 200);
+    assert.equal(firstEvents.some((event) => event.agentProvider === "groq"), true);
+    assert.match(firstEvents.find((event) => event.notice)?.notice.message ?? "", /Groq Qwen3\.8 27B/);
+    const tool = firstEvents.find((event) => event.agentTool)?.agentTool;
+    assert.equal(tool.arguments.language, "javascript");
+
+    const continuation = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        agentProvider: "groq",
+        agentHistory: [{
+          tool: "run_code",
+          callId: tool.callId,
+          thoughtSignature: tool.thoughtSignature,
+          arguments: tool.arguments,
+          result: "stdout: 4",
+        }],
+      }),
+    });
+    const continuationEvents = await readEvents(continuation);
+    assert.equal(continuationEvents.filter((event) => event.content).map((event) => event.content).join(""), "I built and tested the code successfully.");
+  });
+  assert.equal(geminiCalls, 2, "Gemini is retried once, then the selected fallback handles continuation");
+  assert.equal(groqRequests.length, 2);
+  assert.equal(groqRequests[0].model, CODING_FALLBACK);
+  assert.equal(groqRequests[0].tool_choice, "auto");
+  assert.equal(groqRequests[1].messages.at(-2).tool_calls[0].id, "qwen-code-1");
+  assert.equal(groqRequests[1].messages.at(-1).tool_call_id, "qwen-code-1");
 });
 
 test("Agent searches only when the model requests it and continues with bounded public sources", async () => {

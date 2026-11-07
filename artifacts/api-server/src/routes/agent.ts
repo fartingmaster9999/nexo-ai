@@ -1,19 +1,23 @@
 import { Router, type IRouter } from "express";
+import Groq from "groq-sdk";
 import { StreamAgentChatBody, type AgentToolExchange } from "@workspace/api-zod";
 import { isValidTimeZone } from "../lib/chat-request";
 import { GeminiSseDecoder, validateImageData } from "../lib/gemini-image";
 import { isPublicUrl } from "../lib/public-scraper";
 import { searchWeb, type SearchResult } from "../lib/web-search";
 import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry";
+import { availableModels, CODING_FALLBACK } from "../lib/model-routing";
 import {
   buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError, geminiAgentErrorMessage,
   GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_MODEL, MAX_AGENT_CODE_CHARS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
   requestGeminiAgentStream, validateAgentHistory,
 } from "../lib/gemini-agent";
-import { CHAT_DEADLINE_MS, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
+import { buildGroqAgentRequest, collectGroqAgentResponse, GROQ_AGENT_MODEL } from "../lib/groq-agent";
+import { CHAT_DEADLINE_MS, getChatClient, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
 
 type AgentRouterOptions = {
   getApiKey?: () => string | undefined;
+  getGroqClient?: () => Groq | undefined;
   fetchImpl?: typeof fetch;
   search?: typeof searchWeb;
   now?: () => Date;
@@ -48,6 +52,7 @@ function cleanSources(sources: SearchResult["sources"]) {
 
 export function createAgentRouter({
   getApiKey = () => process.env.GEMINI_API_KEY,
+  getGroqClient = () => process.env.GROQ_API_KEY ? getChatClient() : undefined,
   fetchImpl = fetch,
   search = searchWeb,
   now = () => new Date(),
@@ -62,8 +67,18 @@ export function createAgentRouter({
       return;
     }
     const apiKey = getApiKey();
-    if (!apiKey) {
+    const groqClient = getGroqClient();
+    const requestedProvider = parsed.data.agentProvider ?? "gemini";
+    if (requestedProvider === "gemini" && !apiKey) {
       res.status(503).json({ error: "Nexo Agent is not configured. Add GEMINI_API_KEY to the server environment." });
+      return;
+    }
+    if (requestedProvider === "groq" && !groqClient) {
+      res.status(503).json({ error: "Nexo Agent's Groq fallback is not configured. Add GROQ_API_KEY to the server environment." });
+      return;
+    }
+    if (requestedProvider === "groq" && !(await availableModels(groqClient!)).includes(CODING_FALLBACK)) {
+      res.status(503).json({ error: "The Qwen3.8 27B Agent fallback is not available for this Groq account." });
       return;
     }
     if (parsed.data.timeZone !== undefined && !isValidTimeZone(parsed.data.timeZone)) {
@@ -91,12 +106,14 @@ export function createAgentRouter({
     const controller = new AbortController();
     const startedAt = Date.now();
     let timedOut = false;
-    let activeModel = GEMINI_AGENT_MODEL;
+    let activeProvider: "gemini" | "groq" = requestedProvider;
+    let activeModel = activeProvider === "groq" ? GROQ_AGENT_MODEL : GEMINI_AGENT_MODEL;
+    let qwenFallbackUnavailable = false;
     let idle: ReturnType<typeof setTimeout> | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     const deadline = setTimeout(() => {
       timedOut = true;
-      controller.abort(new Error("Gemini Agent request deadline exceeded"));
+      controller.abort(new Error("Agent request deadline exceeded"));
     }, CHAT_DEADLINE_MS);
     const abortOnDisconnect = () => {
       if (!res.writableEnded) controller.abort(new Error("Client disconnected"));
@@ -114,7 +131,7 @@ export function createAgentRouter({
       heartbeat = setInterval(() => {
         if (!res.destroyed && !res.writableEnded && res.writableLength === 0) res.write(": keepalive\n\n");
       }, 10000);
-      await emit({ model: GEMINI_AGENT_MODEL });
+      await emit({ model: activeModel, agentProvider: activeProvider });
       if (parsed.data.image && history.length === 0) {
         await emit({ activity: { id: "image-analysis", label: "Analyzing the attached image", kind: "thinking", status: "running" } });
       }
@@ -122,14 +139,13 @@ export function createAgentRouter({
       let answer = "";
       let toolCalls = history.length;
       let imageAnalysisComplete = history.length > 0;
-      const switchToFallback = async (status?: number) => {
-        if (activeModel !== GEMINI_AGENT_MODEL || toolCalls !== 0) return false;
+      const switchToGeminiFallback = async () => {
+        if (activeProvider !== "gemini" || activeModel !== GEMINI_AGENT_MODEL || toolCalls !== 0) return false;
         activeModel = GEMINI_AGENT_FALLBACK_MODEL;
         req.log.warn({
           provider: "gemini",
           model: GEMINI_AGENT_MODEL,
           fallbackModel: activeModel,
-          ...(status !== undefined ? { status } : {}),
         }, "Gemini Agent primary model unavailable; retrying with fallback");
         await emit({ model: activeModel });
         await emit({
@@ -141,14 +157,45 @@ export function createAgentRouter({
         });
         return true;
       };
+      const switchToGroqFallback = async (status?: number) => {
+        if (activeProvider !== "gemini") return false;
+        if (!groqClient || !(await availableModels(groqClient)).includes(CODING_FALLBACK)) {
+          qwenFallbackUnavailable = true;
+          return false;
+        }
+        activeProvider = "groq";
+        activeModel = GROQ_AGENT_MODEL;
+        req.log.warn({
+          provider: "gemini",
+          model: GEMINI_AGENT_MODEL,
+          fallbackProvider: "groq",
+          fallbackModel: activeModel,
+          ...(status !== undefined ? { status } : {}),
+        }, "Gemini Agent rate-limited; switching to Groq Qwen fallback");
+        await emit({ model: activeModel, agentProvider: activeProvider });
+        await emit({
+          notice: {
+            id: "gemini-agent-qwen-fallback",
+            message: parsed.data.image
+              ? "Gemini is temporarily rate-limited. Nexo Agent switched to Groq Qwen3.8 27B and can keep building and running code, but this fallback cannot inspect the attached image."
+              : "Gemini is temporarily rate-limited. Nexo Agent switched to Groq Qwen3.8 27B and can keep building and running code.",
+            model: activeModel,
+          },
+        });
+        if (parsed.data.image && !imageAnalysisComplete) {
+          imageAnalysisComplete = true;
+          await emit({ activity: { id: "image-analysis", label: "Image analysis unavailable on the fallback model", kind: "thinking", status: "error" } });
+        }
+        return true;
+      };
       let modelIdleRetries = 0;
       while (true) {
         controller.signal.throwIfAborted();
         const allowTools = toolCalls < MAX_AGENT_TOOL_CALLS;
-        const request = buildGeminiAgentRequest({
+        const agentInput = {
           ...parsed.data,
           agentHistory: history,
-        }, now(), allowTools);
+        };
         const attemptController = new AbortController();
         const abortAttempt = () => attemptController.abort(controller.signal.reason);
         if (controller.signal.aborted) abortAttempt();
@@ -158,57 +205,67 @@ export function createAgentRouter({
           clearTimeout(idle);
           idle = setTimeout(() => {
             attemptTimedOut = true;
-            attemptController.abort(new Error("Gemini Agent stream stalled"));
+            attemptController.abort(new Error("Agent stream stalled"));
           }, providerIdleMs);
         };
         let modelResponse: ReturnType<typeof collectAgentResponse> | null = null;
         try {
           resetIdle();
-          const upstream = await requestGeminiWithRetry(
-            () => requestGeminiAgentStream(apiKey, request, attemptController.signal, fetchImpl, activeModel),
-            attemptController.signal,
-          );
-          if (!upstream.ok) {
-            await upstream.body?.cancel().catch(() => {});
-            if ((upstream.status === 429 || upstream.status >= 500) && await switchToFallback(upstream.status)) continue;
-            req.log.warn({ provider: "gemini", model: activeModel, status: upstream.status }, "Gemini Agent request rejected");
-            throw new GeminiAgentApiError(upstream.status);
-          }
-          if (!upstream.body) throw new AgentPublicError("Gemini returned an empty Agent response. Please try again.");
+          if (activeProvider === "groq") {
+            const stream = await groqClient!.chat.completions.create(
+              buildGroqAgentRequest(agentInput, now(), allowTools),
+              { signal: attemptController.signal },
+            );
+            modelResponse = await collectGroqAgentResponse(stream, attemptController.signal, resetIdle);
+          } else {
+            const request = buildGeminiAgentRequest(agentInput, now(), allowTools);
+            const upstream = await requestGeminiWithRetry(
+              () => requestGeminiAgentStream(apiKey!, request, attemptController.signal, fetchImpl, activeModel),
+              attemptController.signal,
+            );
+            if (!upstream.ok) {
+              await upstream.body?.cancel().catch(() => {});
+              if (upstream.status === 429 && await switchToGroqFallback(upstream.status)) continue;
+              if (upstream.status >= 500 && await switchToGeminiFallback()) continue;
+              req.log.warn({ provider: "gemini", model: activeModel, status: upstream.status }, "Gemini Agent request rejected");
+              throw new GeminiAgentApiError(upstream.status);
+            }
+            if (!upstream.body) throw new AgentPublicError("Gemini returned an empty Agent response. Please try again.");
 
-          const decoder = new GeminiSseDecoder();
-          const reader = upstream.body.getReader();
-          const events: unknown[] = [];
-          let eventChars = 0;
-          try {
-            while (true) {
-              attemptController.signal.throwIfAborted();
-              const { value, done } = await reader.read();
-              if (attemptController.signal.aborted) throw attemptController.signal.reason;
-              if (done) break;
-              resetIdle();
-              const decoded = decoder.push(value);
-              for (const item of decoded) {
+            const decoder = new GeminiSseDecoder();
+            const reader = upstream.body.getReader();
+            const events: unknown[] = [];
+            let eventChars = 0;
+            try {
+              while (true) {
+                attemptController.signal.throwIfAborted();
+                const { value, done } = await reader.read();
+                if (attemptController.signal.aborted) throw attemptController.signal.reason;
+                if (done) break;
+                resetIdle();
+                const decoded = decoder.push(value);
+                for (const item of decoded) {
+                  eventChars += JSON.stringify(item).length;
+                  if (eventChars > 160_000) throw new AgentPublicError("Gemini's Agent response exceeded the safe output limit.");
+                  events.push(item);
+                }
+              }
+              for (const item of decoder.push()) {
                 eventChars += JSON.stringify(item).length;
                 if (eventChars > 160_000) throw new AgentPublicError("Gemini's Agent response exceeded the safe output limit.");
                 events.push(item);
               }
+            } finally {
+              await reader.cancel().catch(() => {});
+              reader.releaseLock();
             }
-            for (const item of decoder.push()) {
-              eventChars += JSON.stringify(item).length;
-              if (eventChars > 160_000) throw new AgentPublicError("Gemini's Agent response exceeded the safe output limit.");
-              events.push(item);
-            }
-          } finally {
-            await reader.cancel().catch(() => {});
-            reader.releaseLock();
+            modelResponse = collectAgentResponse(events);
           }
-          modelResponse = collectAgentResponse(events);
         } catch (error) {
-          if (attemptTimedOut && await switchToFallback()) continue;
+          if (attemptTimedOut && activeProvider === "gemini" && await switchToGeminiFallback()) continue;
           if (attemptTimedOut && modelIdleRetries < 1 && !controller.signal.aborted) {
             modelIdleRetries++;
-            req.log.warn({ provider: "gemini", model: activeModel, retry: modelIdleRetries }, "Gemini Agent stream stalled; retrying the same model");
+            req.log.warn({ provider: activeProvider, model: activeModel, retry: modelIdleRetries }, "Agent stream stalled; retrying the same model");
             await waitForGeminiRetry(controller.signal, 500);
             continue;
           }
@@ -220,7 +277,7 @@ export function createAgentRouter({
           attemptController.abort();
         }
 
-        if (!modelResponse) throw new AgentPublicError("Gemini returned no Agent response. Please try again.");
+        if (!modelResponse) throw new AgentPublicError("The Agent returned no response. Please try again.");
         modelIdleRetries = 0;
         if (parsed.data.image && !imageAnalysisComplete) {
           imageAnalysisComplete = true;
@@ -319,16 +376,22 @@ export function createAgentRouter({
       await emit({ activity: { id: "agent-finished", label: "Agent completed the request", kind: "info", status: "complete" } });
       await emit({ done: true });
       res.end();
-      req.log.info({ event: "agent.stream.completed", model: activeModel, durationMs: Date.now() - startedAt, toolCalls }, "Agent stream completed");
+      req.log.info({ event: "agent.stream.completed", provider: activeProvider, model: activeModel, durationMs: Date.now() - startedAt, toolCalls }, "Agent stream completed");
     } catch (error) {
       if (res.destroyed || res.writableEnded || (controller.signal.aborted && !timedOut)) return;
-      const status = error instanceof GeminiAgentApiError ? error.status : undefined;
-      req.log.error({ event: "agent.stream.failed", provider: "gemini", model: activeModel, status, timedOut, durationMs: Date.now() - startedAt }, "Agent stream failed");
+      const status = error instanceof GeminiAgentApiError
+        ? error.status
+        : error instanceof Groq.APIError ? error.status : undefined;
+      req.log.error({ event: "agent.stream.failed", provider: activeProvider, model: activeModel, status, timedOut, durationMs: Date.now() - startedAt }, "Agent stream failed");
       const message = timedOut
         ? "Nexo Agent timed out. Your partial answer is kept; please try again."
         : error instanceof AgentPublicError
           ? error.message
-          : error instanceof GeminiAgentApiError
+          : activeProvider === "groq" && status === 429
+            ? "Groq Qwen3.8 27B is temporarily rate-limited. Please try again later."
+            : activeProvider === "gemini" && status === 429 && qwenFallbackUnavailable
+              ? "Gemini is temporarily rate-limited, and the Groq Qwen3.8 27B fallback is not available. Please check the server's Groq configuration and model access."
+            : error instanceof GeminiAgentApiError
             ? geminiAgentErrorMessage(error.status)
             : "Nexo Agent could not complete this request. Please try again.";
       try {

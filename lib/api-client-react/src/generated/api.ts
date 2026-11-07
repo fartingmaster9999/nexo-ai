@@ -318,7 +318,7 @@ export const getStreamAgentChatUrl = () => {
 }
 
 /**
- * Gemini can analyze an optional image, then selectively request external web search or browser-only code execution. Tool activity, sources, generated code, and bounded results are returned as SSE events; private model reasoning and image bytes are not exposed.
+ * Gemini can analyze an optional image, then selectively request external web search or browser-only code execution. Gemini rate limits switch the run to Groq Qwen3.8 27B, which continues with the same tools and bounded history. Tool activity, sources, generated code, and results are returned as SSE events; private model reasoning and image bytes are not exposed.
  * @summary Stream an Agent-mode response
  */
 export const streamAgentChat = async (agentChatInput: AgentChatInput, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {

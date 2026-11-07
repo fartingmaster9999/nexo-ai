@@ -62,7 +62,7 @@ export interface ImageAttachment {
 }
 
 export interface ImageChatInput {
-  /** Use high Gemini thinking level instead of medium */
+  /** Use high thinking level instead of medium */
   deepthink?: boolean;
   /**
      * Browser IANA timezone, validated by the server for current-time context
@@ -76,6 +76,17 @@ export interface ImageChatInput {
   messages: ChatMessage[];
   image: ImageAttachment;
 }
+
+/**
+ * Continue an Agent run on its selected provider after a rate-limit fallback
+ */
+export type AgentChatInputAgentProvider = typeof AgentChatInputAgentProvider[keyof typeof AgentChatInputAgentProvider];
+
+
+export const AgentChatInputAgentProvider = {
+  gemini: 'gemini',
+  groq: 'groq',
+} as const;
 
 export type AgentToolExchangeTool = typeof AgentToolExchangeTool[keyof typeof AgentToolExchangeTool];
 
@@ -135,8 +146,10 @@ export interface AgentToolExchange {
 }
 
 export interface AgentChatInput {
-  /** Use high Gemini thinking level instead of medium */
+  /** Use high thinking level instead of medium */
   deepthink?: boolean;
+  /** Continue an Agent run on its selected provider after a rate-limit fallback */
+  agentProvider?: AgentChatInputAgentProvider;
   /**
      * Browser IANA timezone, validated by the server for current-time context
      * @maxLength 100
@@ -148,7 +161,7 @@ export interface AgentChatInput {
      */
   messages: ChatMessage[];
   /**
-     * Bounded prior tool call and result pairs for the current turn, including Gemini's opaque continuation signature.
+     * Bounded prior tool call and result pairs for the current Agent run.
      * @maxItems 6
      */
   agentHistory?: AgentToolExchange[];

@@ -5,13 +5,16 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AgentChatInputAgentProvider } from './agentChatInputAgentProvider';
 import type { AgentToolExchange } from './agentToolExchange';
 import type { ChatMessage } from './chatMessage';
 import type { ImageAttachment } from './imageAttachment';
 
 export interface AgentChatInput {
-  /** Use high Gemini thinking level instead of medium */
+  /** Use high thinking level instead of medium */
   deepthink?: boolean;
+  /** Continue an Agent run on its selected provider after a rate-limit fallback */
+  agentProvider?: AgentChatInputAgentProvider;
   /**
      * Browser IANA timezone, validated by the server for current-time context
      * @maxLength 100
@@ -23,7 +26,7 @@ export interface AgentChatInput {
      */
   messages: ChatMessage[];
   /**
-     * Bounded prior tool call and result pairs for the current turn, including Gemini's opaque continuation signature.
+     * Bounded prior tool call and result pairs for the current Agent run.
      * @maxItems 6
      */
   agentHistory?: AgentToolExchange[];
