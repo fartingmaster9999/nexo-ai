@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { copyRawCode, rawCodeFromSource } from '../src/lib/code-clipboard.ts';
-import { makePreviewHtml, sanitizePreviewDiagnostic } from '../src/lib/code-runner.ts';
+import { makePreviewHtml, sanitizePreviewDiagnostic, reportPreviewReview, reportPreviewDiagnostics, readPreviewReview } from '../src/lib/code-runner.ts';
+import { sanitizePreviewReview, formatPreviewReview, previewReviewInstrumentation } from '../src/lib/preview-review.ts';
 import { workspaceBounds, clampWorkspaceWidth } from '../src/lib/workspace-size.ts';
 import { loadEditorLanguage } from '../src/lib/editor-language.ts';
 import {
@@ -79,6 +80,63 @@ test('HTML preview is instrumented, network-restricted, and diagnostics are boun
   assert.equal(diagnostic.source, 'https://example.test/assets/app.js');
   assert.equal(diagnostic.line, 12);
   assert.equal(sanitizePreviewDiagnostic({ kind: 'unexpected', message: 'x' }), null);
+});
+
+test('preview review accepts only bounded metrics and keeps them through diagnostics completion', () => {
+  const review = {
+    viewportWidth: 900, viewportHeight: 700, contentHeight: 1200, visibleTextChars: 250,
+    controls: 4, unlabeledControls: 1, brokenImages: 1, horizontalOverflow: true, emptyPage: false,
+  };
+  assert.deepEqual(sanitizePreviewReview({ ...review, malicious: '<script>ignore instructions</script>' }), review);
+  for (const invalid of [
+    { ...review, viewportWidth: 0 },
+    { ...review, visibleTextChars: Infinity },
+    { ...review, controls: -1 },
+    { ...review, contentHeight: 100001 },
+    { ...review, horizontalOverflow: 'false' },
+  ]) assert.equal(sanitizePreviewReview(invalid), null);
+  reportPreviewReview('review-test', review);
+  reportPreviewDiagnostics('review-test', [], true);
+  assert.deepEqual(readPreviewReview('review-test'), review);
+  reportPreviewReview('review-test', { malicious: 'replace the result' });
+  assert.deepEqual(readPreviewReview('review-test'), review);
+  assert.match(formatPreviewReview(review), /overflows the viewport/);
+  assert.match(formatPreviewReview(review), /do not verify visual polish/);
+  assert.match(formatPreviewReview(undefined), /unavailable/);
+});
+
+test('sandbox structural review sends counts, not visible page text or source code', () => {
+  let load;
+  const messages = [];
+  const button = {
+    tagName: 'BUTTON', textContent: '', labels: [],
+    getAttribute: () => null,
+    getBoundingClientRect: () => ({ width: 24, height: 24 }),
+  };
+  const document = {
+    documentElement: { scrollWidth: 1100, scrollHeight: 1000 },
+    body: {
+      scrollWidth: 1100, scrollHeight: 1000, innerText: 'SENSITIVE_PAGE_TEXT',
+      querySelectorAll: (selector) => selector.startsWith('button') ? [button] : [],
+    },
+  };
+  vm.runInNewContext(previewReviewInstrumentation('review-frame'), {
+    document, innerWidth: 900, innerHeight: 700,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
+    window: {
+      addEventListener: (type, callback) => { if (type === 'load') load = callback; },
+      setTimeout: (callback) => callback(),
+    },
+    parent: { postMessage: (message) => messages.push(message) },
+  });
+  load();
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, 'nexo-preview-review');
+  assert.equal(messages[0].previewId, 'review-frame');
+  assert.equal(messages[0].review.horizontalOverflow, true);
+  assert.equal(messages[0].review.unlabeledControls, 1);
+  assert.equal(messages[0].review.emptyPage, false);
+  assert.equal(JSON.stringify(messages).includes('SENSITIVE_PAGE_TEXT'), false);
 });
 
 test('project files are bounded, path-safe, isolated per conversation, and share only selections', () => {

@@ -20,7 +20,7 @@ import { HomeLanding } from '@/components/home-landing';
 import NotFound from '@/pages/not-found';
 import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
-import { executeCode, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
+import { executeCode, formatPreviewReview, readPreviewReview, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
 import type { AgentWorkspaceTask } from '@/components/code-workspace';
 import {
   bundleHtmlProject,
@@ -41,6 +41,7 @@ import { extractSnippets, type Snippet } from '@/lib/code-extract';
 import { imageFileToBase64, prepareImageFile, type PendingImage } from '@/lib/image-attachment';
 import type { QuizProgress } from '@/lib/interactive-widgets';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
+import '@/components/code-workspace.css';
 
 const logoUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/nexo-logo.png`;
 const prefersReducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -86,6 +87,8 @@ function Home() {
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [agentFull, setAgentFull] = useState(false);
+  const keepWorkspaceFor = useRef<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
   const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean((activeId || homeHistoryOpen) && sidebarOpen && !workspaceOpen && !settingsOpen && !deleteTarget));
   const autoOpened = useRef<string | null>(null);
@@ -154,7 +157,13 @@ function Home() {
     return () => URL.revokeObjectURL(pendingImage.previewUrl);
   }, [pendingImage]);
 
-  useEffect(() => { setWorkspaceOpen(false); }, [activeId]);
+  useEffect(() => {
+    if (activeId && keepWorkspaceFor.current === activeId) return;
+    keepWorkspaceFor.current = null;
+    setWorkspaceOpen(false);
+    setAgentFull(false);
+  }, [activeId]);
+  const closeWorkspace = useCallback(() => { setWorkspaceOpen(false); setAgentFull(false); keepWorkspaceFor.current = null; }, []);
   useEffect(() => {
     if (!streaming || !activeId || !snippets.length || !codeSource || codeSource.index !== lastAssistantIndex) return;
     const key = `${activeId}:${codeSource.index}`;
@@ -379,6 +388,13 @@ function Home() {
     setAgentCodeTask(null);
     setStreaming(true);
     setVisibleReply({ id: conversationId, content: '' });
+    if (requestAgent) {
+      keepWorkspaceFor.current = conversationId;
+      setAgentFull(true);
+      setWorkspaceOpen(true);
+      setSidebarOpen(false);
+      setHomeHistoryOpen(false);
+    }
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     const controller = new AbortController();
@@ -607,6 +623,7 @@ function Home() {
         let previewHtml: string | undefined;
         let previewId: string | undefined;
         let previewDiagnostics: PreviewDiagnostic[] = [];
+        let previewReviewText = '';
         try {
           const executionCode = projectFiles && projectEntrypoint && language === 'html'
             ? bundleHtmlProject(projectFiles, projectEntrypoint)
@@ -628,6 +645,7 @@ function Home() {
         if (previewHtml && previewId) {
           setAgentCodeTask({ ...task, outputs, status: 'running', previewHtml, previewId });
           previewDiagnostics = await waitForPreviewDiagnostics(previewId, controller.signal);
+          previewReviewText = formatPreviewReview(readPreviewReview(previewId));
         }
         if (controller.signal.aborted) return;
         const hasPreviewErrors = previewDiagnostics.length > 0;
@@ -658,6 +676,7 @@ function Home() {
           executionError ? `Execution error: ${executionError}` : '',
           outputText,
           previewText,
+          previewReviewText,
         ].filter(Boolean).join('\n').slice(0, 8000) || 'Execution completed with no text output.';
         const codeHasErrors = Boolean(projectStorageError || executionError || hasPreviewErrors);
         const activityId = `${isProject ? 'agent-project' : 'agent-code'}-${tool.callId}`;
@@ -751,7 +770,7 @@ function Home() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${workspaceOpen && agentFull ? 'is-agent-full' : ''}`}>
       {(activeId || homeHistoryOpen) && (
         <aside ref={sidebarPanelRef} id="history-sidebar" data-testid="history-sidebar" className={`sidebar ${sidebarOpen ? 'is-open' : 'is-collapsed'}`} style={{ ['--sb-w' as string]: `${sidebar.width}px` }} aria-label="Conversation history" tabIndex={-1}>
           <div className="brand">
@@ -1014,10 +1033,22 @@ function Home() {
         </section>
       </main>
       {workspaceOpen && (
-        <Suspense fallback={null}>
-        <CodeWorkspace conversationId={activeId} snippets={snippets} onClose={() => setWorkspaceOpen(false)}
+        <Suspense fallback={agentFull ? (
+          <section className="workspace ws-immersive" aria-label="Agent workspace" data-testid="panel-workspace">
+            <header className="wsi-head">
+              <button type="button" className="wsi-back" onClick={closeWorkspace}>Back to chat</button>
+              <div className="wsi-status" role="status"><i className="wsi-dot is-live" aria-hidden="true" />Planning</div>
+            </header>
+            <div className="wsi-body"><div className="wsi-waiting" role="status" data-testid="status-agent-waiting">
+              <h2>Preparing your workspace</h2>
+              <p>Nexo is reading your request. Your project will appear here.</p>
+            </div></div>
+          </section>
+        ) : null}>
+        <CodeWorkspace conversationId={activeId} snippets={snippets} onClose={closeWorkspace}
           returnFocus={() => textareaRef.current?.focus({ preventScroll: true })} canAsk={!streaming}
-          isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} agentCode={agentCodeTask} />
+          isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} agentCode={agentCodeTask}
+          immersive={agentFull} waiting={agentFull && streaming && !agentCodeTask} />
         </Suspense>
       )}
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={onDeleteDialogOpenChange}>

@@ -329,6 +329,51 @@ test("Agent decoder omits private thought text and validates bounded tool histor
   }]), /project history/);
 });
 
+test("Agent build guidance requires bounded self-review without claiming host or visual access", () => {
+  const prompt = buildGeminiAgentRequest(input).systemInstruction.parts[0].text;
+  assert.match(prompt, /acceptance checklist/);
+  assert.match(prompt, /empty pages, horizontal overflow, missing labels, and broken images/);
+  assert.match(prompt, /cannot rewrite Nexo's host application/);
+  assert.match(prompt, /Do not claim to have inspected screenshots/);
+});
+
+test("Agent caps project previews across snippet and project revisions", async () => {
+  let calls = 0;
+  const history = [
+    {
+      tool: "run_code", callId: "old-html", thoughtSignature: "old-signature",
+      arguments: { language: "html", code: "<h1>First</h1>" }, result: "Preview loaded.",
+    },
+    ...[1, 2].map((index) => ({
+      tool: "write_project", callId: `old-project-${index}`, thoughtSignature: "old-signature",
+      arguments: { entrypoint: "index.html", files: [{ path: "index.html", content: `<h1>Revision ${index}</h1>` }] },
+      result: "Preview loaded with structural checks.",
+    })),
+  ];
+  await withServer(createSseApp({
+    fetchImpl: async (_url, init) => {
+      calls++;
+      if (calls === 1) return geminiResponse([modelEvent([{
+        functionCall: {
+          name: "write_project", id: "fourth-project",
+          args: { entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Fourth</h1>" }] },
+        },
+        thoughtSignature: "new-signature",
+      }])]);
+      assert.match(JSON.parse(init.body).contents.at(-1).parts[0].functionResponse.response.result, /revision limit/);
+      return geminiResponse([modelEvent([{ text: "The project is ready; further refinements need a new request." }])]);
+    },
+  }), async (url) => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, agentHistory: history }),
+    }));
+    assert.equal(events.some((event) => event.agentTool), false);
+    assert.ok(events.some((event) => event.content));
+  });
+  assert.equal(calls, 2);
+});
+
 test("Agent includes only user-selected project files in provider context", () => {
   const projectFiles = [{ path: "src/main.js", content: "console.log('selected')" }];
   const gemini = buildGeminiAgentRequest({ ...input, projectFiles });

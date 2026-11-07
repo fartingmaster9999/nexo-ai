@@ -1,3 +1,5 @@
+import { previewReviewInstrumentation, sanitizePreviewReview, type PreviewReview } from './preview-review.ts';
+export { formatPreviewReview } from './preview-review.ts';
 export type RunLanguage = 'python' | 'javascript' | 'html';
 export type RunOutput = { kind: 'stdout' | 'stderr' | 'status' | 'image'; text?: string; dataUrl?: string };
 export type PreviewDiagnosticKind = 'error' | 'unhandled-rejection' | 'console-error' | 'resource-error' | 'timeout' | 'limit';
@@ -21,7 +23,7 @@ const PREVIEW_WAIT_MS = 12_000;
 const PREVIEW_RESULT_TTL_MS = 30_000;
 const PREVIEW_RESULT_CACHE_SIZE = 8;
 
-type PreviewResult = { diagnostics: PreviewDiagnostic[]; complete: boolean; savedAt: number };
+type PreviewResult = { diagnostics: PreviewDiagnostic[]; complete: boolean; savedAt: number; review?: PreviewReview };
 type PreviewWaiter = {
   resolve: (diagnostics: PreviewDiagnostic[]) => void;
   reject: (error: DOMException) => void;
@@ -95,13 +97,31 @@ function rememberPreviewResult(previewId: string, result: PreviewResult) {
 }
 
 /** Called only after the parent validates the exact sandbox frame and its preview ID. */
+export function reportPreviewReview(previewId: string, value: unknown) {
+  const review = sanitizePreviewReview(value);
+  if (!review) return;
+  const existing = previewResults.get(previewId);
+  rememberPreviewResult(previewId, {
+    diagnostics: existing?.diagnostics ?? [],
+    complete: existing?.complete ?? false,
+    savedAt: Date.now(),
+    review,
+  });
+}
+
+export function readPreviewReview(previewId: string): PreviewReview | undefined {
+  const cached = previewResults.get(previewId);
+  return cached?.review && Date.now() - cached.savedAt <= PREVIEW_RESULT_TTL_MS ? { ...cached.review } : undefined;
+}
+
+/** Called only after the parent validates the exact sandbox frame and its preview ID. */
 export function reportPreviewDiagnostics(previewId: string, values: unknown[], complete = false) {
   const existing = previewResults.get(previewId);
   const diagnostics = boundedDiagnostics([
     ...(existing?.diagnostics ?? []),
     ...values.slice(0, MAX_PREVIEW_DIAGNOSTICS),
   ]);
-  const result = { diagnostics, complete: complete || existing?.complete === true, savedAt: Date.now() };
+  const result = { diagnostics, complete: complete || existing?.complete === true, savedAt: Date.now(), review: existing?.review };
   rememberPreviewResult(previewId, result);
   if (!result.complete) return;
   const waiters = previewWaiters.get(previewId);
@@ -156,7 +176,7 @@ function previewInstrumentation(previewId: string) {
 /** HTML previews run with an opaque origin and a restrictive policy; never add allow-same-origin. */
 export function makePreviewHtml(code: string, previewId: string): string {
   const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";
-  const head = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${previewInstrumentation(previewId)}</script>`;
+  const head = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${previewInstrumentation(previewId)}</script><script>${previewReviewInstrumentation(previewId)}</script>`;
   const source = code.replace(/^\s*<!doctype\b[^>]*>/i, '');
   let documentHtml: string;
   if (/<head\b[^>]*>/i.test(source)) {

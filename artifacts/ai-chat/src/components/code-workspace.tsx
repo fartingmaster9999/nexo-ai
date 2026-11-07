@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { EditorView } from '@codemirror/view';
-import { Play, Square, Wrench, X, RotateCcw, Download, Terminal } from 'lucide-react';
+import { Play, Square, Wrench, X, RotateCcw, Download, Terminal, ArrowLeft, Eye, Code2, ScrollText } from 'lucide-react';
 import {
   executeCode,
   MAX_PREVIEW_DIAGNOSTICS,
   reportPreviewDiagnostics,
+  reportPreviewReview,
   sanitizePreviewDiagnostic,
   type PreviewDiagnostic,
   type RunLanguage,
@@ -66,9 +67,13 @@ type Props = {
   canAsk: boolean;
   isLight: boolean;
   agentCode?: AgentWorkspaceTask | null;
+  immersive?: boolean;
+  waiting?: boolean;
 };
+type View = 'preview' | 'code' | 'console';
 
-export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, onAskFix, canAsk, isLight, agentCode }: Props) {
+export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, onAskFix, canAsk, isLight, agentCode, immersive = false, waiting = false }: Props) {
+  const [view, setView] = useState<View>('preview');
   const key = conversationId ?? '__scratch';
   const [drafts, setDrafts] = useState<Record<string, Draft>>(readDrafts);
   const [sel, setSel] = useState(0);
@@ -95,7 +100,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const outputFrameRef = useRef<number | null>(null);
   const draftsRef = useRef(drafts);
   const saveTimerRef = useRef<number | null>(null);
-  const panelRef = useFocusTrap<HTMLElement>(true);
+  const panelRef = useFocusTrap<HTMLElement>(!immersive);
   draftsRef.current = drafts;
   outputsRef.current = outputs;
 
@@ -181,6 +186,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     if (!agentCode) return;
     setDrafts((current) => ({ ...current, [key]: { language: agentCode.language, code: agentCode.code, edited: false } }));
     setSel(0);
+    setView(agentCode.language === 'html' ? 'preview' : 'console');
   }, [key, agentCode?.id]);
 
   useEffect(() => {
@@ -194,7 +200,9 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     if (agentCode.previewHtml !== undefined) setPreview(agentCode.previewHtml);
     if (agentCode.previewId !== undefined) {
       setPreviewId(agentCode.previewId);
-      setPreviewComplete(false);
+      // The final task update includes the completed diagnostics, even when empty.
+      // Do not reset an already checked preview to "loading" on that same ID.
+      setPreviewComplete(agentCode.previewDiagnostics !== undefined);
       const initialDiagnostics = agentCode.previewDiagnostics ?? [];
       previewDiagnosticsRef.current = initialDiagnostics;
       setPreviewDiagnostics(initialDiagnostics);
@@ -247,7 +255,10 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         if (!diagnostic || completed) return;
         const diagnostics = merge([diagnostic]);
         reportPreviewDiagnostics(previewId, diagnostics, false);
+      } else if (data.type === 'nexo-preview-review') {
+        if (!completed) reportPreviewReview(previewId, data.review);
       } else if (data.type === 'nexo-preview-complete') {
+        if (!completed) reportPreviewReview(previewId, data.review);
         finish(Array.isArray(data.diagnostics) ? data.diagnostics : []);
       }
     };
@@ -331,13 +342,14 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       if (document.querySelector('[role="dialog"]')) return;
       if (event.target instanceof HTMLElement && event.target.closest('.cm-editor')) return;
+      if (immersive && event.target instanceof HTMLElement && event.target.closest('textarea, input, select')) return;
       event.preventDefault();
       event.stopPropagation();
       close();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose, returnFocus]);
+  }, [onClose, returnFocus, immersive]);
 
   const stop = () => {
     const current = abortRef.current;
@@ -499,6 +511,169 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     }
   };
 
+  const isHtml = workspaceLanguage === 'html';
+  const agentRunning = agentCode?.status === 'running';
+  const runDisabled = project ? !activeProjectFile?.content.trim() || agentRunning : !draft.code.trim() || agentRunning;
+  const editorNode = project ? (
+    <ProjectFilesPanel
+      files={project.files}
+      activePath={activeProjectPath}
+      selectedPaths={project.selectedPaths}
+      isLight={isLight}
+      disabled={running || agentRunning}
+      onSelect={setActiveProjectPath}
+      onChange={(path, content) => updateProject(createSavedProject(
+        project.files.map((file) => file.path === path ? { ...file, content } : file),
+        project.entrypoint,
+        project.selectedPaths,
+      ))}
+      onToggleContext={toggleProjectContext}
+      onDelete={handleDeleteProjectFile}
+      onAdd={handleAddProjectFile}
+      onExport={exportProject}
+    />
+  ) : (
+    <div className="ws-editor">
+      <CodeMirror value={draft.code} height="100%" theme={isLight ? 'light' : 'dark'} extensions={editorExtensions}
+        onChange={(v) => { if (v !== draft.code) setDraft({ code: v }); }} aria-label="Code editor" data-testid="editor-code" />
+    </div>
+  );
+  const previewNode = preview ? (
+    <div className="ws-preview-pane" data-testid="preview-pane">
+      <iframe
+        key={previewId ?? 'html-preview'}
+        ref={previewFrameRef}
+        className="ws-preview"
+        sandbox="allow-scripts"
+        srcDoc={preview}
+        title="Isolated HTML preview"
+        data-testid="frame-preview"
+      />
+      {!previewComplete && <p className="ws-preview-status" role="status">Loading isolated preview…</p>}
+      {previewComplete && previewDiagnostics.length === 0 && (
+        <p className="ws-preview-status" role="status">Preview loaded. No runtime errors were reported.</p>
+      )}
+      {previewDiagnostics.length > 0 && (
+        <div className="ws-preview-diagnostics" role="alert" data-testid="preview-diagnostics">
+          <strong>Preview diagnostics</strong>
+          <ul>
+            {previewDiagnostics.map((diagnostic, index) => (
+              <li key={`${diagnostic.kind}-${index}`}>
+                <span>{diagnostic.kind}</span>{' '}
+                <code>{diagnostic.message}</code>
+                {diagnostic.source && <small>{diagnostic.source}{diagnostic.line ? `:${diagnostic.line}` : ''}</small>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  ) : null;
+  const consoleNode = (
+    <div className="ws-console" ref={consoleRef} onScroll={handleConsoleScroll} role="log" aria-live="polite" data-testid="console-output">
+      {!hasRun && <p className="c-status">Run code to see output.</p>}
+      {outputs.map((o, i) => o.kind === 'image' && o.dataUrl
+        ? <img key={i} src={o.dataUrl} alt={`Plot output ${i + 1}`} className="c-img" />
+        : <pre key={i} className={`c-${o.kind}`}>{o.text}</pre>)}
+      {running && <p className="c-status c-live" data-testid="status-run">{runStatus || 'Running…'}</p>}
+      {hasRun && !running && !runError && outputs.length === 0 && !isHtml && <p className="c-status">Finished with no output.</p>}
+      {hasRun && !running && isHtml && previewDiagnostics.length > 0 && previewDiagnostics.map((d, i) => (
+        <pre key={`pd-${i}`} className="c-stderr">{`${d.kind}: ${d.message}${d.source ? ` (${d.source}${d.line ? `:${d.line}` : ''})` : ''}`}</pre>
+      ))}
+      {runError && <pre className="c-stderr" role="alert">{runError}</pre>}
+    </div>
+  );
+  const runButton = running ? (
+    <button type="button" className="ws-btn stop" onClick={stop} data-testid="button-stop-code"><Square size={13} aria-hidden="true" /> Stop</button>
+  ) : (
+    <button type="button" className="ws-btn run" onClick={() => void run()} disabled={runDisabled} data-testid="button-run-code">
+      <Play size={13} aria-hidden="true" /> {project ? (immersive ? 'Rerun' : 'Run project') : immersive ? 'Rerun' : 'Run'}
+    </button>
+  );
+  const askFixButton = (
+    <button type="button" className="ws-mini accent" disabled={!canAsk} onClick={askFix} title={canAsk ? 'Send code and output to Nexo' : 'Wait for the current reply to finish'} data-testid="button-ask-fix"><Wrench size={11} aria-hidden="true" /> Ask Nexo to fix</button>
+  );
+
+  if (immersive) {
+    const status = waiting ? 'Planning' : agentRunning ? (preview ? 'Checking preview' : 'Building') : agentCode?.status === 'error' ? 'Needs attention' : agentCode ? 'Ready' : 'Idle';
+    const tabs: { id: View; label: string; Icon: typeof Eye }[] = [
+      { id: 'preview', label: 'Preview', Icon: Eye },
+      { id: 'code', label: 'Code', Icon: Code2 },
+      { id: 'console', label: 'Console', Icon: ScrollText },
+    ];
+    const issueCount = previewDiagnostics.length + (runError ? 1 : 0) + outputs.filter((o) => o.kind === 'stderr').length;
+    return (
+      <section ref={panelRef} id="code-workspace" className="workspace ws-immersive" aria-label="Agent workspace" data-testid="panel-workspace" data-view={view} tabIndex={-1}>
+        <header className="wsi-head">
+          <button type="button" className="wsi-back" onClick={close} aria-label="Back to chat. Your project stays saved." data-testid="button-close-workspace">
+            <ArrowLeft size={15} aria-hidden="true" /><span>Back to chat</span>
+          </button>
+          <div className="wsi-status" role="status" data-testid="status-workspace">
+            <i className={`wsi-dot ${waiting || agentRunning ? 'is-live' : agentCode?.status === 'error' ? 'is-err' : ''}`} aria-hidden="true" />
+            <span>{status}</span>
+            {project && <small>{project.files.length} {project.files.length === 1 ? 'file' : 'files'}</small>}
+          </div>
+          <div className="wsi-tabs" role="tablist" aria-label="Workspace view">
+            {tabs.map(({ id, label, Icon }) => (
+              <button key={id} type="button" role="tab" id={`wsi-tab-${id}`} aria-selected={view === id} aria-controls={`wsi-pane-${id}`}
+                className={view === id ? 'is-on' : ''} onClick={() => setView(id)} data-testid={`tab-view-${id}`}>
+                <Icon size={13} aria-hidden="true" /><span>{label}</span>
+                {id === 'console' && issueCount > 0 && <b className="wsi-badge" aria-label={`${issueCount} issues`}>{issueCount}</b>}
+              </button>
+            ))}
+          </div>
+          <div className="wsi-actions">
+            {view === 'code' && <button type="button" className={`ws-btn wrap-toggle ${wrapLines ? 'is-on' : ''}`} aria-label="Wrap code lines"
+              aria-pressed={wrapLines} onClick={() => setWrapLines((value) => !value)} data-testid="button-toggle-wrap">Wrap</button>}
+            <CopyCodeButton text={workspaceCode} label={project && activeProjectFile ? `Copy ${activeProjectFile.path}` : 'Copy workspace code'} />
+            {runButton}
+          </div>
+        </header>
+        {storageError && <div className="ws-banner" role="alert">{storageError}</div>}
+        <div className="wsi-body">
+          {waiting ? (
+            <div className="wsi-waiting" role="status" aria-live="polite" data-testid="status-agent-waiting">
+              <div className="wsi-frame" aria-hidden="true">
+                <div className="wsi-frame-bar"><i /><i /><i /></div>
+                <div className="wsi-skel"><span className="w60" /><span className="w90" /><span className="w40" /><span className="block" /></div>
+              </div>
+              <h2>Nexo is drafting your project</h2>
+              <ol className="wsi-steps">
+                <li className="is-live">Reading your request</li>
+                <li>Writing files</li>
+                <li>Running it in an isolated preview</li>
+              </ol>
+              <p>Keep chatting on the left. The preview will appear here as soon as code arrives.</p>
+            </div>
+          ) : (
+            <>
+              <div id="wsi-pane-preview" role="tabpanel" aria-labelledby="wsi-tab-preview" className="wsi-pane" hidden={view !== 'preview'}>
+                {previewNode ?? (
+                  <div className="wsi-empty">
+                    <Eye size={18} aria-hidden="true" />
+                    <p>{agentRunning ? 'Running the code. The preview loads here next.' : isHtml ? 'No preview yet. Rerun the project to load it.' : 'This result is not a web page. Open Console for its output.'}</p>
+                    {!agentRunning && !isHtml && <button type="button" className="ws-mini" onClick={() => setView('console')} data-testid="button-open-console">Open console</button>}
+                  </div>
+                )}
+              </div>
+              <div id="wsi-pane-code" role="tabpanel" aria-labelledby="wsi-tab-code" className="wsi-pane" hidden={view !== 'code'}>
+                {!project && editorLanguage.error && <div className="ws-language-status" role="status">
+                  Highlighting could not load. Plain-text editing is still available.
+                  <button type="button" onClick={editorLanguage.retry}>Retry highlighting</button>
+                </div>}
+                {view === 'code' && editorNode}
+              </div>
+              <div id="wsi-pane-console" role="tabpanel" aria-labelledby="wsi-tab-console" className="wsi-pane" hidden={view !== 'console'}>
+                <div className="ws-out-head"><span>Console</span><span className="ws-out-actions">{askFixButton}</span></div>
+                {consoleNode}
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <aside ref={panelRef} id="code-workspace" className="workspace workspace-resizable" style={{ ['--workspace-width' as string]: `${workspaceSize.width}px` }} aria-label="Code workspace" data-testid="panel-workspace" tabIndex={-1}>
       <div className="workspace-resizer" role="separator" aria-orientation="vertical" aria-label="Resize code workspace"
@@ -508,7 +683,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       <header className="ws-head">
         <Terminal size={15} aria-hidden="true" className="ws-icon" />
         <span className="ws-title">Workspace</span>
-        {agentCode && <span className="ws-agent-label" role="status">{agentCode.status === 'running' ? 'Agent running' : 'Agent result'}</span>}
+        {agentCode && <span className="ws-agent-label" role="status">{agentRunning ? 'Agent running' : 'Agent result'}</span>}
         {project
           ? <span className="ws-project-label">{project.files.length} project {project.files.length === 1 ? 'file' : 'files'}</span>
           : <select className="ws-select" value={draft.language} aria-label="Language" onChange={(e) => setDraft({ language: e.target.value as RunLanguage })} data-testid="select-language">
@@ -516,13 +691,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
             </select>}
         <button type="button" className={`ws-btn wrap-toggle ${wrapLines ? 'is-on' : ''}`} aria-label="Wrap code lines"
           aria-pressed={wrapLines} title="Toggle soft line wrapping" onClick={() => setWrapLines((value) => !value)} data-testid="button-toggle-wrap">Wrap</button>
-        {running ? (
-          <button type="button" className="ws-btn stop" onClick={stop} data-testid="button-stop-code"><Square size={13} /> Stop</button>
-        ) : (
-          <button type="button" className="ws-btn run" onClick={() => void run()}
-            disabled={project ? !activeProjectFile?.content.trim() || agentCode?.status === 'running' : !draft.code.trim() || agentCode?.status === 'running'}
-            data-testid="button-run-code"><Play size={13} /> {project ? 'Run project' : 'Run'}</button>
-        )}
+        {runButton}
         <button type="button" className="icon-btn" onClick={close} aria-label="Close workspace" data-testid="button-close-workspace"><X size={16} /></button>
       </header>
       {storageError && <div className="ws-banner" role="alert">{storageError}</div>}
@@ -548,81 +717,18 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         </div>
       )}
 
-      {project ? (
-        <ProjectFilesPanel
-          files={project.files}
-          activePath={activeProjectPath}
-          selectedPaths={project.selectedPaths}
-          isLight={isLight}
-          disabled={running || agentCode?.status === 'running'}
-          onSelect={setActiveProjectPath}
-          onChange={(path, content) => updateProject(createSavedProject(
-            project.files.map((file) => file.path === path ? { ...file, content } : file),
-            project.entrypoint,
-            project.selectedPaths,
-          ))}
-          onToggleContext={toggleProjectContext}
-          onDelete={handleDeleteProjectFile}
-          onAdd={handleAddProjectFile}
-          onExport={exportProject}
-        />
-      ) : (
-        <div className="ws-editor">
-          <CodeMirror value={draft.code} height="100%" theme={isLight ? 'light' : 'dark'} extensions={editorExtensions}
-            onChange={(v) => { if (v !== draft.code) setDraft({ code: v }); }} aria-label="Code editor" data-testid="editor-code" />
-        </div>
-      )}
+      {editorNode}
 
       <div className="ws-out">
         <div className="ws-out-head">
-          <span>{workspaceLanguage === 'html' ? 'Preview' : 'Console'}</span>
+          <span>{isHtml ? 'Preview' : 'Console'}</span>
           <span className="ws-out-actions">
             <CopyCodeButton text={workspaceCode} label={project && activeProjectFile ? `Copy ${activeProjectFile.path}` : 'Copy workspace code'} />
             {!project && <button type="button" className="ws-mini" onClick={() => setDraft({ code: STARTERS[draft.language] })} title="Replace with starter" data-testid="button-reset-code"><RotateCcw size={11} /> Starter</button>}
-            <button type="button" className="ws-mini accent" disabled={!canAsk} onClick={askFix} title={canAsk ? 'Send code and output to Nexo' : 'Wait for the current reply to finish'} data-testid="button-ask-fix"><Wrench size={11} /> Ask Nexo to fix</button>
+            {askFixButton}
           </span>
         </div>
-        {workspaceLanguage === 'html' && preview ? (
-          <div className="ws-preview-pane" data-testid="preview-pane">
-            <iframe
-              key={previewId ?? 'html-preview'}
-              ref={previewFrameRef}
-              className="ws-preview"
-              sandbox="allow-scripts"
-              srcDoc={preview}
-              title="Isolated HTML preview"
-              data-testid="frame-preview"
-            />
-            {!previewComplete && <p className="ws-preview-status" role="status">Loading isolated preview…</p>}
-            {previewComplete && previewDiagnostics.length === 0 && (
-              <p className="ws-preview-status" role="status">Preview loaded. No runtime errors were reported.</p>
-            )}
-            {previewDiagnostics.length > 0 && (
-              <div className="ws-preview-diagnostics" role="alert" data-testid="preview-diagnostics">
-                <strong>Preview diagnostics</strong>
-                <ul>
-                  {previewDiagnostics.map((diagnostic, index) => (
-                    <li key={`${diagnostic.kind}-${index}`}>
-                      <span>{diagnostic.kind}</span>{' '}
-                      <code>{diagnostic.message}</code>
-                      {diagnostic.source && <small>{diagnostic.source}{diagnostic.line ? `:${diagnostic.line}` : ''}</small>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="ws-console" ref={consoleRef} onScroll={handleConsoleScroll} role="log" aria-live="polite" data-testid="console-output">
-            {!hasRun && <p className="c-status">Run code to see output.</p>}
-            {outputs.map((o, i) => o.kind === 'image' && o.dataUrl
-              ? <img key={i} src={o.dataUrl} alt={`Plot output ${i + 1}`} className="c-img" />
-              : <pre key={i} className={`c-${o.kind}`}>{o.text}</pre>)}
-            {running && <p className="c-status c-live" data-testid="status-run">{runStatus || 'Running…'}</p>}
-            {hasRun && !running && !runError && outputs.length === 0 && workspaceLanguage !== 'html' && <p className="c-status">Finished with no output.</p>}
-            {runError && <pre className="c-stderr" role="alert">{runError}</pre>}
-          </div>
-        )}
+        {isHtml && previewNode ? previewNode : consoleNode}
       </div>
     </aside>
   );

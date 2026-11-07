@@ -50,6 +50,13 @@ function sameToolArguments(left: AgentToolExchange, right: { tool: string; argum
   return left.arguments.language === right.arguments.language && left.arguments.code === right.arguments.code;
 }
 
+function htmlPreviewCount(history: AgentToolExchange[]) {
+  return history.filter((exchange) =>
+    (exchange.tool === "run_code" && exchange.arguments.language === "html") ||
+    (exchange.tool === "write_project" && /\.html?$/i.test(exchange.arguments.entrypoint ?? "")),
+  ).length;
+}
+
 function safeResultText(result: string) {
   return result.slice(0, MAX_AGENT_RESULT_CHARS);
 }
@@ -729,6 +736,17 @@ export function createAgentRouter({
             await emit({ activity: { id: `agent-project-${call.callId}`, label: "Reused the earlier project run", kind: "code", status: "complete" } });
             continue;
           }
+          if (/\.html?$/i.test(entrypoint) && htmlPreviewCount(history) >= MAX_AGENT_HTML_PREVIEW_RUNS) {
+            history.push({
+              tool: call.tool,
+              callId: call.callId,
+              thoughtSignature: call.thoughtSignature,
+              arguments: arguments_,
+              result: safeResultText("The HTML preview revision limit was reached after three runs. Do not request another preview; provide the best final response using the existing project and checks. Explain any remaining limitations."),
+            });
+            await emit({ activity: { id: `agent-project-${call.callId}`, label: "Project preview revision limit reached", kind: "code", status: "complete" } });
+            continue;
+          }
           await reviewAction(call.callId, call.tool, arguments_);
           await emit({ activity: { id: `agent-project-${call.callId}`, label: "Saving and running the project in the isolated browser…", kind: "code", status: "running" } });
           await emit({
@@ -764,9 +782,7 @@ export function createAgentRouter({
           await emit({ activity: { id: `agent-code-${call.callId}`, label: "Reused the earlier browser run", kind: "code", status: "complete" } });
           continue;
         }
-        if (language === "html" && history.filter(
-          (exchange) => exchange.tool === "run_code" && exchange.arguments.language === "html",
-        ).length >= MAX_AGENT_HTML_PREVIEW_RUNS) {
+        if (language === "html" && htmlPreviewCount(history) >= MAX_AGENT_HTML_PREVIEW_RUNS) {
           history.push({
             tool: call.tool,
             callId: call.callId,
