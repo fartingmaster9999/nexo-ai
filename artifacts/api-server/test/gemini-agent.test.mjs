@@ -25,9 +25,9 @@ function geminiResponse(events, status = 200) {
   return new Response(body, { status, headers: { "Content-Type": "text/event-stream" } });
 }
 
-function createSseApp({ getApiKey = () => "test-only-key", getGroqClient, fetchImpl, search, providerIdleMs } = {}) {
+function createSseApp({ getApiKey = () => "test-only-key", getGroqClient, fetchImpl, search, providerIdleMs, logger = pino({ level: "silent" }) } = {}) {
   const app = express();
-  app.use(pinoHttp({ logger: pino({ level: "silent" }) }));
+  app.use(pinoHttp({ logger }));
   app.use(express.json({ limit: "5mb" }));
   app.use("/api", createAgentRouter({
     getApiKey,
@@ -219,6 +219,49 @@ test("Agent retries a transient Gemini 503 once before streaming a successful an
     assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Gemini recovered.");
   });
   assert.equal(calls, 2);
+});
+
+test("Agent logs known parser failures without logging credentials or upstream bodies", async () => {
+  const logs = [];
+  const logger = pino({ level: "info" }, { write: (line) => logs.push(JSON.parse(line)) });
+  await withServer(createSseApp({
+    logger,
+    fetchImpl: async () => geminiResponse([modelEvent([{
+      functionCall: { name: "run_code", args: { language: "javascript", code: "console.log(1)" } },
+    }])]),
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    });
+    const events = await readEvents(response);
+    assert.ok(events.some((event) => event.error));
+  });
+  const failure = logs.find((entry) => entry.event === "agent.stream.failed");
+  assert.equal(failure.failureKind, "Error");
+  assert.equal(failure.failureReason, "Gemini returned an incomplete Agent tool request.");
+  assert.equal(JSON.stringify(logs).includes("test-only-key"), false);
+  assert.equal(JSON.stringify(logs).includes("console.log(1)"), false);
+});
+
+test("Agent never copies unknown transport error messages into diagnostics", async () => {
+  const logs = [];
+  const logger = pino({ level: "info" }, { write: (line) => logs.push(JSON.parse(line)) });
+  await withServer(createSseApp({
+    logger,
+    fetchImpl: async () => { throw new Error("SENSITIVE_PROVIDER_BODY: test-only-key"); },
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    });
+    const body = await response.text();
+    assert.match(body, /could not complete/);
+    assert.equal(body.includes("SENSITIVE_PROVIDER_BODY"), false);
+  });
+  const failure = logs.find((entry) => entry.event === "agent.stream.failed");
+  assert.equal(failure.failureKind, "Error");
+  assert.equal(failure.failureReason, undefined);
+  assert.equal(JSON.stringify(logs).includes("SENSITIVE_PROVIDER_BODY"), false);
+  assert.equal(JSON.stringify(logs).includes("test-only-key"), false);
 });
 
 test("Agent visibly switches to the supported fallback model after repeated Gemini 5xx errors", async () => {
