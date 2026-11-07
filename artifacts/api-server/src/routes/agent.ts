@@ -18,7 +18,7 @@ import {
   MAX_AGENT_CODE_CHARS, MAX_AGENT_HTML_PREVIEW_RUNS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
   requestGeminiAgentStream, validateAgentHistory, validateAgentProjectFiles,
 } from "../lib/gemini-agent";
-import { buildGroqAgentRequest, collectGroqAgentResponse } from "../lib/groq-agent";
+import { buildGroqAgentRequest, collectGroqAgentResponse, groqAgentFailure } from "../lib/groq-agent";
 import { CHAT_DEADLINE_MS, getChatClient, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
 
 type AgentRouterOptions = {
@@ -87,9 +87,10 @@ function safeAgentFailureDetails(error: unknown) {
     return { failureKind: "gemini_http", failureReason: `HTTP ${error.status}` };
   }
   if (error instanceof Groq.APIError) {
+    const failure = groqAgentFailure(error)!;
     return {
-      failureKind: "groq_http",
-      failureReason: `HTTP ${error.status ?? "unknown"}`,
+      failureKind: failure.kind,
+      failureReason: failure.code,
     };
   }
   if (error instanceof Error) {
@@ -425,10 +426,10 @@ export function createAgentRouter({
           groqFallbackUnavailable = true;
           return false;
         }
+        const previousModel = activeModel;
         activeProvider = "groq";
         activeModel = nextModel;
         groqModelIndex = groqCandidates.indexOf(nextModel);
-        const previousModel = activeModel;
         req.log.warn({
           provider: "gemini",
           model: previousModel,
@@ -449,6 +450,8 @@ export function createAgentRouter({
       let modelIdleRetries = 0;
       let emptyResponseRetries = 0;
       let recoverEmptyResponse = false;
+      let groqFailureRetries = 0;
+      let repairToolRequest = false;
       while (true) {
         controller.signal.throwIfAborted();
         const allowTools = toolCalls < MAX_AGENT_TOOL_CALLS;
@@ -472,8 +475,16 @@ export function createAgentRouter({
         try {
           resetIdle();
           if (activeProvider === "groq") {
+            const request = buildGroqAgentRequest(agentInput, now(), allowTools, activeModel, securityNote());
+            if (repairToolRequest) {
+              request.temperature = 0.2;
+              request.messages.push({
+                role: "system",
+                content: "The previous generation did not produce a valid tool call. Use only the declared tools with arguments matching their JSON schemas. Request one tool at a time. If no tool is needed, answer directly.",
+              });
+            }
             const stream = await groqClient!.chat.completions.create(
-              buildGroqAgentRequest(agentInput, now(), allowTools, activeModel, securityNote()),
+              request,
               { signal: attemptController.signal },
             );
             modelResponse = await collectGroqAgentResponse(stream, attemptController.signal, resetIdle);
@@ -543,7 +554,11 @@ export function createAgentRouter({
             if (error.status === 429 && await switchToGroqFallback(error.status)) continue;
             if (error.status >= 500 && await switchToGeminiFallback("provider_error", error.status)) continue;
           }
-          const candidate = error as { status?: number; headers?: Headers };
+          const failure = groqAgentFailure(error);
+          const candidate = {
+            status: failure?.status ?? (error as { status?: number }).status,
+            headers: (error as { headers?: Headers }).headers,
+          };
           if (activeProvider === "groq" && candidate.status === 429) {
             markRateLimited(activeModel, candidate.headers?.get?.("retry-after"));
             const nextIndex = groqCandidates.findIndex((model, index) => index > groqModelIndex && !isCoolingDown(model));
@@ -569,6 +584,22 @@ export function createAgentRouter({
               continue;
             }
           }
+          if (activeProvider === "groq" && failure?.retryable && groqFailureRetries < 1 &&
+              !attemptController.signal.aborted) {
+            groqFailureRetries++;
+            repairToolRequest = failure.repairTool;
+            req.log.warn({
+              event: "agent.groq.retry",
+              model: activeModel,
+              failureKind: failure.kind,
+              failureReason: failure.code,
+              status: failure.status,
+              retry: groqFailureRetries,
+            }, "Retrying recoverable Groq Agent failure before dispatching tools");
+            await emit({ activity: { id: "agent-provider-recovery", label: "Retrying the Agent response…", kind: "info", status: "running" } });
+            await waitForGeminiRetry(controller.signal, 500);
+            continue;
+          }
           if (attemptTimedOut && activeProvider === "gemini" && await switchToGeminiFallback("stream_idle")) continue;
           if (attemptTimedOut && modelIdleRetries < 1 && !controller.signal.aborted) {
             modelIdleRetries++;
@@ -585,6 +616,10 @@ export function createAgentRouter({
         }
 
         if (!modelResponse) throw new AgentPublicError("The Agent returned no response. Please try again.");
+        if (groqFailureRetries > 0) {
+          await emit({ activity: { id: "agent-provider-recovery", label: "Agent response recovered", kind: "info", status: "complete" } });
+          repairToolRequest = false;
+        }
         modelIdleRetries = 0;
         if (activeProvider === "gemini" && geminiResponseBlocked(modelResponse)) {
           req.log.warn({
@@ -777,7 +812,8 @@ export function createAgentRouter({
       if (res.destroyed || res.writableEnded || (controller.signal.aborted && !timedOut)) return;
       const status = error instanceof GeminiAgentApiError
         ? error.status
-        : error instanceof Groq.APIError ? error.status : undefined;
+        : groqAgentFailure(error)?.status;
+      const groqFailure = groqAgentFailure(error);
       req.log.error({
         event: "agent.stream.failed",
         provider: activeProvider,
@@ -793,6 +829,12 @@ export function createAgentRouter({
           ? error.message
           : activeProvider === "groq" && status === 429
             ? `Groq ${modelLabel(activeModel)} and its compatible fallbacks are temporarily rate-limited. Please try again later.`
+            : activeProvider === "groq" && groqFailure?.kind === "groq_connection"
+              ? "Nexo could not connect to Groq after a retry. Please try again shortly."
+            : activeProvider === "groq" && groqFailure?.kind === "groq_timeout"
+              ? "Groq did not respond in time, even after a retry. Please try again."
+            : activeProvider === "groq" && groqFailure?.repairTool
+              ? "The model could not generate a valid tool request after a retry. Try a smaller or more specific task."
             : activeProvider === "gemini" && status === 429 && groqFallbackUnavailable
               ? activeTask === "multimodal"
                 ? "Gemini is temporarily rate-limited, and no configured Groq model can inspect the attached image. Please try again after Gemini is available."

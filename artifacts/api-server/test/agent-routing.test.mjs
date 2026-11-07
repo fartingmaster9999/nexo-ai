@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import express from "express";
 import pino from "pino";
 import pinoHttp from "pino-http";
+import Groq from "groq-sdk";
+import { groqAgentFailure } from "../src/lib/groq-agent.ts";
 import {
   CODING_FALLBACK,
   PRIMARY_MODEL,
@@ -25,9 +27,9 @@ const catalog = [
   max_completion_tokens: id === PROMPT_GUARD_MODEL ? 512 : id === CODING_FALLBACK ? 16384 : 65536,
 }));
 
-function createApp(client, search = async () => ({ context: "", sources: [] })) {
+function createApp(client, search = async () => ({ context: "", sources: [] }), logger = pino({ level: "silent" })) {
   const app = express();
-  app.use(pinoHttp({ logger: pino({ level: "silent" }) }));
+  app.use(pinoHttp({ logger }));
   app.use(express.json({ limit: "5mb" }));
   app.use("/api", createAgentRouter({
     getApiKey: () => undefined,
@@ -73,6 +75,88 @@ function textStream(content) {
     yield { choices: [{ delta: { content } }] };
   })();
 }
+
+test("Groq diagnostics distinguish stream, connection and HTTP errors without provider payloads", () => {
+  const streamed = groqAgentFailure(new Groq.APIError(undefined, {
+    code: "tool_use_failed", message: "PRIVATE", failed_generation: "PRIVATE",
+  }, undefined, new Headers()));
+  assert.equal(streamed.kind, "groq_stream");
+  assert.equal(streamed.code, "tool_use_failed");
+  assert.equal(streamed.status, 422);
+  assert.equal(streamed.retryable, true);
+  assert.equal(JSON.stringify(streamed).includes("PRIVATE"), false);
+  assert.equal(groqAgentFailure(new Groq.APIConnectionError({})).kind, "groq_connection");
+  assert.equal(groqAgentFailure(new Groq.APIConnectionTimeoutError({})).kind, "groq_timeout");
+  assert.equal(groqAgentFailure(new Groq.APIError(undefined, { code: "rate_limit_exceeded" }, undefined, new Headers())).status, 429);
+  assert.equal(groqAgentFailure(new Groq.APIError(401, { message: "PRIVATE" }, undefined, new Headers())).retryable, false);
+  assert.equal(groqAgentFailure(new Groq.APIError(undefined, { code: "PRIVATE", type: "invalid_request_error" }, undefined, new Headers())).retryable, false);
+});
+
+test("Agent retries a recoverable Groq failure once without exposing failed output or replaying tools", async () => {
+  for (const toolFailure of [false, true]) {
+    const requests = [];
+    const logs = [];
+    const logger = pino({ level: "info" }, { write: (line) => logs.push(JSON.parse(line)) });
+    const client = {
+      models: { list: async () => ({ data: catalog }) },
+      chat: { completions: { create: async (request) => {
+        if (request.model === PROMPT_GUARD_MODEL) return { choices: [{ message: { content: "0.01" } }] };
+        requests.push(request);
+        if (requests.length === 1) {
+          if (!toolFailure) throw new Groq.APIConnectionError({ message: "PRIVATE" });
+          return (async function* () {
+            yield { choices: [{ delta: { content: "Discard incomplete output" } }] };
+            throw new Groq.APIError(undefined, {
+              code: "tool_use_failed", message: "PRIVATE", failed_generation: "PRIVATE",
+            }, undefined, new Headers());
+          })();
+        }
+        return textStream("Recovered answer.");
+      } } },
+    };
+    await withServer(createApp(client, undefined, logger), async (url) => {
+      const events = await eventsFrom(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Give me a quick answer." }] }),
+      }));
+      assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Recovered answer.");
+      assert.equal(events.some((event) => event.agentTool || event.error), false);
+      assert.equal(JSON.stringify(events).includes("Discard incomplete output"), false);
+      assert.equal(events.at(-1).done, true);
+    });
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].model, requests[0].model);
+    assert.deepEqual(requests[1].tools, requests[0].tools);
+    if (toolFailure) assert.match(requests[1].messages.at(-1).content, /matching their JSON schemas/);
+    assert.equal(JSON.stringify(requests).includes("PRIVATE"), false);
+    assert.equal(JSON.stringify(logs).includes("PRIVATE"), false);
+    assert.ok(logs.some((entry) => entry.event === "agent.groq.retry"));
+  }
+});
+
+test("Agent caps connection recovery and does not retry authorization failures", async () => {
+  for (const status of [undefined, 401]) {
+    let calls = 0;
+    const client = {
+      models: { list: async () => ({ data: catalog }) },
+      chat: { completions: { create: async (request) => {
+        if (request.model === PROMPT_GUARD_MODEL) return { choices: [{ message: { content: "0.01" } }] };
+        calls++;
+        if (status === undefined) throw new Groq.APIConnectionError({});
+        throw new Groq.APIError(status, { message: "PRIVATE" }, undefined, new Headers());
+      } } },
+    };
+    await withServer(createApp(client), async (url) => {
+      const events = await eventsFrom(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Give me a quick answer." }] }),
+      }));
+      assert.ok(events.some((event) => event.error));
+      assert.equal(JSON.stringify(events).includes("PRIVATE"), false);
+    });
+    assert.equal(calls, status === undefined ? 2 : 1);
+  }
+});
 
 test("Agent routes coding to Qwen, exposes security signals, and preserves model/task on continuation", async () => {
   const modelRequests = [];

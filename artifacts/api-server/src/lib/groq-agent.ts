@@ -1,3 +1,4 @@
+import Groq from "groq-sdk";
 import type {
   ChatCompletionCreateParamsStreaming,
   ChatCompletionMessageParam,
@@ -12,6 +13,48 @@ import { CODING_FALLBACK } from "./model-routing";
 
 export const GROQ_AGENT_MODEL = CODING_FALLBACK;
 const MAX_TOOL_ARGUMENT_CHARS = 140_000;
+
+/** Never retain upstream messages, failed_generation, prompts, or response bodies. */
+export function groqAgentFailure(error: unknown) {
+  if (!(error instanceof Groq.APIError)) return undefined;
+  if (error instanceof Groq.APIUserAbortError) {
+    return { kind: "groq_cancelled", code: "cancelled", status: undefined, retryable: false, repairTool: false };
+  }
+  if (error instanceof Groq.APIConnectionError) {
+    const timeout = error instanceof Groq.APIConnectionTimeoutError;
+    return {
+      kind: timeout ? "groq_timeout" : "groq_connection",
+      code: timeout ? "timeout" : "connection_error",
+      status: undefined,
+      retryable: true,
+      repairTool: false,
+    };
+  }
+  const body = error.error as { code?: unknown; type?: unknown } | undefined;
+  const allowedCodes = [
+    "tool_use_failed", "json_validate_failed", "rate_limit_exceeded", "invalid_api_key",
+    "authentication_error", "permission_error", "model_not_found", "invalid_request_error",
+    "unsupported_parameter", "internal_server_error", "server_error", "service_unavailable",
+  ];
+  const code = typeof body?.code === "string" && allowedCodes.includes(body.code)
+    ? body.code
+    : typeof body?.type === "string" && allowedCodes.includes(body.type) ? body.type : "unknown";
+  const statuses: Record<string, number> = {
+    rate_limit_exceeded: 429, invalid_api_key: 401, authentication_error: 401,
+    permission_error: 403, model_not_found: 404, invalid_request_error: 400,
+    unsupported_parameter: 400, tool_use_failed: 422, json_validate_failed: 422,
+    internal_server_error: 500, server_error: 500, service_unavailable: 503,
+  };
+  const status = error.status ?? statuses[code];
+  return {
+    kind: error.status === undefined ? "groq_stream" : "groq_http",
+    code,
+    status,
+    retryable: code === "tool_use_failed" || status === 408 || (status !== undefined && status >= 500) ||
+      (status === undefined && code === "unknown"),
+    repairTool: code === "tool_use_failed",
+  };
+}
 
 const agentTools: ChatCompletionTool[] = [{
   type: "function",

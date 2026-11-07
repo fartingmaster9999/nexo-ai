@@ -50,3 +50,9 @@ Diagnose blank Gemini replies from model finish/block metadata, not just HTTP su
 **Why:** Production Agent requests opened successful SSE connections but ended without any visible answer after model fallback. The original logs hid that outcome. Gemini also counts private thinking and visible answer tokens against the same output allowance, so an apparently generous limit can still leave no answer text; token exhaustion must be confirmed rather than inferred.
 
 **How to apply:** Reserve answer headroom, keep recovery attempts bounded, and retain only safe finish/block codes in diagnostics. Never expose or log private thought text, full provider payloads, prompts, or credentials to investigate empty output.
+
+A Groq SDK error with no HTTP status is not necessarily a connection failure: the SDK also raises statusless API errors for provider error events inside successful SSE responses.
+
+**Why:** Production Agent failures were labeled only as `HTTP unknown`, obscuring the difference between transport problems and rejected streamed tool generation. Direct live GPT-OSS 20B answer and tool-call requests succeeded with the existing request format.
+
+**How to apply:** Classify SDK connection/timeout subclasses separately from in-stream errors, using only allowlisted provider codes. Never log SDK error messages or failed-generation payloads, which can contain generated code or user content. Retry only bounded recoverable generations before tool dispatch, keeping prior tool results intact.
