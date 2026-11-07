@@ -7,18 +7,16 @@ import {
 } from '@/lib/video';
 import { AnimatePresence } from 'framer-motion';
 import { Scene1 } from './video_scenes/Scene1';
-import { Scene2 } from './video_scenes/Scene2';
 import { Scene3 } from './video_scenes/Scene3';
 
 export const SCENE_DURATIONS = {
-  product: 4000,
-  logo: 3000,
-  reveal: 7000,
+  tease: 1800,
+  reveal: 4200,
 };
 
 export const VIDEO_ASPECT_RATIO: VideoAspectRatio = '16:9';
 
-const SCENE_COMPONENTS = [Scene1, Scene2, Scene3];
+const SCENE_COMPONENTS = [Scene1, Scene3];
 const SCENE_KEYS = Object.keys(SCENE_DURATIONS);
 
 export default function VideoTemplate({
