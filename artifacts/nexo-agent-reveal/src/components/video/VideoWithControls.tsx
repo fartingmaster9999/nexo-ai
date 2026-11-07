@@ -11,8 +11,6 @@ import {
   Pause,
   Play,
   Repeat,
-  Volume2,
-  VolumeX,
 } from 'lucide-react';
 import VideoTemplate, { SCENE_DURATIONS } from './VideoTemplate';
 import { useSceneControls } from './useSceneControls';
@@ -49,7 +47,6 @@ export default function VideoWithControls() {
     toggleLock,
     togglePause,
   } = useSceneControls(SCENE_DURATIONS);
-  const [muted, setMuted] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [hovering, setHovering] = useState(false);
   const [tapPinned, setTapPinned] = useState(false);
@@ -129,7 +126,6 @@ export default function VideoWithControls() {
         durations={durations}
         loop
         paused={paused}
-        muted={muted}
         onSceneChange={onSceneChange}
       />
       <div
@@ -167,15 +163,6 @@ export default function VideoWithControls() {
             aria-pressed={locked}
           >
             <Repeat size={21} />
-          </button>
-          <button
-            onClick={() => setMuted((value) => !value)}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-white/65 transition-colors hover:bg-white/10 hover:text-white sm:h-12 sm:w-12"
-            title={muted ? 'Unmute audio' : 'Mute audio'}
-            aria-label={muted ? 'Unmute audio' : 'Mute audio'}
-            aria-pressed={muted}
-          >
-            {muted ? <VolumeX size={21} /> : <Volume2 size={21} />}
           </button>
           <div className="hidden h-8 w-px shrink-0 bg-white/15 sm:block" aria-hidden="true" />
           <PlaybackStatus

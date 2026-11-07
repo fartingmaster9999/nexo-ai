@@ -1,77 +1,55 @@
-import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { useSceneTimer } from '@/lib/video';
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
 export function Scene2({ sceneIndex: _sceneIndex }: { sceneIndex: number }) {
-  const [secondLine, setSecondLine] = useState(false);
-  useSceneTimer([{ time: 3150, callback: () => setSecondLine(true) }]);
-
   return (
     <motion.section
-      className="absolute inset-0 overflow-hidden bg-[#030812]"
-      initial={{ opacity: 0, scale: 1.08, x: '2%' }}
-      animate={{ opacity: 1, scale: 1, x: '0%' }}
-      exit={{ opacity: 0, scale: 1.12, x: '2%' }}
-      transition={{ duration: 0.7, ease: EASE }}
+      className="absolute inset-0 overflow-hidden bg-[#020711]"
+      initial={{ opacity: 0, scale: 1.08 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 1.13 }}
+      transition={{ duration: 0.48, ease: EASE }}
     >
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_54%_47%,rgba(14,82,190,.25),transparent_58%)]" />
-      <motion.div
-        className="absolute left-[7%] top-[8%] h-[84%] w-[86%] border border-[#2784ff]/65"
-        initial={{ scale: 1.035, opacity: 0.5 }}
-        animate={{ scale: [1.035, 1, 1.015, 1], opacity: [0.5, 1, 0.72, 1] }}
-        transition={{ duration: 5.7, times: [0, 0.2, 0.53, 1], ease: EASE }}
-        style={{ boxShadow: '0 0 4vmin rgba(20,99,255,.22)' }}
+      <motion.video
+        src={`${import.meta.env.BASE_URL}video/nexo-agent-mode.mp4`}
+        className="absolute inset-0 h-full w-full object-cover"
+        initial={{ scale: 1.16, opacity: 0.58 }}
+        animate={{ scale: [1.16, 1, 1.055, 1.32], opacity: [0.58, 1, 1, 0.95] }}
+        transition={{ duration: 5.9, times: [0, 0.2, 0.72, 1], ease: EASE }}
+        autoPlay
+        muted
+        loop
+        playsInline
+        preload="auto"
       />
-      <div className="absolute left-[7%] top-[8%] h-[0.55vmin] w-[13%] bg-[#4d9cff]" />
-      <div className="absolute bottom-[8%] right-[7%] h-[0.55vmin] w-[13%] bg-[#4d9cff]" />
 
       <motion.div
-        className="absolute left-[11%] top-[14%] h-[72%] w-[78%] overflow-hidden bg-[#07101f]"
-        initial={{ scale: 1.09, opacity: 0.75 }}
-        animate={{ scale: [1.09, 1, 1.08, 1], opacity: 1 }}
-        transition={{ duration: 5.85, times: [0, 0.22, 0.5, 1], ease: EASE }}
-      >
-        <video
-          src={`${import.meta.env.BASE_URL}video/nexo-agent-mode.mp4`}
-          className="h-full w-full object-contain"
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="auto"
-        />
-      </motion.div>
-
+        className="absolute left-0 top-0 z-20 h-full w-1/2 bg-[#020711]"
+        initial={{ x: 0 }}
+        animate={{ x: '-102%' }}
+        transition={{ delay: 0.08, duration: 0.88, ease: EASE }}
+      />
       <motion.div
-        className="absolute left-[7%] top-[12%] z-10 text-[1.85vmin] text-[#b1c3de] nexo-mono"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: [0, 1, 1, 0] }}
-        transition={{ duration: 5.7, times: [0, 0.12, 0.82, 1] }}
-      >
-        AGENT MODE <span className="text-[#57a7ff]">/ ACTIVE</span>
-      </motion.div>
-
-      {!secondLine ? (
-        <motion.h2
-          className="nexo-display absolute left-[7%] bottom-[12%] z-20 m-0 text-[7.3vmin] leading-none text-[#f4f7ff]"
-          initial={{ opacity: 0, y: 28 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.42, duration: 0.55, ease: EASE }}
-        >
-          Give it the <span className="text-[#69afff]">goal.</span>
-        </motion.h2>
-      ) : (
-        <motion.h2
-          className="nexo-display absolute right-[7%] bottom-[12%] z-20 m-0 text-[7.3vmin] leading-none text-[#f4f7ff]"
-          initial={{ opacity: 0, y: 28, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.48, ease: EASE }}
-        >
-          Watch it <span className="text-[#69afff]">move.</span>
-        </motion.h2>
-      )}
+        className="absolute right-0 top-0 z-20 h-full w-1/2 bg-[#020711]"
+        initial={{ x: 0 }}
+        animate={{ x: '102%' }}
+        transition={{ delay: 0.08, duration: 0.88, ease: EASE }}
+      />
+      <motion.div
+        className="absolute left-1/2 top-[13%] z-30 h-[74%] w-[0.24vmin] -translate-x-1/2"
+        initial={{ scaleY: 0.12, opacity: 0.2 }}
+        animate={{ scaleY: [0.12, 1, 0.65, 1.45], opacity: [0.2, 0.95, 0.32, 0] }}
+        transition={{ duration: 5.45, times: [0, 0.16, 0.68, 1], ease: EASE }}
+        style={{ background: '#7abaff', boxShadow: '0 0 2vmin rgba(31,119,255,.95)' }}
+      />
+      <motion.div
+        className="absolute inset-y-0 z-10 w-[0.18vmin]"
+        initial={{ left: '18%', opacity: 0 }}
+        animate={{ left: ['18%', '50%', '79%'], opacity: [0, 0.55, 0] }}
+        transition={{ delay: 1.7, duration: 1.25, ease: EASE }}
+        style={{ background: 'rgba(141,194,255,.72)', boxShadow: '0 0 1.6vmin rgba(49,132,255,.8)' }}
+      />
     </motion.section>
   );
 }
