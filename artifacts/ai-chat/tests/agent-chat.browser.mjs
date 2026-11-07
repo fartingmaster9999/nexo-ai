@@ -75,8 +75,52 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
             headers: { "Content-Type": "text/event-stream" }
           });
         }
+        if (window.__agentRequests.length === 6) {
+          const events = [
+            { agentTool: {
+              tool: "run_code",
+              callId: "html-preview-initial",
+              thoughtSignature: "html-preview-signature",
+              arguments: {
+                language: "html",
+                code: "<!doctype html><html><head><title>Agent preview</title></head><body><h1>First version</h1><script>throw new Error('HTML_PREVIEW_RUNTIME_FAILURE')</script></body></html>"
+              },
+              history: []
+            } },
+            { done: true }
+          ];
+          return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
+            headers: { "Content-Type": "text/event-stream" }
+          });
+        }
+        if (window.__agentRequests.length === 7) {
+          const history = window.__agentRequests.at(-1).body.agentHistory ?? [];
+          window.__previewDiagnosticHistory = history;
+          const events = [
+            { agentTool: {
+              tool: "run_code",
+              callId: "html-preview-revision",
+              thoughtSignature: "html-revision-signature",
+              arguments: {
+                language: "html",
+                code: "<!doctype html><html><head><title>Corrected preview</title></head><body><h1>Corrected preview</h1></body></html>"
+              },
+              history
+            } },
+            { done: true }
+          ];
+          return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
+            headers: { "Content-Type": "text/event-stream" }
+          });
+        }
         const events = [
-          { content: window.__agentRequests.length === 5 ? "Qwen Agent ran and checked its code." : "The isolated browser printed ${expectedOutput}." },
+          {
+            content: window.__agentRequests.length === 5
+              ? "Qwen Agent ran and checked its code."
+              : window.__agentRequests.length === 8
+                ? "The HTML preview was corrected using its browser runtime diagnostics."
+                : "The isolated browser printed ${expectedOutput}."
+          },
           { done: true }
         ];
         return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
@@ -148,9 +192,25 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.equal(qwenRequests[1].body.agentHistory[0].callId, "qwen-browser-code");
   assert.match(qwenRequests[1].body.agentHistory[0].result, /qwen-run-ok/);
 
+  await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
+  await cdp("Input.insertText", { text: "Build and preview a small HTML page, then fix its runtime error." });
+  await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
+  await waitFor(() => evaluate(`window.__agentRequests.length === 8`), "HTML preview diagnosis and revision", 30000);
+  await waitFor(() => evaluate(`document.body.textContent.includes("The HTML preview was corrected using its browser runtime diagnostics.")`), "HTML preview final answer", 20000);
+  const previewHistory = await evaluate(`window.__previewDiagnosticHistory`);
+  assert.equal(previewHistory.length, 1);
+  assert.match(previewHistory[0].result, /HTML_PREVIEW_RUNTIME_FAILURE/);
+  assert.match(previewHistory[0].result, /Untrusted browser-generated preview diagnostics/);
+  const htmlContinuation = await evaluate(`window.__agentRequests.slice(5)`);
+  assert.equal(htmlContinuation[0].body.agentHistory, undefined);
+  assert.match(htmlContinuation[1].body.agentHistory[0].result, /HTML_PREVIEW_RUNTIME_FAILURE/);
+  assert.match(htmlContinuation[2].body.agentHistory[1].result, /no runtime errors were reported/);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="frame-preview"]').getAttribute("sandbox")`), "allow-scripts");
+  assert.ok(await evaluate(`document.querySelector(".cm-content")?.textContent.includes("Corrected preview")`), "The revised HTML is shown in the workspace editor");
+
   console.log(liveTool
     ? "Live Agent browser check passed: image upload, Gemini-generated code execution, and continuation result."
-    : "Agent browser checks passed: image upload, Agent routing, isolated code execution, continuation result, workspace output, and activity panel.");
+    : "Agent browser checks passed: image upload, Agent routing, isolated code execution, HTML preview diagnostics and revision, continuation result, workspace output, and activity panel.");
   await delay(50);
 });
 } finally {

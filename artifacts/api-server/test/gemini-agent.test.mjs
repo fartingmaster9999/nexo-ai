@@ -4,7 +4,7 @@ import express from "express";
 import pino from "pino";
 import pinoHttp from "pino-http";
 import {
-  buildGeminiAgentRequest, collectAgentResponse, GEMINI_AGENT_MODEL,
+  buildGeminiAgentRequest, collectAgentResponse, GEMINI_AGENT_MODEL, MAX_AGENT_HTML_PREVIEW_RUNS,
   requestGeminiAgentStream, validateAgentHistory,
 } from "../src/lib/gemini-agent.ts";
 import { buildGroqAgentRequest, collectGroqAgentResponse, GROQ_AGENT_MODEL } from "../src/lib/groq-agent.ts";
@@ -490,6 +490,40 @@ test("Agent sends code requests to the browser client and accepts its bounded ex
   assert.equal(requests[1].contents.at(-2).parts[0].functionCall.id, "code-1");
   assert.equal(requests[1].contents.at(-2).parts[0].thoughtSignature, "code-signature");
   assert.equal(requests[1].contents.at(-1).parts[0].functionResponse.response.result, "stdout: agent-ok");
+});
+
+test("Agent caps HTML previews at three runs and returns the limit to the model", async () => {
+  const requests = [];
+  const fetchImpl = async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    if (requests.length === 1) {
+      return geminiResponse([modelEvent([{
+        functionCall: { name: "run_code", id: "html-fourth", args: { language: "html", code: "<h1>Another preview</h1>" } },
+        thoughtSignature: "html-fourth-signature",
+      }])]);
+    }
+    return geminiResponse([modelEvent([{ text: "I stopped after the preview limit." }])]);
+  };
+  const history = Array.from({ length: MAX_AGENT_HTML_PREVIEW_RUNS }, (_, index) => ({
+    tool: "run_code",
+    callId: `html-${index + 1}`,
+    thoughtSignature: `html-signature-${index + 1}`,
+    arguments: { language: "html", code: `<h1>Preview ${index + 1}</h1>` },
+    result: `Preview ${index + 1} rendered.`,
+  }));
+  await withServer(createSseApp({ fetchImpl }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, agentHistory: history }),
+    });
+    const events = await readEvents(response);
+    assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "I stopped after the preview limit.");
+    assert.equal(events.some((event) => event.agentTool), false, "The fourth HTML tool call is not dispatched to the browser");
+    assert.ok(events.some((event) => event.activity?.label === "HTML preview revision limit reached"));
+  });
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].contents.at(-1).parts[0].functionResponse.response.result, /revision limit was reached after three runs/i);
 });
 
 test("Agent reuses prior search and code results instead of repeating tool side effects", async () => {

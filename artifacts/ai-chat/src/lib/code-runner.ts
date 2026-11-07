@@ -1,11 +1,174 @@
 export type RunLanguage = 'python' | 'javascript' | 'html';
 export type RunOutput = { kind: 'stdout' | 'stderr' | 'status' | 'image'; text?: string; dataUrl?: string };
-export type ExecutionResult = { outputs: RunOutput[]; error?: string; previewHtml?: string };
+export type PreviewDiagnosticKind = 'error' | 'unhandled-rejection' | 'console-error' | 'resource-error' | 'timeout' | 'limit';
+export type PreviewDiagnostic = {
+  kind: PreviewDiagnosticKind;
+  message: string;
+  source?: string;
+  line?: number;
+};
+export type ExecutionResult = {
+  outputs: RunOutput[];
+  error?: string;
+  previewHtml?: string;
+  previewId?: string;
+};
 
-/** HTML previews MUST also use an iframe with sandbox="allow-scripts", never allow-same-origin. */
-export function makePreviewHtml(code: string): string {
-  const policy = "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net; img-src data: blob: https:; connect-src https://cdn.jsdelivr.net; form-action 'none'; base-uri 'none'; frame-src 'none'";
-  return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1">${code}`;
+export const MAX_PREVIEW_DIAGNOSTICS = 8;
+const MAX_PREVIEW_MESSAGE_CHARS = 600;
+const MAX_PREVIEW_SOURCE_CHARS = 200;
+const PREVIEW_WAIT_MS = 12_000;
+const PREVIEW_RESULT_TTL_MS = 30_000;
+const PREVIEW_RESULT_CACHE_SIZE = 8;
+
+type PreviewResult = { diagnostics: PreviewDiagnostic[]; complete: boolean; savedAt: number };
+type PreviewWaiter = {
+  resolve: (diagnostics: PreviewDiagnostic[]) => void;
+  reject: (error: DOMException) => void;
+  timer: number;
+  signal: AbortSignal;
+  abort: () => void;
+};
+const previewResults = new Map<string, PreviewResult>();
+const previewWaiters = new Map<string, Set<PreviewWaiter>>();
+
+function sanitizePreviewSource(source: unknown): string | undefined {
+  if (typeof source !== 'string' || !source.trim()) return undefined;
+  try {
+    const url = new URL(source, 'https://preview.invalid');
+    const path = `${url.origin === 'https://preview.invalid' ? '' : url.origin}${url.pathname}`;
+    return path.slice(0, MAX_PREVIEW_SOURCE_CHARS) || undefined;
+  } catch {
+    return source.split(/[?#]/, 1)[0].slice(0, MAX_PREVIEW_SOURCE_CHARS) || undefined;
+  }
+}
+
+export function sanitizePreviewDiagnostic(value: unknown): PreviewDiagnostic | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  const allowedKinds: PreviewDiagnosticKind[] = [
+    'error', 'unhandled-rejection', 'console-error', 'resource-error', 'timeout', 'limit',
+  ];
+  if (!allowedKinds.includes(entry.kind as PreviewDiagnosticKind) || typeof entry.message !== 'string') return null;
+  const diagnostic: PreviewDiagnostic = {
+    kind: entry.kind as PreviewDiagnosticKind,
+    message: entry.message.replace(/\u0000/g, '').slice(0, MAX_PREVIEW_MESSAGE_CHARS) || 'The preview reported an unspecified error.',
+  };
+  const source = sanitizePreviewSource(entry.source);
+  if (source) diagnostic.source = source;
+  if (typeof entry.line === 'number' && Number.isSafeInteger(entry.line) && entry.line > 0 && entry.line <= 1_000_000) {
+    diagnostic.line = entry.line;
+  }
+  return diagnostic;
+}
+
+function boundedDiagnostics(values: unknown[]): PreviewDiagnostic[] {
+  const result: PreviewDiagnostic[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const diagnostic = sanitizePreviewDiagnostic(value);
+    if (!diagnostic) continue;
+    const signature = `${diagnostic.kind}\n${diagnostic.message}\n${diagnostic.source ?? ''}\n${diagnostic.line ?? ''}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    if (result.length < MAX_PREVIEW_DIAGNOSTICS - 1) result.push(diagnostic);
+    else {
+      result.push({ kind: 'limit', message: 'Additional preview errors were omitted.' });
+      break;
+    }
+  }
+  return result;
+}
+
+function rememberPreviewResult(previewId: string, result: PreviewResult) {
+  previewResults.delete(previewId);
+  previewResults.set(previewId, result);
+  const now = Date.now();
+  for (const [id, value] of previewResults) {
+    if (now - value.savedAt > PREVIEW_RESULT_TTL_MS) previewResults.delete(id);
+  }
+  while (previewResults.size > PREVIEW_RESULT_CACHE_SIZE) {
+    const oldest = previewResults.keys().next().value;
+    if (oldest === undefined) break;
+    previewResults.delete(oldest);
+  }
+}
+
+/** Called only after the parent validates the exact sandbox frame and its preview ID. */
+export function reportPreviewDiagnostics(previewId: string, values: unknown[], complete = false) {
+  const existing = previewResults.get(previewId);
+  const diagnostics = boundedDiagnostics([
+    ...(existing?.diagnostics ?? []),
+    ...values.slice(0, MAX_PREVIEW_DIAGNOSTICS),
+  ]);
+  const result = { diagnostics, complete: complete || existing?.complete === true, savedAt: Date.now() };
+  rememberPreviewResult(previewId, result);
+  if (!result.complete) return;
+  const waiters = previewWaiters.get(previewId);
+  if (!waiters) return;
+  for (const waiter of waiters) {
+    window.clearTimeout(waiter.timer);
+    waiter.signal.removeEventListener('abort', waiter.abort);
+    waiter.resolve(diagnostics);
+  }
+  previewWaiters.delete(previewId);
+}
+
+/** Wait for the displayed sandbox frame to finish its first render and short error-capture window. */
+export function waitForPreviewDiagnostics(previewId: string, signal: AbortSignal): Promise<PreviewDiagnostic[]> {
+  const cached = previewResults.get(previewId);
+  if (cached?.complete && Date.now() - cached.savedAt <= PREVIEW_RESULT_TTL_MS) {
+    return Promise.resolve(cached.diagnostics);
+  }
+  if (signal.aborted) return Promise.reject(new DOMException('Stopped', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const waiter: PreviewWaiter = {
+      resolve,
+      reject,
+      signal,
+      timer: window.setTimeout(() => {
+        removeWaiter();
+        resolve([{ kind: 'timeout', message: 'The browser preview did not report completion within 12 seconds.' }]);
+      }, PREVIEW_WAIT_MS),
+      abort: () => {
+        removeWaiter();
+        reject(new DOMException('Stopped', 'AbortError'));
+      },
+    };
+    const removeWaiter = () => {
+      window.clearTimeout(waiter.timer);
+      signal.removeEventListener('abort', waiter.abort);
+      const waiters = previewWaiters.get(previewId);
+      waiters?.delete(waiter);
+      if (waiters?.size === 0) previewWaiters.delete(previewId);
+    };
+    const waiters = previewWaiters.get(previewId) ?? new Set<PreviewWaiter>();
+    waiters.add(waiter);
+    previewWaiters.set(previewId, waiters);
+    signal.addEventListener('abort', waiter.abort, { once: true });
+  });
+}
+
+function previewInstrumentation(previewId: string) {
+  return `(function(){var previewId=${JSON.stringify(previewId)};var diagnostics=[];var seen=new Set();var limit=${MAX_PREVIEW_DIAGNOSTICS};function text(value){try{if(value instanceof Error)return value.message||value.name;if(typeof value==='string')return value;var result=JSON.stringify(value);return result===undefined?String(value):result;}catch(_){return '[unprintable error]';}}function report(kind,message,source,line){message=text(message).replace(/\\u0000/g,'').slice(0,${MAX_PREVIEW_MESSAGE_CHARS});if(!message)message='The preview reported an unspecified error.';source=typeof source==='string'?source.split(/[?#]/,1)[0].slice(0,${MAX_PREVIEW_SOURCE_CHARS}):'';line=Number.isSafeInteger(line)&&line>0&&line<=1000000?line:undefined;var key=kind+'\\\\n'+message+'\\\\n'+source+'\\\\n'+(line||'');if(seen.has(key)||diagnostics.length>=limit)return;seen.add(key);var diagnostic={kind:kind,message:message};if(source)diagnostic.source=source;if(line)diagnostic.line=line;diagnostics.push(diagnostic);try{parent.postMessage({type:'nexo-preview-diagnostic',previewId:previewId,diagnostic:diagnostic},'*');}catch(_){}}window.addEventListener('error',function(event){if(event.target&&event.target!==window){var target=event.target;report('resource-error','A page resource failed to load.',target.src||target.href||'',0);return;}report('error',event.message||event.error||'A script error occurred.',event.filename,event.lineno);},true);window.addEventListener('unhandledrejection',function(event){report('unhandled-rejection',event.reason);});if(window.console&&typeof console.error==='function'){var originalError=console.error.bind(console);console.error=function(){var args=Array.prototype.slice.call(arguments);report('console-error',args.map(text).join(' '));originalError.apply(console,args);};}window.addEventListener('load',function(){window.setTimeout(function(){try{parent.postMessage({type:'nexo-preview-complete',previewId:previewId,diagnostics:diagnostics},'*');}catch(_){}},600);},{once:true});})();`;
+}
+
+/** HTML previews run with an opaque origin and a restrictive policy; never add allow-same-origin. */
+export function makePreviewHtml(code: string, previewId: string): string {
+  const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";
+  const head = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${previewInstrumentation(previewId)}</script>`;
+  const source = code.replace(/^\s*<!doctype\b[^>]*>/i, '');
+  let documentHtml: string;
+  if (/<head\b[^>]*>/i.test(source)) {
+    documentHtml = source.replace(/<head\b[^>]*>/i, (opening) => `${opening}${head}`);
+  } else if (/<html\b[^>]*>/i.test(source)) {
+    documentHtml = source.replace(/<html\b[^>]*>/i, (opening) => `${opening}<head>${head}</head>`);
+  } else if (/<body\b[^>]*>/i.test(source)) {
+    documentHtml = `<html><head>${head}</head>${source}</html>`;
+  } else {
+    documentHtml = `<html><head>${head}</head><body>${source}</body></html>`;
+  }
+  return `<!doctype html>${documentHtml}`;
 }
 
 /** Untrusted code runs in an opaque-origin iframe and worker, never on the application server. */
@@ -129,7 +292,10 @@ function executeInRunner(options: ExecuteOptions): Promise<ExecutionResult> {
 
 export function executeCode(options: ExecuteOptions): Promise<ExecutionResult> {
   if (options.signal?.aborted) return Promise.reject(new DOMException('Stopped', 'AbortError'));
-  if (options.language === 'html') return Promise.resolve({ outputs: [], previewHtml: makePreviewHtml(options.code) });
+  if (options.language === 'html') {
+    const previewId = crypto.randomUUID();
+    return Promise.resolve({ outputs: [], previewHtml: makePreviewHtml(options.code, previewId), previewId });
+  }
   const next = runQueue.then(() => executeInRunner(options), () => executeInRunner(options));
   runQueue = next.then(() => undefined, () => undefined);
   return next;

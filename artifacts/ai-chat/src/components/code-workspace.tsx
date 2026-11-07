@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { EditorView } from '@codemirror/view';
 import { Play, Square, Wrench, X, RotateCcw, Download, Terminal } from 'lucide-react';
-import { executeCode, type RunLanguage, type RunOutput } from '@/lib/code-runner';
+import {
+  executeCode,
+  MAX_PREVIEW_DIAGNOSTICS,
+  reportPreviewDiagnostics,
+  sanitizePreviewDiagnostic,
+  type PreviewDiagnostic,
+  type RunLanguage,
+  type RunOutput,
+} from '@/lib/code-runner';
 import { LANG_LABEL, STARTERS, type Snippet } from '@/lib/code-extract';
 import { CopyCodeButton } from './copy-code-button';
 import { useEditorLanguage } from '@/hooks/use-editor-language';
@@ -19,6 +27,8 @@ export type AgentWorkspaceTask = {
   status: 'running' | 'complete' | 'error';
   error?: string;
   previewHtml?: string;
+  previewId?: string;
+  previewDiagnostics?: PreviewDiagnostic[];
 };
 const DRAFT_KEY = 'nexo-code-drafts-v1';
 const WRAP_KEY = 'nexo-code-wrap-v1';
@@ -55,10 +65,15 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const [runError, setRunError] = useState('');
   const [runStatus, setRunStatus] = useState('');
   const [preview, setPreview] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [previewDiagnostics, setPreviewDiagnostics] = useState<PreviewDiagnostic[]>([]);
+  const [previewComplete, setPreviewComplete] = useState(false);
   const [hasRun, setHasRun] = useState(false);
   const [storageError, setStorageError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const consoleRef = useRef<HTMLDivElement>(null);
+  const previewFrameRef = useRef<HTMLIFrameElement>(null);
+  const previewDiagnosticsRef = useRef<PreviewDiagnostic[]>([]);
   const followConsoleRef = useRef(true);
   const outputsRef = useRef(outputs);
   const pendingOutputsRef = useRef<RunOutput[]>([]);
@@ -114,7 +129,71 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     setRunError(agentCode.error ?? '');
     setRunStatus(agentCode.status === 'running' ? 'Agent is running code…' : '');
     if (agentCode.previewHtml !== undefined) setPreview(agentCode.previewHtml);
-  }, [agentCode?.id, agentCode?.outputs, agentCode?.status, agentCode?.error, agentCode?.previewHtml]);
+    if (agentCode.previewId !== undefined) {
+      setPreviewId(agentCode.previewId);
+      setPreviewComplete(false);
+      const initialDiagnostics = agentCode.previewDiagnostics ?? [];
+      previewDiagnosticsRef.current = initialDiagnostics;
+      setPreviewDiagnostics(initialDiagnostics);
+    }
+  }, [
+    agentCode?.id, agentCode?.outputs, agentCode?.status, agentCode?.error,
+    agentCode?.previewHtml, agentCode?.previewId, agentCode?.previewDiagnostics,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!previewId) return;
+    let completed = false;
+    const merge = (values: unknown[]) => {
+      const next = [...previewDiagnosticsRef.current];
+      const seen = new Set(next.map((entry) => `${entry.kind}\n${entry.message}\n${entry.source ?? ''}\n${entry.line ?? ''}`));
+      for (const value of values.slice(0, MAX_PREVIEW_DIAGNOSTICS)) {
+        const diagnostic = sanitizePreviewDiagnostic(value);
+        if (!diagnostic) continue;
+        const key = `${diagnostic.kind}\n${diagnostic.message}\n${diagnostic.source ?? ''}\n${diagnostic.line ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (next.length < MAX_PREVIEW_DIAGNOSTICS - 1) next.push(diagnostic);
+        else {
+          next.push({ kind: 'limit', message: 'Additional preview errors were omitted.' });
+          break;
+        }
+      }
+      previewDiagnosticsRef.current = next;
+      setPreviewDiagnostics(next);
+      return next;
+    };
+    const finish = (values: unknown[] = []) => {
+      if (completed) return;
+      completed = true;
+      window.clearTimeout(timer);
+      const diagnostics = merge(values);
+      setPreviewComplete(true);
+      reportPreviewDiagnostics(previewId, diagnostics, true);
+    };
+    const timer = window.setTimeout(() => {
+      finish([{ kind: 'timeout', message: 'The browser preview did not finish loading in time.' }]);
+    }, 12_000);
+    const receive = (event: MessageEvent) => {
+      const frame = previewFrameRef.current;
+      if (event.origin !== 'null' || event.source !== frame?.contentWindow) return;
+      const data = event.data;
+      if (!data || typeof data !== 'object' || Array.isArray(data) || data.previewId !== previewId) return;
+      if (data.type === 'nexo-preview-diagnostic') {
+        const diagnostic = sanitizePreviewDiagnostic(data.diagnostic);
+        if (!diagnostic || completed) return;
+        const diagnostics = merge([diagnostic]);
+        reportPreviewDiagnostics(previewId, diagnostics, false);
+      } else if (data.type === 'nexo-preview-complete') {
+        finish(Array.isArray(data.diagnostics) ? data.diagnostics : []);
+      }
+    };
+    window.addEventListener('message', receive);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('message', receive);
+    };
+  }, [previewId]);
 
   useEffect(() => {
     const current = abortRef.current;
@@ -126,7 +205,9 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     outputFrameRef.current = null;
     pendingOutputsRef.current = [];
     outputsRef.current = [];
-    setOutputs([]); setRunError(''); setRunStatus(''); setPreview(null); setHasRun(false);
+    setOutputs([]); setRunError(''); setRunStatus(''); setPreview(null); setPreviewId(null);
+    previewDiagnosticsRef.current = [];
+    setPreviewDiagnostics([]); setPreviewComplete(false); setHasRun(false);
   }, [key]);
   useEffect(() => () => {
     const current = abortRef.current;
@@ -203,7 +284,9 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     outputsRef.current = [];
     pendingOutputsRef.current = [];
     setRunning(true); setOutputs([]); setRunError(''); setRunStatus('Starting…'); setHasRun(true);
-    if (draft.language !== 'html') setPreview(null);
+    setPreview(null); setPreviewId(null); setPreviewComplete(false);
+    previewDiagnosticsRef.current = [];
+    setPreviewDiagnostics([]);
     try {
       const res = await executeCode({
         language: draft.language,
@@ -223,7 +306,10 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         },
       });
       if (abortRef.current !== ctrl) return;
-      if (res.previewHtml) setPreview(res.previewHtml);
+      if (res.previewHtml) {
+        setPreview(res.previewHtml);
+        setPreviewId(res.previewId ?? null);
+      }
       if (res.error && !res.outputs.some((output) => output.kind === 'stderr' && output.text === res.error)) setRunError(res.error);
     } catch (e) {
       if (abortRef.current !== ctrl) return;
@@ -258,7 +344,14 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const askFix = () => {
     flushOutputBatch();
     const currentOutputs = outputsRef.current;
-    const errs = [runError, ...currentOutputs.filter((o) => o.kind === 'stderr').map((o) => o.text ?? '')].filter(Boolean).join('\n');
+    const previewErrors = previewDiagnosticsRef.current.map((diagnostic) =>
+      `${diagnostic.kind}: ${diagnostic.message}${diagnostic.source ? ` (${diagnostic.source}${diagnostic.line ? `:${diagnostic.line}` : ''})` : ''}`
+    );
+    const errs = [
+      runError,
+      ...currentOutputs.filter((o) => o.kind === 'stderr').map((o) => o.text ?? ''),
+      ...previewErrors,
+    ].filter(Boolean).join('\n');
     const out = currentOutputs.filter((o) => o.kind === 'stdout').map((o) => o.text ?? '').join('').slice(-800);
     const summary = (errs || out || (hasRun ? 'It ran without visible output.' : 'Not run yet.')).slice(0, 2000);
     const fence = draft.language === 'html' ? 'html' : draft.language;
@@ -325,7 +418,35 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
           </span>
         </div>
         {draft.language === 'html' && preview ? (
-          <iframe className="ws-preview" sandbox="allow-scripts" srcDoc={preview} title="HTML preview" data-testid="frame-preview" />
+          <div className="ws-preview-pane" data-testid="preview-pane">
+            <iframe
+              key={previewId ?? 'html-preview'}
+              ref={previewFrameRef}
+              className="ws-preview"
+              sandbox="allow-scripts"
+              srcDoc={preview}
+              title="Isolated HTML preview"
+              data-testid="frame-preview"
+            />
+            {!previewComplete && <p className="ws-preview-status" role="status">Loading isolated preview…</p>}
+            {previewComplete && previewDiagnostics.length === 0 && (
+              <p className="ws-preview-status" role="status">Preview loaded. No runtime errors were reported.</p>
+            )}
+            {previewDiagnostics.length > 0 && (
+              <div className="ws-preview-diagnostics" role="alert" data-testid="preview-diagnostics">
+                <strong>Preview diagnostics</strong>
+                <ul>
+                  {previewDiagnostics.map((diagnostic, index) => (
+                    <li key={`${diagnostic.kind}-${index}`}>
+                      <span>{diagnostic.kind}</span>{' '}
+                      <code>{diagnostic.message}</code>
+                      {diagnostic.source && <small>{diagnostic.source}{diagnostic.line ? `:${diagnostic.line}` : ''}</small>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="ws-console" ref={consoleRef} onScroll={handleConsoleScroll} role="log" aria-live="polite" data-testid="console-output">
             {!hasRun && <p className="c-status">Run code to see output.</p>}

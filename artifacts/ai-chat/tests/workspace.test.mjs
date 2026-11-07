@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { copyRawCode, rawCodeFromSource } from '../src/lib/code-clipboard.ts';
+import { makePreviewHtml, sanitizePreviewDiagnostic } from '../src/lib/code-runner.ts';
 import { workspaceBounds, clampWorkspaceWidth } from '../src/lib/workspace-size.ts';
 import { loadEditorLanguage } from '../src/lib/editor-language.ts';
 
@@ -44,6 +45,31 @@ test('workspace bounds preserve readable chat and adapt to tablet/mobile', () =>
   assert.deepEqual(workspaceBounds(390), { min: 390, max: 390 });
   assert.equal(clampWorkspaceWidth(3000, workspaceBounds(1440, 420)), 684);
   assert.equal(clampWorkspaceWidth(-1, workspaceBounds(1440)), 320);
+});
+
+test('HTML preview is instrumented, network-restricted, and diagnostics are bounded', () => {
+  const preview = makePreviewHtml(
+    '<!doctype html><html><head><title>Preview</title></head><body><h1>Ready</h1></body></html>',
+    'preview-test-id',
+  );
+  assert.ok(preview.startsWith('<!doctype html><html>'));
+  assert.match(preview, /default-src &#39;none&#39;|default-src 'none'/);
+  assert.match(preview, /connect-src &#39;none&#39;|connect-src 'none'/);
+  assert.match(preview, /nexo-preview-diagnostic/);
+  assert.match(preview, /preview-test-id/);
+  assert.match(preview, /<h1>Ready<\/h1>/);
+  assert.doesNotMatch(preview, /allow-same-origin/);
+
+  const diagnostic = sanitizePreviewDiagnostic({
+    kind: 'error',
+    message: 'x'.repeat(900),
+    source: 'https://example.test/assets/app.js?private=value#section',
+    line: 12,
+  });
+  assert.equal(diagnostic.message.length, 600);
+  assert.equal(diagnostic.source, 'https://example.test/assets/app.js');
+  assert.equal(diagnostic.line, 12);
+  assert.equal(sanitizePreviewDiagnostic({ kind: 'unexpected', message: 'x' }), null);
 });
 
 test('editor modes are selected dynamically and repeated loads share a promise', async () => {

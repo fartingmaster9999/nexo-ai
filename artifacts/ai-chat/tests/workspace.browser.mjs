@@ -224,6 +224,32 @@ try {
   await changeLanguage('html');
   await waitFor(() => evaluate(`!document.querySelector('.ws-language-status') && document.querySelector('select').value === 'html'`), 'rapid mode switch');
   assert.ok(requests.some((url) => /codemirror_lang-html/.test(url)));
+  const isolatedPage = `<!doctype html><html><head><title>Preview isolation</title></head><body>
+    <h1>Responsive preview</h1><p id="boundary"></p>
+    <script>
+      let parentBlocked = false, storageBlocked = false;
+      try { parent.document.documentElement.dataset.previewEscape = "yes"; } catch (_) { parentBlocked = true; }
+      try { localStorage.setItem("preview-secret-probe", "bad"); } catch (_) { storageBlocked = true; }
+      fetch("http://127.0.0.1:${port}/api/preview-probe").catch(() => {});
+      document.querySelector("#boundary").textContent = [
+        parentBlocked ? "parent-blocked" : "parent-accessible",
+        storageBlocked ? "storage-blocked" : "storage-accessible",
+        typeof process === "undefined" ? "no-server-runtime" : "server-runtime"
+      ].join("|");
+      console.error("PREVIEW_CONSOLE_DIAGNOSTIC");
+      setTimeout(() => { throw new Error("PREVIEW_RUNTIME_DIAGNOSTIC"); }, 0);
+    </script>
+  </body></html>`;
+  await evaluate(`window.__workspaceFixture.conversation('html-preview-test'); window.__workspaceFixture.generated('html', ${JSON.stringify(isolatedPage)});`);
+  await click('[data-testid="button-run-code"]');
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="preview-diagnostics"]')?.textContent.includes("PREVIEW_RUNTIME_DIAGNOSTIC")`), 'HTML runtime diagnostics');
+  assert.equal(await evaluate(`document.querySelector('[data-testid="frame-preview"]').getAttribute('sandbox')`), 'allow-scripts');
+  assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]').getBoundingClientRect().width > 0`), 'The HTML document is visible in a responsive full-width preview');
+  assert.equal(await evaluate(`(() => { try { document.querySelector('[data-testid="frame-preview"]').contentWindow.document; return false; } catch (error) { return error.name === 'SecurityError'; } })()`), true, 'The opaque-origin frame cannot be read by the app');
+  assert.equal(await evaluate(`document.documentElement.dataset.previewEscape ?? ''`), '', 'Preview cannot access the application document');
+  assert.equal(await evaluate(`localStorage.getItem('preview-secret-probe')`), null, 'Preview cannot access application local storage');
+  assert.ok(await evaluate(`document.querySelector('[data-testid="preview-diagnostics"]').textContent.includes('PREVIEW_CONSOLE_DIAGNOSTIC')`), 'console errors are surfaced in the workspace');
+  assert.ok(!requests.some((url) => url.includes('/api/preview-probe')), 'The preview CSP blocks requests to the app origin');
   await evaluate(`document.querySelector('.cm-content').focus()`);
   await pressKey(null, 'Escape', 'Escape', 27);
   assert.ok(await evaluate(`!!document.querySelector('[data-testid="panel-workspace"]')`), 'Escape in the code editor remains available to the editor');
@@ -337,6 +363,7 @@ try {
   assert.equal(await evaluate(`document.querySelector('[data-testid="console-output"]').scrollTop`), 0, 'New output does not pull a reader away from older lines');
   await evaluate(`(() => { const el=document.querySelector('[data-testid="console-output"]'); el.scrollTop=el.scrollHeight; el.dispatchEvent(new Event('scroll')); })()`);
   await waitFor(() => evaluate(`document.querySelectorAll('[data-testid="console-output"] pre.c-stdout').length >= 45`), 'output after returning to bottom');
+  await waitFor(() => evaluate(`(() => { const el=document.querySelector('[data-testid="console-output"]'); return el.scrollHeight-el.clientHeight-el.scrollTop <= 2; })()`), 'console follows output after returning to bottom');
   assert.ok(await evaluate(`(() => { const el=document.querySelector('[data-testid="console-output"]'); return el.scrollHeight-el.clientHeight-el.scrollTop <= 2; })()`), 'New output follows only after the reader returns to the bottom');
   await waitFor(() => evaluate(`!document.querySelector('[data-testid="status-run"]')`), 'streaming run completion');
   timings.consoleStreamMs = Math.round(await evaluate('performance.now()') - consoleStarted);

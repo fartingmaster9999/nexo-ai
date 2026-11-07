@@ -9,7 +9,7 @@ import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry"
 import { availableModels, CODING_FALLBACK } from "../lib/model-routing";
 import {
   buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError, geminiAgentErrorMessage,
-  GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_MODEL, MAX_AGENT_CODE_CHARS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
+  GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_MODEL, MAX_AGENT_CODE_CHARS, MAX_AGENT_HTML_PREVIEW_RUNS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
   requestGeminiAgentStream, validateAgentHistory,
 } from "../lib/gemini-agent";
 import { buildGroqAgentRequest, collectGroqAgentResponse, GROQ_AGENT_MODEL } from "../lib/groq-agent";
@@ -352,6 +352,26 @@ export function createAgentRouter({
             result: safeResultText(`This exact code already ran. Reuse the previous result instead of running it again:\n${previous.result}`),
           });
           await emit({ activity: { id: `agent-code-${call.callId}`, label: "Reused the earlier browser run", kind: "code", status: "complete" } });
+          continue;
+        }
+        if (language === "html" && history.filter(
+          (exchange) => exchange.tool === "run_code" && exchange.arguments.language === "html",
+        ).length >= MAX_AGENT_HTML_PREVIEW_RUNS) {
+          history.push({
+            tool: call.tool,
+            callId: call.callId,
+            thoughtSignature: call.thoughtSignature,
+            arguments: arguments_,
+            result: safeResultText("The HTML preview revision limit was reached after three runs. Do not request another HTML preview; provide the best final response using the existing preview and diagnostics."),
+          });
+          await emit({
+            activity: {
+              id: `agent-code-${call.callId}`,
+              label: "HTML preview revision limit reached",
+              kind: "code",
+              status: "complete",
+            },
+          });
           continue;
         }
         await emit({ activity: { id: `agent-code-${call.callId}`, label: `Running ${language} code in the isolated browser…`, kind: "code", status: "running" } });
