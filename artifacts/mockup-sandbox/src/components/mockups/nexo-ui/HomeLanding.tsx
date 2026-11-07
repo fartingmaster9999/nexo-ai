@@ -8,6 +8,8 @@ type Props = {
   prompts: Prompt[];
   onStart: () => void;
   onPrompt: (text: string) => void;
+  onOpenHistory?: (trigger: HTMLButtonElement) => void;
+  historyOpen?: boolean;
   headingRef?: Ref<HTMLHeadingElement>;
 };
 
@@ -23,7 +25,7 @@ const examples = [
   { ask: 'Plot a damped sine wave in Python.', steps: ['import numpy, matplotlib', 'y = e^(-t/4) · sin(2πt)', 'Run it in the workspace'] },
 ];
 
-export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, headingRef }: Props) {
+export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, onOpenHistory, historyOpen = false, headingRef }: Props) {
   const [active, setActive] = useState(0);
 
   useEffect(() => {
@@ -51,7 +53,17 @@ export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, headingRef }:
   return (
     <div className="home-landing" data-testid="home-landing">
       <div className="landing-topline lx-in" style={{ ['--d' as string]: '0ms' }}>
-        <span className="landing-wordmark"><img src={logoUrl} alt="" aria-hidden="true" /> Nexo AI</span>
+        <button
+          className="landing-wordmark"
+          type="button"
+          onClick={(event) => onOpenHistory?.(event.currentTarget)}
+          aria-label={historyOpen ? 'Close conversation history' : 'Open conversation history'}
+          aria-expanded={historyOpen}
+          aria-controls="history-sidebar"
+          data-testid="button-home-history"
+        >
+          <img src={logoUrl} alt="" aria-hidden="true" /> Nexo AI
+        </button>
       </div>
 
       <div className="landing-hero">
@@ -73,14 +85,8 @@ export function HomeLanding({ logoUrl, prompts, onStart, onPrompt, headingRef }:
         </div>
 
         <div className="landing-visual lx-in" style={{ ['--d' as string]: '180ms' }} aria-hidden="true">
-          <div className="lx-orbit lx-orbit-a"><i /></div>
-          <div className="lx-orbit lx-orbit-b"><i /></div>
-          <div className="landing-glow" />
-          <div className="landing-sphere"><img src={logoUrl} alt="" /></div>
-
           <div className="landing-preview">
             <div className="landing-preview-head">
-              <span className="landing-window-dots"><i /><i /><i /></span>
               <span className="lx-pager">{examples.map((_, i) => <b key={i} className={i === active ? 'is-on' : ''} />)}</span>
             </div>
             <div className="lx-swap" key={active}>
