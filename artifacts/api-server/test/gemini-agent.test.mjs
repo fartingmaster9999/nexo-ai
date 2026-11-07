@@ -1046,9 +1046,12 @@ test("Agent sanitizes failed image requests without emitting image bytes or prov
     mimeType: "image/png",
     data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==",
   };
-  const providerError = `SENSITIVE_PROVIDER_BODY:${image.data}`;
+  const providerError = "SENSITIVE_PROVIDER_BODY:provider-internal-diagnostic";
+  const logs = [];
+  const logger = pino({ level: "info" }, { write: (line) => logs.push(JSON.parse(line)) });
   await withServer(createSseApp({
     fetchImpl: async () => new Response(providerError, { status: 401 }),
+    logger,
   }), async (url) => {
     const response = await fetch(url, {
       method: "POST",
@@ -1060,6 +1063,17 @@ test("Agent sanitizes failed image requests without emitting image bytes or prov
     assert.equal(body.includes("SENSITIVE_PROVIDER_BODY"), false);
     assert.equal(body.includes(image.data), false, "image bytes are absent from emitted error events");
   });
+
+  const serializedLogs = JSON.stringify(logs);
+  assert.equal(serializedLogs.includes(image.data), false, "server logs omit uploaded image bytes");
+  assert.equal(serializedLogs.includes(providerError), false, "server logs omit the provider response body");
+  const failure = logs.find((entry) => entry.event === "agent.stream.failed");
+  assert.ok(failure, "server logs retain a structured failure record");
+  assert.equal(failure.provider, "gemini");
+  assert.match(failure.model, /^(?:gemini|gemma)-/, "server logs retain the selected provider model");
+  assert.equal(failure.status, 401);
+  assert.equal(failure.failureKind, "gemini_http");
+  assert.equal(failure.failureReason, "HTTP 401");
 });
 
 test("cancelling an image-bearing Agent request aborts its in-flight Gemini request", async () => {
