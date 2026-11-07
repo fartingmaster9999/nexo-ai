@@ -40,20 +40,6 @@ export function Scene1({ sceneIndex: _sceneIndex }: { sceneIndex: number }) {
         animate={{ x: '104%' }}
         transition={{ delay: 0.02, duration: 0.34, ease: EASE }}
       />
-      <motion.div
-        className="absolute left-1/2 top-[14%] z-30 h-[72%] w-[0.22vmin] -translate-x-1/2"
-        initial={{ scaleY: 0.08, opacity: 0.65 }}
-        animate={{ scaleY: [0.08, 1, 0.52, 1.5], opacity: [0.65, 0.95, 0.4, 0] }}
-        transition={{ duration: 3.3, times: [0, 0.15, 0.72, 1], ease: EASE }}
-        style={{ background: '#91caff', boxShadow: '0 0 2vmin rgba(39,125,255,.9)' }}
-      />
-      <motion.div
-        className="absolute inset-y-0 z-10 w-[0.16vmin]"
-        initial={{ left: '12%', opacity: 0 }}
-        animate={{ left: ['12%', '56%', '86%'], opacity: [0, 0.58, 0] }}
-        transition={{ delay: 1.2, duration: 0.8, ease: EASE }}
-        style={{ background: 'rgba(157,207,255,.82)', boxShadow: '0 0 1.6vmin rgba(43,130,255,.82)' }}
-      />
       <motion.h1
         className="nexo-display absolute left-[6%] top-[8%] z-40 m-0 max-w-[54%] text-[8.3vmin] leading-[0.96] text-[#f5f8ff]"
         initial={{ opacity: 0, y: 22, scale: 0.98 }}

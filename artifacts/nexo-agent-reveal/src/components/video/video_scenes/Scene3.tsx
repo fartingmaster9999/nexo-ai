@@ -37,13 +37,6 @@ export function Scene3({ sceneIndex: _sceneIndex }: { sceneIndex: number }) {
         animate={{ x: closing ? '0%' : '104%' }}
         transition={{ duration: closing ? 1.35 : 0.62, ease: EASE }}
       />
-      <motion.div
-        className="absolute left-1/2 top-0 z-30 h-full w-[0.22vmin] -translate-x-1/2"
-        initial={{ opacity: 1, scaleY: 0.9 }}
-        animate={{ opacity: closing ? 1 : 0, scaleY: closing ? 1 : 0.9 }}
-        transition={{ duration: closing ? 1.35 : 0.24 }}
-        style={{ background: '#8bc7ff', boxShadow: '0 0 2vmin #1769ff' }}
-      />
     </motion.section>
   );
 }

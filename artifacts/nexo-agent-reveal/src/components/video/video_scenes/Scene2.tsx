@@ -48,16 +48,6 @@ export function Scene2({ sceneIndex: _sceneIndex }: { sceneIndex: number }) {
         transition={{ duration: close ? 0.8 : 0.16, ease: EASE }}
         style={{ transformOrigin: 'right center' }}
       />
-      <motion.div
-        className="absolute left-1/2 top-0 z-30 h-full w-[0.22vmin] -translate-x-1/2"
-        initial={{ opacity: 0.2, scaleY: 0.2 }}
-        animate={{
-          opacity: close ? 1 : [0.2, 0.95, 0.18, 0.85, 0.18, 1, 0.22],
-          scaleY: close ? 1 : [0.2, 1, 0.2, 0.85, 0.18, 1, 0.3],
-        }}
-        transition={{ duration: close ? 0.22 : 2.9, ease: EASE }}
-        style={{ background: '#8bc7ff', boxShadow: '0 0 2.2vmin #1769ff' }}
-      />
     </motion.section>
   );
 }
