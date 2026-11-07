@@ -1,7 +1,5 @@
 import { motion } from 'framer-motion';
 
-const EASE = [0.2, 0.85, 0.25, 1] as const;
-
 export function Scene3({ sceneIndex: _sceneIndex }: { sceneIndex: number }) {
   return (
     <motion.section
@@ -9,7 +7,7 @@ export function Scene3({ sceneIndex: _sceneIndex }: { sceneIndex: number }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.55, ease: EASE }}
+      transition={{ duration: 0.55, ease: 'linear' }}
     >
       <img
         src={`${import.meta.env.BASE_URL}images/nexo-agent-splash.png`}
