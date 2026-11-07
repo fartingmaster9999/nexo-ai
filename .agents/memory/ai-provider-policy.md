@@ -44,3 +44,9 @@ For Nexo Agent, transient non-rate-limit Gemini 3.8 failures may fall back to Ge
 **Why:** The user explicitly wants Agent runs to continue on Qwen3.8 27B after Gemini rate limits. Groq's tool-call format differs from Gemini's, so continuation history must be converted and kept with the selected provider.
 
 **How to apply:** Preserve same-provider continuation histories; convert prior Agent tool exchanges when switching once, then do not switch back. Qwen fallback cannot inspect attached images; tell the user rather than pretending it can. Agent-built code may run autonomously only in the existing isolated browser sandbox, never on the API server or project filesystem.
+
+Diagnose blank Gemini replies from model finish/block metadata, not just HTTP success or the presence of an API key.
+
+**Why:** Production Agent requests opened successful SSE connections but ended without any visible answer after model fallback. The original logs hid that outcome. Gemini also counts private thinking and visible answer tokens against the same output allowance, so an apparently generous limit can still leave no answer text; token exhaustion must be confirmed rather than inferred.
+
+**How to apply:** Reserve answer headroom, keep recovery attempts bounded, and retain only safe finish/block codes in diagnostics. Never expose or log private thought text, full provider payloads, prompts, or credentials to investigate empty output.

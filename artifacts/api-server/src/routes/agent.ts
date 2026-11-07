@@ -8,7 +8,7 @@ import { searchWeb, type SearchResult } from "../lib/web-search";
 import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry";
 import { availableModels, CODING_FALLBACK } from "../lib/model-routing";
 import {
-  buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError, geminiAgentErrorMessage,
+  buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError, geminiAgentErrorMessage, geminiResponseBlocked,
   GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_MODEL, MAX_AGENT_CODE_CHARS, MAX_AGENT_HTML_PREVIEW_RUNS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
   requestGeminiAgentStream, validateAgentHistory, validateAgentProjectFiles,
 } from "../lib/gemini-agent";
@@ -247,6 +247,8 @@ export function createAgentRouter({
         return true;
       };
       let modelIdleRetries = 0;
+      let emptyResponseRetries = 0;
+      let recoverEmptyResponse = false;
       while (true) {
         controller.signal.throwIfAborted();
         const allowTools = toolCalls < MAX_AGENT_TOOL_CALLS;
@@ -277,14 +279,16 @@ export function createAgentRouter({
             modelResponse = await collectGroqAgentResponse(stream, attemptController.signal, resetIdle);
           } else {
             const request = buildGeminiAgentRequest(agentInput, now(), allowTools);
+            if (recoverEmptyResponse) {
+              request.generationConfig.maxOutputTokens = parsed.data.deepthink ? 32768 : 16384;
+              request.generationConfig.thinkingConfig.thinkingLevel = parsed.data.deepthink ? "medium" : "low";
+            }
             const upstream = await requestGeminiWithRetry(
               () => requestGeminiAgentStream(apiKey!, request, attemptController.signal, fetchImpl, activeModel),
               attemptController.signal,
             );
             if (!upstream.ok) {
               await upstream.body?.cancel().catch(() => {});
-              if (upstream.status === 429 && await switchToGroqFallback(upstream.status)) continue;
-              if (upstream.status >= 500 && await switchToGeminiFallback("provider_error", upstream.status)) continue;
               req.log.warn({ provider: "gemini", model: activeModel, status: upstream.status }, "Gemini Agent request rejected");
               throw new GeminiAgentApiError(upstream.status);
             }
@@ -320,6 +324,10 @@ export function createAgentRouter({
             modelResponse = collectAgentResponse(events);
           }
         } catch (error) {
+          if (activeProvider === "gemini" && error instanceof GeminiAgentApiError) {
+            if (error.status === 429 && await switchToGroqFallback(error.status)) continue;
+            if (error.status >= 500 && await switchToGeminiFallback("provider_error", error.status)) continue;
+          }
           if (attemptTimedOut && activeProvider === "gemini" && await switchToGeminiFallback("stream_idle")) continue;
           if (attemptTimedOut && modelIdleRetries < 1 && !controller.signal.aborted) {
             modelIdleRetries++;
@@ -337,6 +345,38 @@ export function createAgentRouter({
 
         if (!modelResponse) throw new AgentPublicError("The Agent returned no response. Please try again.");
         modelIdleRetries = 0;
+        if (activeProvider === "gemini" && geminiResponseBlocked(modelResponse)) {
+          req.log.warn({
+            event: "agent.gemini.blocked",
+            model: activeModel,
+            finishReason: modelResponse.finishReason,
+            blockReason: modelResponse.blockReason,
+          }, "Gemini blocked the Agent response");
+          throw new AgentPublicError("Gemini blocked this response. Try rephrasing your request.");
+        }
+        if (activeProvider === "gemini" && !modelResponse.text.trim() && modelResponse.calls.length === 0) {
+          req.log.warn({
+            event: "agent.gemini.empty",
+            model: activeModel,
+            finishReason: modelResponse.finishReason ?? "MISSING",
+            retry: emptyResponseRetries,
+          }, "Gemini finished without visible output");
+          if (emptyResponseRetries < 1) {
+            emptyResponseRetries++;
+            recoverEmptyResponse = true;
+            await emit({ activity: { id: "agent-response-recovery", label: "Retrying Gemini for a complete answer…", kind: "info", status: "running" } });
+            continue;
+          }
+          throw new AgentPublicError(
+            modelResponse.finishReason === "MAX_TOKENS"
+              ? "Gemini exhausted its output budget before answering, even after a retry. Try a smaller request."
+              : "Gemini returned an empty response twice. Please try again.",
+          );
+        }
+        if (recoverEmptyResponse) {
+          recoverEmptyResponse = false;
+          await emit({ activity: { id: "agent-response-recovery", label: "Gemini response recovered", kind: "info", status: "complete" } });
+        }
         if (parsed.data.image && !imageAnalysisComplete) {
           imageAnalysisComplete = true;
           await emit({ activity: { id: "image-analysis", label: "Image analysis complete", kind: "thinking", status: "complete" } });

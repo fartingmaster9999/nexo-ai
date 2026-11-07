@@ -31,6 +31,8 @@ export type AgentToolCall = {
 export type AgentModelResponse = {
   text: string;
   calls: AgentToolCall[];
+  finishReason?: string;
+  blockReason?: string;
 };
 
 const toolDeclarations = [{
@@ -242,7 +244,8 @@ export function buildGeminiAgentRequest(input: AgentChatInput, now = new Date(),
     } : {}),
     generationConfig: {
       temperature: 0.6,
-      maxOutputTokens: input.deepthink ? 8192 : 4096,
+      // Gemini counts private thinking and visible output against the same limit.
+      maxOutputTokens: input.deepthink ? 16384 : 8192,
       thinkingConfig: { thinkingLevel: input.deepthink ? "high" : "medium" },
     },
   };
@@ -270,11 +273,27 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 export function collectAgentResponse(events: unknown[]): AgentModelResponse {
   let text = "";
+  let finishReason: string | undefined;
+  let blockReason: string | undefined;
   const calls = new Map<string, AgentToolCall>();
   for (const event of events) {
-    if (!isObject(event) || !Array.isArray(event.candidates)) continue;
+    if (!isObject(event)) continue;
+    if (isObject(event.error)) {
+      const status = event.error.code;
+      throw new GeminiAgentApiError(
+        typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502,
+      );
+    }
+    if (isObject(event.promptFeedback) && typeof event.promptFeedback.blockReason === "string") {
+      blockReason = safeFinishReason(event.promptFeedback.blockReason);
+    }
+    if (!Array.isArray(event.candidates)) continue;
     const candidate = event.candidates[0];
-    if (!isObject(candidate) || !isObject(candidate.content) || !Array.isArray(candidate.content.parts)) continue;
+    if (!isObject(candidate)) continue;
+    if (typeof candidate.finishReason === "string") {
+      finishReason = safeFinishReason(candidate.finishReason);
+    }
+    if (!isObject(candidate.content) || !Array.isArray(candidate.content.parts)) continue;
     for (const part of candidate.content.parts) {
       if (!isObject(part)) continue;
       if (typeof part.text === "string" && part.thought !== true) {
@@ -301,7 +320,27 @@ export function collectAgentResponse(events: unknown[]): AgentModelResponse {
       });
     }
   }
-  return { text, calls: [...calls.values()] };
+  return {
+    text,
+    calls: [...calls.values()],
+    ...(finishReason ? { finishReason } : {}),
+    ...(blockReason ? { blockReason } : {}),
+  };
+}
+
+function safeFinishReason(reason: string): string {
+  return [
+    "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "OTHER", "BLOCKLIST",
+    "PROHIBITED_CONTENT", "SPII", "MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL",
+    "LANGUAGE", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_OTHER", "NO_IMAGE",
+  ].includes(reason) ? reason : "OTHER";
+}
+
+export function geminiResponseBlocked(response: AgentModelResponse): boolean {
+  return Boolean(response.blockReason) || [
+    "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII",
+    "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
+  ].includes(response.finishReason ?? "");
 }
 
 export function geminiAgentErrorMessage(status: number): string {

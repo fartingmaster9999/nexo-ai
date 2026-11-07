@@ -4,7 +4,7 @@ import express from "express";
 import pino from "pino";
 import pinoHttp from "pino-http";
 import {
-  buildGeminiAgentRequest, collectAgentResponse, GEMINI_AGENT_MODEL, MAX_AGENT_HTML_PREVIEW_RUNS,
+  buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError, GEMINI_AGENT_MODEL, MAX_AGENT_HTML_PREVIEW_RUNS,
   requestGeminiAgentStream, validateAgentHistory,
 } from "../src/lib/gemini-agent.ts";
 import { buildGroqAgentRequest, collectGroqAgentResponse, GROQ_AGENT_MODEL } from "../src/lib/groq-agent.ts";
@@ -256,6 +256,92 @@ test("Agent retries a transient Gemini 503 once before streaming a successful an
     assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Gemini recovered.");
   });
   assert.equal(calls, 2);
+});
+
+test("Gemini decoder preserves terminal metadata and detects in-stream API errors", () => {
+  const exhausted = collectAgentResponse([
+    modelEvent([{ text: "Private thought", thought: true }]),
+    { candidates: [{ finishReason: "MAX_TOKENS" }] },
+  ]);
+  assert.equal(exhausted.text, "");
+  assert.equal(exhausted.finishReason, "MAX_TOKENS");
+  assert.equal(collectAgentResponse([{ promptFeedback: { blockReason: "SAFETY" } }]).blockReason, "SAFETY");
+  assert.throws(
+    () => collectAgentResponse([{ error: { code: 429, message: "SENSITIVE_PROVIDER_BODY" } }]),
+    (error) => error instanceof GeminiAgentApiError && error.status === 429 && !error.message.includes("SENSITIVE"),
+  );
+});
+
+for (const deepthink of [false, true]) {
+  test(`Agent recovers an empty token-exhausted response with Deepthink ${deepthink ? "on" : "off"}`, async () => {
+    const requests = [];
+    await withServer(createSseApp({
+      fetchImpl: async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        return requests.length === 1
+          ? geminiResponse([
+            modelEvent([{ text: "Private thought", thought: true }]),
+            { candidates: [{ finishReason: "MAX_TOKENS" }] },
+          ])
+          : geminiResponse([modelEvent([{ text: "A complete, visible answer." }])]);
+      },
+    }), async (url) => {
+      const events = await readEvents(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...input, deepthink }),
+      }));
+      assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "A complete, visible answer.");
+      assert.equal(events.some((event) => event.error), false);
+      assert.equal(JSON.stringify(events).includes("Private thought"), false);
+      assert.equal(events.at(-1).done, true);
+    });
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].generationConfig.maxOutputTokens, deepthink ? 16384 : 8192);
+    assert.equal(requests[1].generationConfig.maxOutputTokens, deepthink ? 32768 : 16384);
+    assert.equal(requests[1].generationConfig.thinkingConfig.thinkingLevel, deepthink ? "medium" : "low");
+    assert.deepEqual(requests[1].contents, requests[0].contents);
+    assert.deepEqual(requests[1].tools, requests[0].tools);
+  });
+}
+
+test("Agent bounds empty response recovery and does not retry a safety block", async () => {
+  for (const blocked of [false, true]) {
+    let calls = 0;
+    await withServer(createSseApp({
+      fetchImpl: async () => {
+        calls++;
+        return geminiResponse([blocked
+          ? { promptFeedback: { blockReason: "SAFETY" } }
+          : { candidates: [{ finishReason: "MAX_TOKENS" }] }]);
+      },
+    }), async (url) => {
+      const events = await readEvents(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+      }));
+      assert.match(events.find((event) => event.error)?.error ?? "", blocked ? /blocked this response/ : /output budget/);
+    });
+    assert.equal(calls, blocked ? 1 : 2);
+  }
+});
+
+test("Gemini in-stream rate limits use the existing Qwen fallback", async () => {
+  const groqClient = {
+    models: { list: async () => ({ data: [{ id: CODING_FALLBACK }] }) },
+    chat: { completions: { create: async () => (async function* () {
+      yield { choices: [{ delta: { content: "Qwen completed the request." } }] };
+    })() } },
+  };
+  await withServer(createSseApp({
+    getGroqClient: () => groqClient,
+    fetchImpl: async () => geminiResponse([{ error: { code: 429, message: "SENSITIVE_PROVIDER_BODY" } }]),
+  }), async (url) => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    }));
+    assert.equal(events.some((event) => event.agentProvider === "groq"), true);
+    assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "Qwen completed the request.");
+    assert.equal(JSON.stringify(events).includes("SENSITIVE_PROVIDER_BODY"), false);
+  });
 });
 
 test("Agent logs known parser failures without logging credentials or upstream bodies", async () => {
