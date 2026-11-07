@@ -95,6 +95,8 @@ export function buildGroqAgentRequest(
   input: AgentChatInput,
   now = new Date(),
   allowTools = true,
+  model = GROQ_AGENT_MODEL,
+  securityNote?: string,
 ): ChatCompletionCreateParamsStreaming {
   const timeZone = input.timeZone ?? "UTC";
   const history = boundedHistory(input.messages, 16_000);
@@ -107,6 +109,7 @@ export function buildGroqAgentRequest(
       role: "system",
       content: agentSystemPrompt(now, timeZone, false, Boolean(input.image)),
     },
+    ...(securityNote ? [{ role: "system" as const, content: securityNote }] : []),
     ...history.map((message, index) => ({
       role: message.role,
       content: message.content + (index === history.length - 1 && message.role === "user" ? selectedProjectContext : ""),
@@ -114,7 +117,7 @@ export function buildGroqAgentRequest(
     ...groqHistory(input.agentHistory ?? []),
   ];
   return {
-    model: GROQ_AGENT_MODEL,
+    model,
     messages,
     stream: true,
     temperature: 0.6,
@@ -153,7 +156,7 @@ export async function collectGroqAgentResponse(
     const delta = chunk.choices?.[0]?.delta;
     if (typeof delta?.content === "string") {
       text += delta.content;
-      if (text.length > MAX_AGENT_RESPONSE_CHARS) throw new Error("Qwen's response exceeded the Agent output limit.");
+      if (text.length > MAX_AGENT_RESPONSE_CHARS) throw new Error("The model's response exceeded the Agent output limit.");
     }
     for (const item of delta?.tool_calls ?? []) {
       const call = pending.get(item.index) ?? { callId: "", name: "", arguments: "" };

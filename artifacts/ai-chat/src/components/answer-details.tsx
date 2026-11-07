@@ -3,7 +3,8 @@ import { AlertTriangle, Brain, ChevronDown, Info } from 'lucide-react';
 import { splitReasoning } from '../lib/reasoning-sections';
 import type { QuizProgress } from '../lib/interactive-widgets';
 
-export type Activity = { id: string; label: string; kind?: 'search' | 'thinking' | 'info' | 'code'; status?: 'running' | 'complete' | 'error' };
+export type Activity = { id: string; label: string; kind?: 'search' | 'thinking' | 'info' | 'code' | 'security'; status?: 'running' | 'complete' | 'error' };
+export type AgentTask = 'coding' | 'planning' | 'reasoning' | 'fast_worker' | 'document' | 'synthesis' | 'classification' | 'multimodal';
 export type Source = { title: string; url: string; retrieval?: 'page' | 'search_excerpt'; retrievedAt?: string };
 export type Notice = { id: string; message: string; model?: string };
 export type ChatMessage = {
@@ -18,6 +19,7 @@ export type ChatMessage = {
   sources?: Source[];
   notices?: Notice[];
   model?: string;
+  agentTask?: AgentTask;
   quizProgress?: Record<string, QuizProgress>;
 };
 
@@ -88,9 +90,14 @@ export function NoticeBanner({ notices, index }: { notices?: Notice[]; index: nu
   return (
     <>
       {notices.map((n) => {
-        const fallback = n.id === 'model-downgrade';
+        const fallback = n.id === 'model-downgrade' ||
+          n.id === 'agent-route-fallback' ||
+          n.id === 'agent-model-rate-fallback' ||
+          n.id === 'gemini-agent-route-fallback' ||
+          n.id === 'gemini-agent-qwen-fallback' ||
+          n.id === 'gemini-agent-model-fallback';
         // Normalize old saved notices too; a successful model switch is not a blocked chat.
-        const text = fallback
+        const text = n.id === 'model-downgrade'
           ? 'The main model is temporarily rate-limited. A lighter model is answering this reply—you can keep chatting.'
           : n.message;
         const Icon = fallback ? Info : AlertTriangle;
@@ -141,6 +148,8 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
               )) : (
                 <p className="term-note">{live ? 'Agent is deciding whether a tool is needed…' : 'No tools were needed for this response.'}</p>
               )}
+              {message.agentTask && <p className="term-note">Task: {message.agentTask.replaceAll('_', ' ')}</p>}
+              {message.model && <p className="term-note" data-testid={`agent-model-${index}`}>Active model: {message.model}</p>}
               <p className="term-note">Private model reasoning is not shown; this panel lists tool activity and outcomes.</p>
             </div>
           ) : reasoning ? (

@@ -1,4 +1,4 @@
-import type { Activity, Source, Notice } from '../components/answer-details';
+import type { Activity, AgentTask, Source, Notice } from '../components/answer-details';
 import type { RunLanguage } from './code-runner';
 import { validateProjectFiles, type ProjectFile } from './project-workspace';
 
@@ -23,7 +23,7 @@ export type AgentToolRequest = {
   arguments: { entrypoint: string; files: ProjectFile[] };
   history: AgentToolExchange[];
 };
-export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentProvider?: 'gemini' | 'groq'; agentTool?: AgentToolRequest };
+export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentProvider?: 'gemini' | 'groq'; agentTask?: AgentTask; agentTool?: AgentToolRequest };
 
 function isAgentToolRequest(value: unknown): value is AgentToolRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -80,6 +80,17 @@ export class ChatEventDecoder {
       }
       if (event.agentProvider !== undefined && event.agentProvider !== 'gemini' && event.agentProvider !== 'groq') {
         throw new Error('The server sent an invalid Agent provider.');
+      }
+      if (event.agentTask !== undefined && !['coding', 'planning', 'reasoning', 'fast_worker', 'document', 'synthesis', 'classification', 'multimodal'].includes(event.agentTask)) {
+        throw new Error('The server sent an invalid Agent task route.');
+      }
+      if (event.activity !== undefined) {
+        const activity = event.activity as unknown as Record<string, unknown>;
+        if (!activity || typeof activity !== 'object' ||
+            (activity.kind !== undefined && !['search', 'thinking', 'info', 'code', 'security'].includes(String(activity.kind))) ||
+            (activity.status !== undefined && !['running', 'complete', 'error'].includes(String(activity.status)))) {
+          throw new Error('The server sent invalid Agent activity.');
+        }
       }
       if (event.done !== undefined && typeof event.done !== 'boolean') throw new Error('The server sent an invalid response event.');
       if (event.agentTool !== undefined && !isAgentToolRequest(event.agentTool)) {

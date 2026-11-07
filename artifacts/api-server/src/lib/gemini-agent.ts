@@ -1,9 +1,10 @@
 import type { AgentChatInput, AgentProjectFile, AgentToolExchange } from "@workspace/api-zod";
 import { boundedHistory } from "./chat-request";
 import { GeminiSseDecoder, validateImageData } from "./gemini-image";
+import { GEMINI_AGENT_FALLBACK_MODEL as FALLBACK_MODEL, GEMINI_AGENT_PRIMARY_MODEL } from "./model-routing";
 
-export const GEMINI_AGENT_MODEL = "gemini-3.8-flash";
-export const GEMINI_AGENT_FALLBACK_MODEL = "gemini-3.6-flash";
+export const GEMINI_AGENT_MODEL = GEMINI_AGENT_PRIMARY_MODEL;
+export const GEMINI_AGENT_FALLBACK_MODEL = FALLBACK_MODEL;
 export const MAX_AGENT_TOOL_CALLS = 6;
 export const MAX_AGENT_HTML_PREVIEW_RUNS = 3;
 export const MAX_AGENT_CODE_CHARS = 20_000;
@@ -13,6 +14,61 @@ export const MAX_AGENT_PROJECT_FILES = 8;
 export const MAX_AGENT_PROJECT_FILE_CHARS = 12_000;
 export const MAX_AGENT_PROJECT_TOTAL_CHARS = 12_000;
 export const MAX_AGENT_PROJECT_PATH_CHARS = 160;
+
+type GeminiCatalogItem = {
+  name?: string;
+  supportedGenerationMethods?: string[];
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+};
+
+let geminiCatalog: { models: GeminiCatalogItem[]; expires: number } | undefined;
+let geminiCatalogRequest: Promise<GeminiCatalogItem[]> | undefined;
+
+export async function availableGeminiAgentModels(
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<GeminiCatalogItem[]> {
+  if (geminiCatalog && geminiCatalog.expires > Date.now()) return geminiCatalog.models;
+  if (geminiCatalogRequest) return geminiCatalogRequest;
+  geminiCatalogRequest = (async () => {
+    try {
+      const models: GeminiCatalogItem[] = [];
+      let pageToken: string | undefined;
+      for (let page = 0; page < 5; page++) {
+        const url = new URL("https://generativelanguage.googleapis.com/v1beta/models");
+        url.searchParams.set("pageSize", "100");
+        if (pageToken) url.searchParams.set("pageToken", pageToken);
+        const response = await fetchImpl(url, {
+          method: "GET",
+          headers: { "x-goog-api-key": apiKey },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) throw new Error("Gemini catalog request failed");
+        const body = await response.json() as { models?: unknown; nextPageToken?: unknown };
+        if (!Array.isArray(body.models)) throw new Error("Gemini catalog response is invalid");
+        for (const item of body.models) {
+          if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+          const model = item as GeminiCatalogItem;
+          if (typeof model.name !== "string" ||
+              !model.supportedGenerationMethods?.includes("streamGenerateContent") ||
+              typeof model.inputTokenLimit !== "number" || model.inputTokenLimit < 8192 ||
+              typeof model.outputTokenLimit !== "number" || model.outputTokenLimit < 8192) continue;
+          models.push(model);
+        }
+        if (typeof body.nextPageToken !== "string" || !body.nextPageToken) break;
+        pageToken = body.nextPageToken;
+      }
+      geminiCatalog = { models, expires: Date.now() + 600000 };
+      return models;
+    } catch {
+      const models = geminiCatalog?.models ?? [];
+      geminiCatalog = { models, expires: Date.now() + 30000 };
+      return models;
+    }
+  })();
+  try { return await geminiCatalogRequest; } finally { geminiCatalogRequest = undefined; }
+}
 
 export class GeminiAgentApiError extends Error {
   constructor(readonly status: number) {
@@ -153,7 +209,9 @@ function exchangeParts(exchange: AgentToolExchange) {
           id: exchange.callId,
           args: exchange.arguments,
         },
-        thoughtSignature: exchange.thoughtSignature,
+        ...(exchange.thoughtSignature === "gemma-agent-v1"
+          ? {}
+          : { thoughtSignature: exchange.thoughtSignature }),
       }],
     },
     {
@@ -210,7 +268,13 @@ export function validateAgentHistory(history: AgentToolExchange[] = []): string 
   return null;
 }
 
-export function buildGeminiAgentRequest(input: AgentChatInput, now = new Date(), allowTools = true) {
+export function buildGeminiAgentRequest(
+  input: AgentChatInput,
+  now = new Date(),
+  allowTools = true,
+  securityNote?: string,
+  model = GEMINI_AGENT_MODEL,
+) {
   const timeZone = input.timeZone ?? "UTC";
   if (input.image) validateImageData(input.image.mimeType, input.image.data);
   if (input.projectFiles && input.projectFiles.length && !validateAgentProjectFiles(input.projectFiles)) {
@@ -230,7 +294,10 @@ export function buildGeminiAgentRequest(input: AgentChatInput, now = new Date(),
     ],
   }));
   for (const exchange of input.agentHistory ?? []) contents.push(...exchangeParts(exchange));
-  const instructions = agentSystemPrompt(now, timeZone, Boolean(input.image));
+  const instructions = [
+    agentSystemPrompt(now, timeZone, Boolean(input.image)),
+    ...(securityNote ? [securityNote] : []),
+  ].join(" ");
   return {
     systemInstruction: {
       parts: [{
@@ -246,7 +313,9 @@ export function buildGeminiAgentRequest(input: AgentChatInput, now = new Date(),
       temperature: 0.6,
       // Gemini counts private thinking and visible output against the same limit.
       maxOutputTokens: input.deepthink ? 16384 : 8192,
-      thinkingConfig: { thinkingLevel: input.deepthink ? "high" : "medium" },
+      ...(model.startsWith("gemma-")
+        ? {}
+        : { thinkingConfig: { thinkingLevel: input.deepthink ? "high" : "medium" } }),
     },
   };
 }
@@ -271,7 +340,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-export function collectAgentResponse(events: unknown[]): AgentModelResponse {
+export function collectAgentResponse(
+  events: unknown[],
+  options: { allowMissingThoughtSignature?: boolean } = {},
+): AgentModelResponse {
   let text = "";
   let finishReason: string | undefined;
   let blockReason: string | undefined;
@@ -305,7 +377,12 @@ export function collectAgentResponse(events: unknown[]): AgentModelResponse {
       const name = functionCall.name;
       const id = functionCall.id;
       const args = functionCall.args;
-      const signature = part.thoughtSignature;
+      const rawSignature = part.thoughtSignature;
+      const signature = typeof rawSignature === "string" && rawSignature
+        ? rawSignature
+        : options.allowMissingThoughtSignature
+          ? "gemma-agent-v1"
+          : "";
       if ((name !== "web_search" && name !== "run_code" && name !== "write_project") ||
           typeof id !== "string" || !id || id.length > 128 ||
           typeof signature !== "string" || !signature || signature.length > 4096 ||

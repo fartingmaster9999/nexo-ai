@@ -4,7 +4,8 @@ import express from "express";
 import pino from "pino";
 import pinoHttp from "pino-http";
 import {
-  buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError, GEMINI_AGENT_MODEL, MAX_AGENT_HTML_PREVIEW_RUNS,
+  availableGeminiAgentModels, buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError,
+  GEMINI_AGENT_MODEL, MAX_AGENT_HTML_PREVIEW_RUNS,
   requestGeminiAgentStream, validateAgentHistory,
 } from "../src/lib/gemini-agent.ts";
 import { buildGroqAgentRequest, collectGroqAgentResponse, GROQ_AGENT_MODEL } from "../src/lib/groq-agent.ts";
@@ -16,6 +17,124 @@ const input = {
   timeZone: "America/Chicago",
 };
 
+test("Gemini model discovery checks exact IDs, streaming, context, and server-side key headers", async () => {
+  const requests = [];
+  const models = await availableGeminiAgentModels("never-in-url", async (url, init) => {
+    requests.push({ url: new URL(url), init });
+    const page = requests.length === 1
+      ? {
+        models: [
+          { name: "models/gemini-3.5-flash-lite", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 8192 },
+          { name: "models/gemini-3.1-flash-lite", supportedGenerationMethods: ["generateContent"], inputTokenLimit: 131072, outputTokenLimit: 8192 },
+          { name: "models/gemma-4-31b-it", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 4096, outputTokenLimit: 8192 },
+        ],
+        nextPageToken: "next",
+      }
+      : {
+        models: [
+          { name: "models/gemma-4-26b-a4b-it", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 8192 },
+        ],
+      };
+    return new Response(JSON.stringify(page), { status: 200 });
+  });
+  assert.deepEqual(models.map((model) => model.name), [
+    "models/gemini-3.5-flash-lite",
+    "models/gemma-4-26b-a4b-it",
+  ]);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url.searchParams.has("key"), false);
+  assert.equal(requests[0].init.headers["x-goog-api-key"], "never-in-url");
+  assert.equal(requests[1].url.searchParams.get("pageToken"), "next");
+});
+
+test("Gemma Agent requests keep tool calls while omitting Gemini-only thinking signatures", () => {
+  const model = "gemma-4-31b-it";
+  const request = buildGeminiAgentRequest(input, new Date("2026-11-07T12:00:00Z"), true, undefined, model);
+  assert.equal(request.generationConfig.thinkingConfig, undefined);
+  assert.ok(request.tools);
+
+  const response = collectAgentResponse([modelEvent([{
+    functionCall: {
+      name: "run_code",
+      id: "gemma-tool-1",
+      args: { language: "javascript", code: "console.log(1)" },
+    },
+  }])], { allowMissingThoughtSignature: true });
+  assert.equal(response.calls[0].thoughtSignature, "gemma-agent-v1");
+  const continuation = buildGeminiAgentRequest({
+    ...input,
+    agentHistory: [{
+      tool: "run_code",
+      callId: "gemma-tool-1",
+      thoughtSignature: response.calls[0].thoughtSignature,
+      arguments: response.calls[0].arguments,
+      result: "1",
+    }],
+  }, new Date("2026-11-07T12:00:00Z"), true, undefined, model);
+  assert.equal(JSON.stringify(continuation.contents).includes("thoughtSignature"), false);
+});
+
+test("Agent selects catalog-verified Flash-Lite and Gemma models for specialist tasks", async () => {
+  const requested = [];
+  await withServer(createSseApp({
+    fetchImpl: async (url, init) => {
+      requested.push({ url: String(url), body: JSON.parse(init.body) });
+      return geminiResponse([modelEvent([{ text: "Specialist answer." }])]);
+    },
+  }), async (url) => {
+    for (const [task, expectedModel] of [
+      ["fast_worker", "gemini-3.5-flash-lite"],
+      ["document", "gemma-4-26b-a4b-it"],
+    ]) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...input, agentTask: task }),
+      });
+      const events = await readEvents(response);
+      assert.equal(response.status, 200);
+      assert.ok(events.some((event) => event.model === expectedModel));
+      assert.ok(events.some((event) => event.agentTask === task));
+      assert.match(requested.at(-1).url, new RegExp(`/models/${expectedModel}:`));
+      if (expectedModel.startsWith("gemma-")) {
+        assert.equal(requested.at(-1).body.generationConfig.thinkingConfig, undefined);
+      }
+    }
+  });
+});
+
+test("Agent surfaces a compatible Flash-Lite fallback instead of claiming the preferred model", async () => {
+  const available = [
+    { name: "models/gemini-3.1-flash-lite", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 8192 },
+    { name: "models/gemini-3.8-flash", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 8192 },
+  ];
+  await withServer(createSseApp({
+    getGeminiModels: async () => available,
+    fetchImpl: async () => geminiResponse([modelEvent([{ text: "Fallback answer." }])]),
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, agentTask: "fast_worker" }),
+    });
+    const events = await readEvents(response);
+    assert.equal(events[0].model, "gemini-3.1-flash-lite");
+    assert.match(events.find((event) => event.notice)?.notice.message ?? "", /Gemini 3\.5 Flash-Lite.*compatible model Gemini 3\.1 Flash-Lite/);
+  });
+});
+
+test("Agent fails clearly when no catalog-verified Gemini model supports the task", async () => {
+  await withServer(createSseApp({ getGeminiModels: async () => [] }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, agentProvider: "gemini", agentTask: "fast_worker" }),
+    });
+    assert.equal(response.status, 503);
+    assert.match((await response.json()).error, /No catalog-verified Gemini model/);
+  });
+});
+
 function modelEvent(parts) {
   return { candidates: [{ content: { parts } }] };
 }
@@ -25,13 +144,29 @@ function geminiResponse(events, status = 200) {
   return new Response(body, { status, headers: { "Content-Type": "text/event-stream" } });
 }
 
-function createSseApp({ getApiKey = () => "test-only-key", getGroqClient, fetchImpl, search, providerIdleMs, logger = pino({ level: "silent" }) } = {}) {
+function createSseApp({
+  getApiKey = () => "test-only-key",
+  getGroqClient = () => undefined,
+  getGeminiModels = async () => [
+    { name: "models/gemini-3.8-flash", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 65536 },
+    { name: "models/gemini-3.6-flash", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 65536 },
+    { name: "models/gemini-3.5-flash-lite", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 65536 },
+    { name: "models/gemini-3.1-flash-lite", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 65536 },
+    { name: "models/gemma-4-31b-it", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 65536 },
+    { name: "models/gemma-4-26b-a4b-it", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 65536 },
+  ],
+  fetchImpl,
+  search,
+  providerIdleMs,
+  logger = pino({ level: "silent" }),
+} = {}) {
   const app = express();
   app.use(pinoHttp({ logger }));
   app.use(express.json({ limit: "5mb" }));
   app.use("/api", createAgentRouter({
     getApiKey,
     getGroqClient,
+    getGeminiModels,
     fetchImpl,
     search,
     now: () => new Date("2026-11-06T18:30:00Z"),
@@ -326,7 +461,12 @@ test("Agent bounds empty response recovery and does not retry a safety block", a
 
 test("Gemini in-stream rate limits use the existing Qwen fallback", async () => {
   const groqClient = {
-    models: { list: async () => ({ data: [{ id: CODING_FALLBACK }] }) },
+    models: { list: async () => ({ data: [{
+      id: CODING_FALLBACK,
+      active: true,
+      context_window: 131072,
+      max_completion_tokens: 16384,
+    }] }) },
     chat: { completions: { create: async () => (async function* () {
       yield { choices: [{ delta: { content: "Qwen completed the request." } }] };
     })() } },
@@ -496,7 +636,12 @@ test("Gemini rate limits switch Agent to Qwen and keep code-tool history on Groq
   let geminiCalls = 0;
   const groqRequests = [];
   const groqClient = {
-    models: { list: async () => ({ data: [{ id: CODING_FALLBACK }] }) },
+    models: { list: async () => ({ data: [{
+      id: CODING_FALLBACK,
+      active: true,
+      context_window: 131072,
+      max_completion_tokens: 16384,
+    }] }) },
     chat: { completions: { create: async (request) => {
       groqRequests.push(request);
       const callNumber = groqRequests.length;
@@ -524,12 +669,12 @@ test("Gemini rate limits switch Agent to Qwen and keep code-tool history on Groq
     const firstResponse = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, agentProvider: "gemini" }),
     });
     const firstEvents = await readEvents(firstResponse);
     assert.equal(firstResponse.status, 200);
     assert.equal(firstEvents.some((event) => event.agentProvider === "groq"), true);
-    assert.match(firstEvents.find((event) => event.notice)?.notice.message ?? "", /Groq Qwen3\.8 27B/);
+    assert.match(firstEvents.find((event) => event.notice)?.notice.message ?? "", /Groq model Qwen3\.8 27B/);
     const tool = firstEvents.find((event) => event.agentTool)?.agentTool;
     assert.equal(tool.arguments.language, "javascript");
 
@@ -539,6 +684,8 @@ test("Gemini rate limits switch Agent to Qwen and keep code-tool history on Groq
       body: JSON.stringify({
         ...input,
         agentProvider: "groq",
+        agentModel: CODING_FALLBACK,
+        agentTask: "reasoning",
         agentHistory: [{
           tool: "run_code",
           callId: tool.callId,
@@ -911,7 +1058,7 @@ test("cancelling an image-bearing Agent request aborts its in-flight Gemini requ
     const reader = response.body.getReader();
     const first = await reader.read();
     const emittedBeforeCancellation = new TextDecoder().decode(first.value);
-    assert.match(emittedBeforeCancellation, /gemini-3\.8-flash/);
+    assert.match(emittedBeforeCancellation, /gemma-4-31b-it/);
     assert.equal(emittedBeforeCancellation.includes(image.data), false, "emitted Agent events never contain image bytes");
     for (let attempt = 0; attempt < 50 && !upstreamSignal; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 10));

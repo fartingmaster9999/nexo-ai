@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AgentChatInputAgentProvider } from './agentChatInputAgentProvider';
+import type { AgentChatInputAgentTask } from './agentChatInputAgentTask';
 import type { AgentProjectFile } from './agentProjectFile';
 import type { AgentToolExchange } from './agentToolExchange';
 import type { ChatMessage } from './chatMessage';
@@ -16,6 +17,13 @@ export interface AgentChatInput {
   deepthink?: boolean;
   /** Continue an Agent run on its selected provider after a rate-limit fallback */
   agentProvider?: AgentChatInputAgentProvider;
+  /**
+     * Continue an Agent run on its selected provider model
+     * @maxLength 100
+     */
+  agentModel?: string;
+  /** Preserve the server-selected capability route through tool continuations */
+  agentTask?: AgentChatInputAgentTask;
   /**
      * Browser IANA timezone, validated by the server for current-time context
      * @maxLength 100

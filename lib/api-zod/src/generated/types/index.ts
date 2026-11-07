@@ -8,6 +8,7 @@
 
 export * from './agentChatInput';
 export * from './agentChatInputAgentProvider';
+export * from './agentChatInputAgentTask';
 export * from './agentProjectFile';
 export * from './agentSource';
 export * from './agentSourceRetrieval';

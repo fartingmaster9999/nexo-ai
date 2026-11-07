@@ -88,6 +88,23 @@ export const AgentChatInputAgentProvider = {
   groq: 'groq',
 } as const;
 
+/**
+ * Preserve the server-selected capability route through tool continuations
+ */
+export type AgentChatInputAgentTask = typeof AgentChatInputAgentTask[keyof typeof AgentChatInputAgentTask];
+
+
+export const AgentChatInputAgentTask = {
+  coding: 'coding',
+  planning: 'planning',
+  reasoning: 'reasoning',
+  fast_worker: 'fast_worker',
+  document: 'document',
+  synthesis: 'synthesis',
+  classification: 'classification',
+  multimodal: 'multimodal',
+} as const;
+
 export type AgentToolExchangeTool = typeof AgentToolExchangeTool[keyof typeof AgentToolExchangeTool];
 
 
@@ -183,6 +200,13 @@ export interface AgentChatInput {
   deepthink?: boolean;
   /** Continue an Agent run on its selected provider after a rate-limit fallback */
   agentProvider?: AgentChatInputAgentProvider;
+  /**
+     * Continue an Agent run on its selected provider model
+     * @maxLength 100
+     */
+  agentModel?: string;
+  /** Preserve the server-selected capability route through tool continuations */
+  agentTask?: AgentChatInputAgentTask;
   /**
      * Browser IANA timezone, validated by the server for current-time context
      * @maxLength 100

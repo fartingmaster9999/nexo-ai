@@ -444,7 +444,9 @@ function Home() {
     try {
       let agentHistory: AgentToolExchange[] = [];
       let agentToolCalls = 0;
-      const agentProvider: { current: 'gemini' | 'groq' } = { current: 'gemini' };
+      const agentProvider: { current: 'gemini' | 'groq' | null } = { current: requestImage ? 'gemini' : null };
+      const agentModel: { current: string | null } = { current: null };
+      const agentTask: { current: StreamEvent['agentTask'] | null } = { current: null };
       const nextAgentTool: { current: AgentToolRequest | null } = { current: null };
       const encodedImage = requestImage ? {
         mimeType: requestImage.mimeType,
@@ -459,6 +461,10 @@ function Home() {
         }
         if (eventData.agentProvider === 'gemini' || eventData.agentProvider === 'groq') {
           agentProvider.current = eventData.agentProvider;
+        }
+        if (eventData.agentTask) {
+          agentTask.current = eventData.agentTask;
+          patchLast((message) => ({ ...message, agentTask: eventData.agentTask }));
         }
         if (typeof eventData.content === 'string') {
           received += eventData.content;
@@ -482,7 +488,11 @@ function Home() {
         if (nt && typeof nt.id === 'string' && typeof nt.message === 'string') {
           patchLast((m) => (m.notices ?? []).some((n) => n.id === nt.id) ? m : { ...m, notices: [...(m.notices ?? []), { id: nt.id, message: nt.message, model: typeof nt.model === 'string' ? nt.model : undefined }] });
         }
-        if (typeof eventData.model === 'string') { const mdl = eventData.model; patchLast((m) => ({ ...m, model: mdl })); }
+        if (typeof eventData.model === 'string') {
+          const mdl = eventData.model;
+          agentModel.current = mdl;
+          patchLast((m) => ({ ...m, model: mdl }));
+        }
         if (Array.isArray(eventData.sources)) {
           const incoming = eventData.sources.filter((src) => src && typeof src.url === 'string' && /^https?:\/\//i.test(src.url));
           if (incoming.length) patchLast((m) => {
@@ -510,7 +520,9 @@ function Home() {
           deepthink: requestDeepthink,
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         };
-        if (requestAgent && agentProvider.current === 'groq') requestBody.agentProvider = agentProvider.current;
+        if (requestAgent && agentProvider.current) requestBody.agentProvider = agentProvider.current;
+        if (requestAgent && agentModel.current) requestBody.agentModel = agentModel.current;
+        if (requestAgent && agentTask.current) requestBody.agentTask = agentTask.current;
         if (requestAgent && agentHistory.length) requestBody.agentHistory = agentHistory;
         if (requestAgent) {
           let savedProject = null;
@@ -982,7 +994,7 @@ function Home() {
                   <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
                     <span className="mode-toggle-icon deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink{deepthink ? ' on' : ''}</span>
                   </button>
-                  <button type="button" aria-pressed={agentMode} aria-label={`Agent mode ${agentMode ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original route' : agentMode ? 'Agent is on: Gemini can search and run code; Qwen continues if Gemini is rate-limited' : 'Turn on Agent mode for web search and sandboxed build-and-run tasks'} onClick={() => setAgentMode((value) => !value)} data-testid="toggle-agent">
+                  <button type="button" aria-pressed={agentMode} aria-label={`Agent mode ${agentMode ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original route' : agentMode ? 'Agent is on: available specialist models can search and run bounded tasks in the browser sandbox' : 'Turn on Agent mode for model-routed research and sandboxed build-and-test tasks'} onClick={() => setAgentMode((value) => !value)} data-testid="toggle-agent">
                     <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent{agentMode ? ' on' : ''}</span>
                   </button>
                 </div>

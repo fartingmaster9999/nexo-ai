@@ -29,7 +29,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
         window.__agentRequests.push({ url, body });
         if (window.__agentRequests.length === 1) {
           const events = ${JSON.stringify(liveEvents)} ?? [
-            { model: "gemini-3.8-flash" },
+            { model: "gemini-3.8-flash", agentProvider: "gemini", agentTask: "multimodal" },
             { activity: { id: "agent-code-call-1", label: "Running javascript code in the isolated browser…", kind: "code", status: "running" } },
             { sources: [
               { title: "Page source", url: "https://example.com/page", retrieval: "page", retrievedAt: "2026-11-06T18:30:00.000Z" },
@@ -65,7 +65,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
         }
         if (window.__agentRequests.length === 4) {
           const events = [
-            { model: "qwen/qwen3.8-27b", agentProvider: "groq" },
+            { model: "qwen/qwen3.8-27b", agentProvider: "groq", agentTask: "coding" },
             { notice: { id: "gemini-agent-qwen-fallback", message: "Gemini is rate-limited; Qwen is continuing.", model: "qwen/qwen3.8-27b" } },
             { agentTool: {
               tool: "run_code",
@@ -120,7 +120,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
         }
         if (window.__agentRequests.length === 9) {
           const events = [
-            { model: "gemini-3.8-flash" },
+            { model: "gemini-3.8-flash", agentProvider: "gemini", agentTask: "multimodal" },
             { activity: { id: "agent-finished", label: "Agent run was interrupted", kind: "info", status: "error" } },
             { error: "Nexo Agent could not complete this request. Please try again." }
           ];
@@ -206,6 +206,9 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.equal(requests[0].body.agentHistory, undefined);
   assert.equal(requests[1].body.image.mimeType, "image/png", "the image remains available to Gemini after browser tool execution");
   assert.equal(requests[1].body.image.data, imageBase64);
+  assert.equal(requests[1].body.agentProvider, "gemini");
+  assert.equal(requests[1].body.agentModel, "gemini-3.8-flash");
+  assert.equal(requests[1].body.agentTask, "multimodal");
   assert.equal(await evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes(${JSON.stringify(imageBase64)})`), false);
   assert.equal(await evaluate(`document.body.textContent.includes("Image sent to Gemini. The image file is not saved in chat history.")`), true);
   await waitFor(() => evaluate(`!document.querySelector('[data-testid="image-attachment-preview"]')`), "sent Agent image preview cleared");
@@ -243,8 +246,10 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await waitFor(() => evaluate(`window.__agentRequests.length === 5`), "Qwen Agent code continuation", 20000);
   await waitFor(() => evaluate(`document.body.textContent.includes("Qwen Agent ran and checked its code.")`), "Qwen Agent final answer", 20000);
   const qwenRequests = await evaluate(`window.__agentRequests.slice(3)`);
-  assert.equal(qwenRequests[0].body.agentProvider, undefined, "new Agent tasks start with Gemini");
+  assert.equal(qwenRequests[0].body.agentProvider, undefined, "new text tasks let the server choose the provider");
   assert.equal(qwenRequests[1].body.agentProvider, "groq", "the provider fallback persists for code execution follow-up");
+  assert.equal(qwenRequests[1].body.agentModel, "qwen/qwen3.8-27b");
+  assert.equal(qwenRequests[1].body.agentTask, "coding");
   assert.equal(qwenRequests[1].body.agentHistory[0].callId, "qwen-browser-code");
   assert.match(qwenRequests[1].body.agentHistory[0].result, /qwen-run-ok/);
 

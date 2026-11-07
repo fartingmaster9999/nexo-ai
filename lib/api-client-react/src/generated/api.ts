@@ -318,7 +318,7 @@ export const getStreamAgentChatUrl = () => {
 }
 
 /**
- * Gemini can analyze an optional image, then selectively request external web search or browser-only code execution. Gemini rate limits switch the run to Groq Qwen3.8 27B, which continues with the same tools and bounded history. Tool activity, sources, generated code, and results are returned as SSE events; private model reasoning and image bytes are not exposed.
+ * Selects an available model by task from the configured Groq catalog, uses Prompt Guard and GPT-OSS Safeguard as secondary security signals when available, and supports Gemini image analysis only when configured. Model, task, and surfaced fallback persist through bounded web-search and isolated-browser tool continuations. Tool activity and sources are returned as SSE events; private model reasoning and image bytes are not exposed.
  * @summary Stream an Agent-mode response
  */
 export const streamAgentChat = async (agentChatInput: AgentChatInput, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {

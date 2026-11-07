@@ -3,28 +3,243 @@ import type Groq from "groq-sdk";
 export const PRIMARY_MODEL = "openai/gpt-oss-120b";
 export const SMALL_MODEL = "openai/gpt-oss-20b";
 export const CODING_FALLBACK = "qwen/qwen3.8-27b";
+export const PROMPT_GUARD_MODEL = "meta-llama/llama-prompt-guard-2-86m";
+export const SAFEGUARD_MODEL = "openai/gpt-oss-safeguard-20b";
+export const LLAMA_CLASSIFIER_MODEL = "meta-llama/llama-3.1-8b-instant";
+export const LLAMA_SYNTHESIS_MODEL = "meta-llama/llama-3.3-70b-versatile";
+export const GEMINI_AGENT_PRIMARY_MODEL = "gemini-3.8-flash";
+export const GEMINI_AGENT_FALLBACK_MODEL = "gemini-3.6-flash";
 export const USAGE_LIMIT_MESSAGE = "You have reached your usage limits, please try again later";
 export const DOWNGRADE_MESSAGE = "The main model is temporarily rate-limited. A lighter model is answering this reply—you can keep chatting.";
 
-let catalog: { ids: string[]; expires: number } | undefined;
-let catalogRequest: Promise<string[]> | undefined;
+export const AGENT_TASKS = [
+  "coding",
+  "planning",
+  "reasoning",
+  "fast_worker",
+  "document",
+  "synthesis",
+  "classification",
+  "multimodal",
+] as const;
+export type AgentTask = typeof AGENT_TASKS[number];
+
+export type ProviderModel = {
+  id: string;
+  active?: boolean;
+  context_window?: number;
+  max_completion_tokens?: number;
+  owned_by?: string;
+};
+
+const agentGenerationModels = new Set([
+  PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK, LLAMA_CLASSIFIER_MODEL, LLAMA_SYNTHESIS_MODEL,
+]);
+
+export function agentGenerationModelIds(models: ProviderModel[]): string[] {
+  return models
+    .filter((model) => agentGenerationModels.has(model.id) &&
+      model.context_window !== undefined && model.context_window >= 8192 &&
+      model.max_completion_tokens !== undefined && model.max_completion_tokens >= 8192)
+    .map((model) => model.id);
+}
+
+export function agentSecurityModelIds(models: ProviderModel[]): string[] {
+  return models.filter((model) => {
+    if (model.id === PROMPT_GUARD_MODEL) {
+      return model.context_window !== undefined && model.context_window >= 512 &&
+        model.max_completion_tokens !== undefined && model.max_completion_tokens >= 8;
+    }
+    if (model.id === SAFEGUARD_MODEL) {
+      return model.context_window !== undefined && model.context_window >= 8192 &&
+        model.max_completion_tokens !== undefined && model.max_completion_tokens >= 512;
+    }
+    return false;
+  }).map((model) => model.id);
+}
+
+export type AgentModelRoute = {
+  task: AgentTask;
+  models: string[];
+  preferredModel?: string;
+  preferredLabel: string;
+  fallback: boolean;
+  unavailable: boolean;
+};
+
+const geminiPreferredModels: Partial<Record<AgentTask, { models: string[]; label: string }>> = {
+  fast_worker: {
+    models: ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", GEMINI_AGENT_PRIMARY_MODEL],
+    label: "Gemini 3.5 Flash-Lite",
+  },
+  document: {
+    models: ["gemma-4-26b-a4b-it", "gemma-4-31b-it", GEMINI_AGENT_PRIMARY_MODEL],
+    label: "Gemma 4 26B A4B",
+  },
+  multimodal: {
+    models: ["gemma-4-31b-it", GEMINI_AGENT_PRIMARY_MODEL],
+    label: "Gemma 4 31B",
+  },
+};
+
+const preferredModels: Record<AgentTask, { model?: string; label: string; models: string[] }> = {
+  coding: {
+    model: CODING_FALLBACK,
+    label: "Qwen3.8 27B",
+    models: [CODING_FALLBACK, SMALL_MODEL, PRIMARY_MODEL],
+  },
+  planning: {
+    model: PRIMARY_MODEL,
+    label: "GPT-OSS 120B",
+    models: [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK],
+  },
+  reasoning: {
+    model: SMALL_MODEL,
+    label: "GPT-OSS 20B",
+    models: [SMALL_MODEL, PRIMARY_MODEL, CODING_FALLBACK],
+  },
+  fast_worker: {
+    label: "Gemini 3.1/3.5 Flash-Lite",
+    models: [SMALL_MODEL, PRIMARY_MODEL, CODING_FALLBACK],
+  },
+  document: {
+    label: "Gemma 4 specialist",
+    models: [SMALL_MODEL, PRIMARY_MODEL, CODING_FALLBACK],
+  },
+  synthesis: {
+    model: LLAMA_SYNTHESIS_MODEL,
+    label: "Llama 3.3 70B",
+    models: [LLAMA_SYNTHESIS_MODEL, PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK],
+  },
+  classification: {
+    model: LLAMA_CLASSIFIER_MODEL,
+    label: "Llama 3.1 8B",
+    models: [LLAMA_CLASSIFIER_MODEL, SMALL_MODEL, PRIMARY_MODEL, CODING_FALLBACK],
+  },
+  multimodal: {
+    label: "Gemma 4 multimodal specialist",
+    models: [],
+  },
+};
+
+let catalog: { models: ProviderModel[]; expires: number } | undefined;
+let catalogRequest: Promise<ProviderModel[]> | undefined;
 const cooldowns = new Map<string, number>();
 
-export async function availableModels(client: Groq): Promise<string[]> {
-  if (catalog && catalog.expires > Date.now()) return catalog.ids;
+export async function availableModelCatalog(client: Groq): Promise<ProviderModel[]> {
+  if (catalog && catalog.expires > Date.now()) return catalog.models;
   if (catalogRequest) return catalogRequest;
-  catalogRequest = (async () => { try {
-    const result = await client.models.list({ timeout: 5000, maxRetries: 0 });
-    const ids = result.data.map((model) => model.id);
-    catalog = { ids, expires: Date.now() + 600000 };
-    return ids;
-  } catch {
-    // These models were verified against this account; failed discovery never invents a coder model.
-    const ids = catalog?.ids ?? [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK];
-    catalog = { ids, expires: Date.now() + 30000 };
-    return ids;
-  } })();
+  catalogRequest = (async () => {
+    try {
+      const result = await client.models.list({ timeout: 5000, maxRetries: 0 });
+      const models = result.data
+        .filter((model) => typeof model.id === "string" && model.id.length > 0)
+        .map((model) => model as ProviderModel)
+        .filter((model) => model.active !== false);
+      catalog = { models, expires: Date.now() + 600000 };
+      return models;
+    } catch {
+      // A previously observed catalog may be used briefly during provider discovery outages.
+      // Never invent models that the configured account has not returned.
+      const models = catalog?.models ?? [];
+      catalog = { models, expires: Date.now() + 30000 };
+      return models;
+    }
+  })();
   try { return await catalogRequest; } finally { catalogRequest = undefined; }
+}
+
+export async function availableModels(client: Groq): Promise<string[]> {
+  return (await availableModelCatalog(client)).map((model) => model.id);
+}
+
+export function classifyAgentTask(input: {
+  messages: Array<{ role: string; content: string }>;
+  deepthink?: boolean;
+  image?: unknown;
+  projectFiles?: unknown[];
+}): AgentTask {
+  if (input.image) return "multimodal";
+  const prompt = input.messages.at(-1)?.content.toLowerCase() ?? "";
+  if (input.projectFiles?.length || /\b(code|coding|debug|bug|build|implement|program|script|test|refactor|run|html|javascript|typescript|python)\b/i.test(prompt)) {
+    return "coding";
+  }
+  if (/\b(document|pdf|report|spreadsheet|contract|attachment|file)\b/i.test(prompt)) return "document";
+  if (/\b(classify|categorize|label|brief|short summary|one sentence)\b/i.test(prompt)) return "classification";
+  if (/\b(synthesize|compare|research|multiple sources|literature review|comprehensive synthesis)\b/i.test(prompt)) return "synthesis";
+  if (/\b(plan|planning|roadmap|strategy|complex|tradeoffs|deep analysis)\b/i.test(prompt)) return "planning";
+  if (input.deepthink) return "planning";
+  if (/\b(quickly|quick answer|fast|in one line)\b/i.test(prompt)) return "fast_worker";
+  return "reasoning";
+}
+
+export function routeAgentTask(task: AgentTask, ids: string[]): AgentModelRoute {
+  const preferred = preferredModels[task];
+  const available = new Set(ids);
+  const models = preferred.models.filter((model) => available.has(model));
+  const preferredAvailable = preferred.model ? available.has(preferred.model) : false;
+  return {
+    task,
+    models,
+    ...(preferred.model ? { preferredModel: preferred.model } : {}),
+    preferredLabel: preferred.label,
+    fallback: !preferredAvailable,
+    unavailable: models.length === 0,
+  };
+}
+
+export function routeGeminiAgentTask(task: AgentTask, ids: string[]): AgentModelRoute {
+  const preferred = geminiPreferredModels[task] ?? {
+    models: [GEMINI_AGENT_PRIMARY_MODEL, GEMINI_AGENT_FALLBACK_MODEL],
+    label: "Gemini Agent model",
+  };
+  const available = new Set(ids);
+  const models = preferred.models.filter((model) => available.has(model));
+  return {
+    task,
+    models,
+    preferredModel: preferred.models[0],
+    preferredLabel: preferred.label,
+    fallback: !available.has(preferred.models[0]!),
+    unavailable: models.length === 0,
+  };
+}
+
+export function isAgentTask(value: unknown): value is AgentTask {
+  return typeof value === "string" && (AGENT_TASKS as readonly string[]).includes(value);
+}
+
+export function agentTaskLabel(task: AgentTask): string {
+  const labels: Record<AgentTask, string> = {
+    coding: "Coding and debugging",
+    planning: "Complex planning",
+    reasoning: "General reasoning",
+    fast_worker: "Fast worker",
+    document: "Document specialist",
+    synthesis: "Research synthesis",
+    classification: "Lightweight classification",
+    multimodal: "Image and multimodal analysis",
+  };
+  return labels[task];
+}
+
+export function modelLabel(model: string): string {
+  const labels: Record<string, string> = {
+    [PRIMARY_MODEL]: "GPT-OSS 120B",
+    [SMALL_MODEL]: "GPT-OSS 20B",
+    [CODING_FALLBACK]: "Qwen3.8 27B",
+    [PROMPT_GUARD_MODEL]: "Prompt Guard 2",
+    [SAFEGUARD_MODEL]: "GPT-OSS Safeguard 20B",
+    [LLAMA_CLASSIFIER_MODEL]: "Llama 3.1 8B",
+    [LLAMA_SYNTHESIS_MODEL]: "Llama 3.3 70B",
+    "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite",
+    "gemini-3.1-flash-lite": "Gemini 3.1 Flash-Lite",
+    "gemma-4-31b-it": "Gemma 4 31B",
+    "gemma-4-26b-a4b-it": "Gemma 4 26B A4B",
+    [GEMINI_AGENT_PRIMARY_MODEL]: "Gemini 3.8 Flash",
+    [GEMINI_AGENT_FALLBACK_MODEL]: "Gemini 3.6 Flash",
+  };
+  return labels[model] ?? model;
 }
 
 export function chooseModels(ids: string[], coding: boolean): string[] {
