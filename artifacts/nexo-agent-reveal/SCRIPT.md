@@ -1,68 +1,57 @@
-# Nexo Agent — “A glimpse. Then the reveal.”
+# Nexo Agent — “Give it the goal”
 
 ## Director's treatment
-- **Promise:** Make Nexo Agent memorable with a brief, unmistakable flash of its real mark, then reward attention with the complete identity.
-- **Identity:** Exact supplied artwork and product footage, kept in its original near-black, cobalt, and white. No fabricated symbol or extra copy.
-- **Hero:** The actual Agent Mode clip, the source splash's cropped logo symbol, and finally the complete uncropped splash.
-- **Motion:** Quick aperture cuts, a brief brand flash sequence, and a decisive macro-to-full-frame reveal.
-- **Arc:** Immediate light hit → fast product glimpse → three spaced logo flashes → complete brand lockup.
-- **Payoff:** The symbol is shown in fragments partway through; only at the end do “NexoAI” and “Agent Mode” resolve together in the exact source image.
-- **Format:** 16:9 landscape. **Runtime:** 16 seconds, shortened for a short-attention-span viewing pattern.
+- **Promise:** Show the real Agent Mode experience first, tease the exact Nexo symbol midway, then reveal the full identity.
+- **Identity:** The supplied Agent Mode footage and splash art remain the only product assets. Keep their near-black, cobalt, and white palette; do not redraw the logo.
+- **Hero:** The working product clip, followed by the original logo crop and the complete splash.
+- **Motion:** Immediate full-frame product reveal, a camera push into the work, three short symbol flashes, then a clean end-card reveal.
+- **Arc:** Product first → concise invitation → logo tease → complete product identity.
+- **Payoff:** The splash appears in full only at the end, after the viewer has seen the product in action and glimpsed the symbol.
+- **Format:** 16:9 landscape. **Runtime:** 14 seconds, preserving the short-attention-span direction.
 - **Audio:** None. No soundtrack, voiceover, sound effects, or audio player. Source footage is muted.
 
 ## Shot timeline
 
 | Shot | Time | Focus / action | Composition | Handoff |
 |---|---:|---|---|---|
-| 01 | 0.00–2.50 | A cobalt seam snaps on, a ring catches light, and shutters close. | Near-black, central light; no copy. | Vertical seam matches the product footage opening. |
-| 02 | 2.50–6.50 | The supplied Agent Mode clip opens to full frame, then pushes into one moving detail. | Full-bleed 16:9 video, no added text. | Clip's center point match-cuts into the source logo symbol. |
-| 03 | 6.50–9.50 | The exact Nexo symbol flashes three times, separated by darkness; no wordmark yet. | Oversized crop of the source splash around its actual symbol. | A final central seam aligns with the full splash image. |
-| 04 | 9.50–16.00 | Shutters open to the complete NexoAI / Agent Mode splash and hold it. | Full uncropped 16:9 artwork. | The frame closes to the seam that opens shot 01. |
+| 01 | 0.00–4.00 | The Agent Mode clip is revealed immediately; “Give it the goal.” appears briefly, then the footage takes over. | Product-first full-frame clip, slit reveal, quick push into a central detail. | Center detail scales through to the logo crop. |
+| 02 | 4.00–7.00 | The exact Nexo mark flashes three times in a macro crop, without showing its wordmark. | Tight symbol crop, separated by black beats. | A center seam opens onto the full splash. |
+| 03 | 7.00–14.00 | The complete NexoAI / Agent Mode artwork resolves and holds, then closes for the loop. | Original uncropped 16:9 splash. | Closing seam matches the first frame. |
 
 ## Full shot script
 
-### Shot 01 / 0.00–2.50s / 2.50s — “THE SIGNAL.”
-- **Purpose:** Stop the scroll immediately with one bright focal point, then build a little anticipation.
-- **Exact content:** No added words or labels.
-- **Composition:** Near-black full frame, centered seam and a partial cobalt ring around it; all visual activity stays within the center 60% of the canvas.
-- **Artistic idea:** A thin light line behaves like a switch being energized, then becomes a small aperture.
-- **Timed choreography:** 0.00–0.20s a blue-white vertical seam is already visible. 0.20–0.52s the ring snaps into view with a brief 1.08x pulse. 0.60s a horizontal glint crosses it for 150ms. 1.10s the ring catches light again from the opposite edge. 1.65s the center point tightens. 2.00–2.50s paired shutters close toward the seam; its blue-white core remains visible on the cut.
-- **Transition contract:** The seam exactly matches the gap between the next shot's two black panels. The clip is already moving behind them on the first frame.
-- **Assets and technique:** Restrained CSS ring, light seam, transform-animated shutters.
-- **Sound intent:** Silence.
-
-### Shot 02 / 2.50–6.50s / 4.00s — “AGENT MODE, IN MOTION.”
-- **Purpose:** Show the real supplied experience before the brand tease.
-- **Exact content:** No added words, labels, or captions. Only material already present in the user clip.
-- **Composition:** Source 16:9 video is full-frame behind two half-frame black shutters, starting as a narrow center slit. It resolves to an unobstructed full-frame view.
-- **Artistic idea:** The signal seam opens onto the actual product; the camera then moves into the footage instead of placing claims beside it.
-- **Timed choreography:** 0.00s the video is present and muted behind closed panels, with the center seam glinting. 0.05–0.62s shutters snap apart and the moving clip fills the canvas. 0.75s the clip settles at native scale. 1.35–2.15s one fine blue reflection sweeps across the frame. 2.55s the picture gives a quick 1.06x punch-in, then releases to 1.00x by 3.15s. 3.50–4.00s the center pushes through the lens to hand off as a bright point.
-- **Transition contract:** The outgoing center point lands on the source symbol's intersection. Shot 03 uses the exact splash image, cropped to that symbol.
-- **Assets and technique:** Existing `public/video/nexo-agent-mode.mp4`; native 16:9 plane, muted, looped; paired black shutters.
+### Shot 01 / 0.00–4.00s / 4.00s — “PRODUCT FIRST.”
+- **Purpose:** Make the advertisement's subject unmistakable in the first half-second: Nexo Agent itself.
+- **Exact content:** “Give it the goal.” appears at 0.22s and is completely gone by 1.70s. No other added words, interface labels, or captions.
+- **Composition:** The supplied 16:9 Agent Mode clip is full-frame behind two black shutters that leave a broad 24%-width glimpse at center. A thin cobalt center seam sits over it. The headline is white, 8vmin, upper-left with a 6% safe inset; it appears only while the footage is opening, then clears to keep the interface unobstructed.
+- **Artistic idea:** The product is already moving behind a narrow opening; one concise line frames the interaction, then gives way to the actual experience.
+- **Timed choreography:** 0.00s the clip is already playing, muted, behind shutters that leave a 24%-width center glimpse; a cobalt seam is visible immediately. 0.02–0.36s shutters snap apart as the clip scales from 1.12x to 1.00x. 0.12–0.47s “Give it the goal.” enters in one 350ms reveal. 1.10–1.90s a single narrow cobalt reflection crosses the footage. 1.50–1.74s the copy exits upward and fades. 2.30s the clip makes a short 1.06x punch-in and settles. 3.20–4.00s the camera pushes through the center of the live image, landing on the center point of the mark crop.
+- **Transition contract:** The center point grows through camera scale. The next shot begins on the white center strokes of the actual supplied symbol, already in the same frame center.
+- **Assets and technique:** `public/video/nexo-agent-mode.mp4`; native 16:9, muted, no loop needed within the shot; split shutters and one light sweep.
 - **Sound intent:** Silence; source video remains muted.
 
-### Shot 03 / 6.50–9.50s / 3.00s — “THE MID-FILM MARK FLASH.”
-- **Purpose:** Plant the Nexo symbol in memory without giving away the full wordmark or end card.
-- **Exact content:** Only a magnified crop of the actual symbol in the supplied splash. No NexoAI wordmark, Agent Mode pill, captions, or added geometry.
-- **Composition:** Source image fills the frame at 3.0–3.4x scale, centered on the original white symbol. The wordmark and Agent Mode label remain outside the crop.
-- **Artistic idea:** The mark appears as a photographic afterimage: three short flashes with black gaps, then disappears back into a thin seam.
-- **Timed choreography:** 0.00–0.22s the first symbol flash resolves from the incoming point, reaching full contrast for 180ms. 0.22–0.92s it drops nearly to black while a cobalt edge remains faintly visible. 0.92–1.16s a second, sharper flash, 240ms. 1.16–1.82s darkness returns. 1.82–2.10s a third flash slightly larger than the first. 2.25–3.00s side shutters close around the symbol, ending on one central seam.
-- **Transition contract:** The seam becomes the exact center gap of shot 04's shutters. Its hidden full splash image is already present underneath.
-- **Assets and technique:** Exact `public/images/nexo-agent-splash.png` cropped by transform; no logo redraw.
+### Shot 02 / 4.00–7.00s / 3.00s — “THE SYMBOL FLASH.”
+- **Purpose:** Build recognition for the Nexo mark while holding back the full name for the payoff.
+- **Exact content:** Only a magnified crop of the original white symbol from `public/images/nexo-agent-splash.png`. No added copy, wordmark, or Agent Mode pill in this shot.
+- **Composition:** The source image fills the frame at 3.0–3.3x scale, centered on the original symbol. Its wordmark and capsule remain outside the crop. A fine cobalt seam sits at center.
+- **Artistic idea:** The symbol is an afterimage—three quick, distinct appearances with real black intervals, rather than a static logo card.
+- **Timed choreography:** 0.00–0.22s the first bright symbol flash resolves from the product push. 0.22–0.90s it falls back to near-black. 0.90–1.16s the second flash arrives at a slightly different scale. 1.16–1.78s another dark interval. 1.78–2.08s the third flash lands, slightly larger. 2.22–3.00s side shutters close to a central seam while the last image detail scales back.
+- **Transition contract:** The central seam remains visible through the cut; the final full splash is already mounted behind its shutters.
+- **Assets and technique:** Exact supplied splash image, enlarged by transform only; no recreated logo artwork.
 - **Sound intent:** Silence.
 
-### Shot 04 / 9.50–16.00s / 6.50s — “THE FULL REVEAL.”
-- **Purpose:** Pay off the flashes with the complete, readable Nexo Agent identity.
-- **Exact content:** Only the supplied splash artwork's embedded “NexoAI” and “Agent Mode”. No overlays, captions, or CTA.
-- **Composition:** Exact source splash, full-frame and uncropped, preserving the complete symbol, wordmark, and Agent Mode pill.
-- **Artistic idea:** A macro glimpse resolves to the real brand lockup in one clean, decisive opening.
-- **Timed choreography:** 0.00s the full splash is ready behind closed side shutters; the center seam glows. 0.05–0.70s the panels split outward while the image settles from 1.08x to 1.00x. 0.90s the complete lockup is clear. 1.50s a restrained light lift passes over the existing mark without obscuring it. 1.80–5.20s hold the full splash steady and readable. 5.20–6.50s shutters move inward to the same narrow seam as shot 01, preserving the loop match.
-- **Transition contract:** The closing seam lands at x=50%, identical in size and color to shot 01's first seam. The full logo remains readable for over four seconds before this loop handoff.
-- **Assets and technique:** Exact `public/images/nexo-agent-splash.png`; paired transform-animated black shutters.
+### Shot 03 / 7.00–14.00s / 7.00s — “THE FULL REVEAL.”
+- **Purpose:** Deliver a clean, readable final product identity after the product demonstration and mid-film symbol tease.
+- **Exact content:** Only the original artwork's “NexoAI” wordmark and “Agent Mode” label; no added CTA, caption, or slogan.
+- **Composition:** Exact splash image, uncropped, full-frame 16:9. Keep the entire symbol, wordmark, and capsule visible.
+- **Artistic idea:** The tiny seam from the logo flashes opens into the complete, familiar brand composition in one decisive reveal.
+- **Timed choreography:** 0.00s the full splash is ready beneath two center-joined shutters and a narrow blue seam. 0.04–0.62s the shutters split outward as the splash settles from 1.07x to 1.00x. 0.80s the complete art is unobstructed. 1.25s a restrained light pass accents the original symbol. 1.50–5.60s hold the complete identity steadily for a readable finish. 5.60–7.00s the shutters close in one smooth move to the center seam, matching the first shot's opening.
+- **Transition contract:** The seam's position and cobalt light match shot 01's first frame, creating a motivated loop.
+- **Assets and technique:** Exact `public/images/nexo-agent-splash.png`, full-frame and uncropped; paired transform-animated shutters.
 - **Sound intent:** Silence.
 
 ## Variety, pacing, and continuity review
-- Runtime is 16 seconds; the first visual lands immediately, with a new visual beat every 0.4–0.9 seconds in the opening.
-- The source clip is the moving middle hero; the actual logo crop provides three brief brand hits before the full end reveal.
-- Text outside the user-provided splash is removed. Full brand text appears only in the final scene.
-- Each cut combines a camera scale move with a shutter or center-point match; no audio is present.
+- The product appears immediately, the middle mark is a three-beat teaser, and the final shot is the only complete brand lockup.
+- Total runtime is 14 seconds; the only additional copy is a single actionable line, held for 1.5 seconds.
+- Scene 01 and scene 02 timers end before their cuts; scene 03's final shutter motion fills its last 1.4 seconds.
+- Every transition carries the same center point or seam. No audio or added product claims are used.

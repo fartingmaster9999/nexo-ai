@@ -16,8 +16,7 @@ export interface SceneDetails {
 }
 
 export const SCENE_DETAILS: Record<string, SceneDetails> = {
-  signal: { title: 'Signal', filePath: 'src/components/video/video_scenes/Scene1.tsx' },
-  agent: { title: 'Agent footage', filePath: 'src/components/video/video_scenes/Scene2.tsx' },
-  logo: { title: 'Logo flashes', filePath: 'src/components/video/video_scenes/Scene3.tsx' },
-  reveal: { title: 'Full reveal', filePath: 'src/components/video/video_scenes/Scene4.tsx' },
+  product: { title: 'Product reveal', filePath: 'src/components/video/video_scenes/Scene1.tsx' },
+  logo: { title: 'Logo flash', filePath: 'src/components/video/video_scenes/Scene2.tsx' },
+  reveal: { title: 'Brand reveal', filePath: 'src/components/video/video_scenes/Scene3.tsx' },
 };
