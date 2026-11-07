@@ -16,8 +16,8 @@ export interface SceneDetails {
 }
 
 export const SCENE_DETAILS: Record<string, SceneDetails> = {
-  signal: { title: 'The signal', filePath: 'src/components/video/video_scenes/Scene1.tsx' },
-  agent: { title: 'Agent mode', filePath: 'src/components/video/video_scenes/Scene2.tsx' },
-  progress: { title: 'From prompt to progress', filePath: 'src/components/video/video_scenes/Scene3.tsx' },
-  signature: { title: 'Nexo Agent signature', filePath: 'src/components/video/video_scenes/Scene4.tsx' },
+  signal: { title: 'Signal', filePath: 'src/components/video/video_scenes/Scene1.tsx' },
+  agent: { title: 'Agent footage', filePath: 'src/components/video/video_scenes/Scene2.tsx' },
+  logo: { title: 'Logo flashes', filePath: 'src/components/video/video_scenes/Scene3.tsx' },
+  reveal: { title: 'Full reveal', filePath: 'src/components/video/video_scenes/Scene4.tsx' },
 };

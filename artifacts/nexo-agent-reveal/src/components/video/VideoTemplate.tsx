@@ -12,10 +12,10 @@ import { Scene3 } from './video_scenes/Scene3';
 import { Scene4 } from './video_scenes/Scene4';
 
 export const SCENE_DURATIONS = {
-  signal: 4000,
-  agent: 6000,
-  progress: 6000,
-  signature: 8000,
+  signal: 2500,
+  agent: 4000,
+  logo: 3000,
+  reveal: 6500,
 };
 
 export const VIDEO_ASPECT_RATIO: VideoAspectRatio = '16:9';
