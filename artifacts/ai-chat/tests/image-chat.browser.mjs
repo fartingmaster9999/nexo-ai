@@ -2,14 +2,60 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import { deflateSync } from "node:zlib";
 import { delay, waitFor, withFixture } from "./browser-harness.mjs";
 
 const temp = await mkdtemp(path.join(tmpdir(), "nexo-image-chat-"));
 const imagePath = path.join(temp, "chart.png");
+const largeImagePath = path.join(temp, "large-chart.png");
 const unsupportedPath = path.join(temp, "unsupported.svg");
 const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==";
 await writeFile(imagePath, Buffer.from(imageBase64, "base64"));
 await writeFile(unsupportedPath, "<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+
+function createLargePng(width, height) {
+  const crcTable = Array.from({ length: 256 }, (_, value) => {
+    let crc = value;
+    for (let bit = 0; bit < 8; bit++) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : (crc >>> 1);
+    return crc >>> 0;
+  });
+  const crc32 = (buffer) => {
+    let crc = 0xffffffff;
+    for (const byte of buffer) crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const name = Buffer.from(type);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const checksum = Buffer.alloc(4);
+    checksum.writeUInt32BE(crc32(Buffer.concat([name, data])));
+    return Buffer.concat([length, name, data, checksum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 2;
+  const pixels = Buffer.alloc((width * 3 + 1) * height);
+  let seed = 0x12345678;
+  for (let index = 0; index < pixels.length; index++) {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    pixels[index] = index % (width * 3 + 1) === 0 ? 0 : seed & 0xff;
+  }
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(pixels, { level: 1 })),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+const largeImageBytes = createLargePng(1250, 1250);
+assert.ok(largeImageBytes.length > 3 * 1024 * 1024, "large-image fixture exceeds the server's 3 MB limit");
+await writeFile(largeImagePath, largeImageBytes);
 
 try {
   await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
@@ -74,13 +120,33 @@ try {
     assert.equal(await evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes(${JSON.stringify(imageBase64)})`), false);
     await waitFor(() => evaluate(`!document.querySelector('[data-testid="image-attachment-preview"]')`), "sent preview cleared");
 
+    await cdp("DOM.setFileInputFiles", { nodeId: input, files: [largeImagePath] });
+    await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="image-attachment-preview"] img')?.src.startsWith("blob:"))`), "compressed oversized image preview", 15000);
+    await waitFor(() => evaluate(`!document.querySelector('[data-testid="image-preparing-status"]')`), "large image preparation complete", 15000);
+    await evaluate(`document.querySelector('[data-testid="button-remove-image"]').click()`);
+    await waitFor(() => evaluate(`!document.querySelector('[data-testid="image-attachment-preview"]')`), "oversized image removal");
+    await cdp("DOM.setFileInputFiles", { nodeId: input, files: [largeImagePath] });
+    await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="image-attachment-preview"] img')?.src.startsWith("blob:"))`), "reattached compressed oversized image", 15000);
+    await waitFor(() => evaluate(`!document.querySelector('[data-testid="image-preparing-status"]')`), "reattached large image preparation complete", 15000);
+    await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
+    await cdp("Input.insertText", { text: "What is shown in this large image?" });
+    await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
+    await waitFor(() => evaluate(`window.__imageRequests.length === 2`), "compressed image request", 15000);
+    const compressedRequest = await evaluate(`window.__imageRequests[1]`);
+    assert.equal(compressedRequest.body.image.mimeType, "image/jpeg");
+    const compressedBytes = Buffer.from(compressedRequest.body.image.data, "base64");
+    assert.ok(compressedBytes.length > 0 && compressedBytes.length <= 3 * 1024 * 1024, "prepared image is within the server limit");
+    assert.ok(compressedBytes.length < largeImageBytes.length, "prepared image is smaller than its original");
+    assert.equal(await evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes(${JSON.stringify(compressedRequest.body.image.data)})`), false, "compressed image bytes are not saved in browser history");
+    await waitFor(() => evaluate(`!document.querySelector('[data-testid="image-attachment-preview"]')`), "large image preview cleared after sending");
+
     await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
     await cdp("Input.insertText", { text: "What is 2 + 2?" });
     await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
     await waitFor(() => evaluate(`window.__textRequests === 1`), "text-only Groq route", 10000);
     await waitFor(() => evaluate(`document.body.textContent.includes("Text-only route remains active.")`), "text-only response", 10000);
-    assert.equal(await evaluate(`window.__imageRequests.length`), 1);
-    console.log("Image-chat browser checks passed: upload validation, preview/remove, ephemeral image bytes, Gemini routing, and unchanged text routing.");
+    assert.equal(await evaluate(`window.__imageRequests.length`), 2);
+    console.log("Image-chat browser checks passed: validation, oversized-image compression, preview/remove, ephemeral image bytes, Gemini routing, and unchanged text routing.");
     await delay(50);
   });
 } finally {

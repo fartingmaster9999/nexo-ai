@@ -29,7 +29,7 @@ import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
 import { useFocusTrap } from '@/hooks/use-focus-trap';
 import { extractSnippets, type Snippet } from '@/lib/code-extract';
-import { imageFileToBase64, validateImageFile, type PendingImage } from '@/lib/image-attachment';
+import { imageFileToBase64, prepareImageFile, type PendingImage } from '@/lib/image-attachment';
 import type { QuizProgress } from '@/lib/interactive-widgets';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
@@ -63,6 +63,7 @@ function Home() {
   const [homeHistoryOpen, setHomeHistoryOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
+  const [preparingImage, setPreparingImage] = useState(false);
   const [error, setError] = useState('');
   const [conversations, setConversations, persistConversations] = useConversations(setError);
   const [streaming, setStreaming] = useState(false);
@@ -317,7 +318,7 @@ function Home() {
 
   const sendMessage = async (event?: FormEvent, suggestedText?: string) => {
     event?.preventDefault();
-    if (abortRef.current || streaming) return;
+    if (abortRef.current || streaming || preparingImage) return;
     const prompt = (suggestedText ?? draft).trim();
     const requestImage = pendingImage;
     if (!prompt) {
@@ -860,11 +861,12 @@ function Home() {
                   {pendingImage && (
                     <div className="image-attachment-preview" data-testid="image-attachment-preview">
                       <img src={pendingImage.previewUrl} alt="Preview of attached image" />
-                      <button type="button" aria-label="Remove attached image" title="Remove image" onClick={() => setPendingImage(null)} disabled={streaming} data-testid="button-remove-image">
+                      <button type="button" aria-label="Remove attached image" title="Remove image" onClick={() => setPendingImage(null)} disabled={streaming || preparingImage} data-testid="button-remove-image">
                         <X size={14} aria-hidden="true" />
                       </button>
                     </div>
                   )}
+                  {preparingImage && <div role="status" className="image-attachment-preview" data-testid="image-preparing-status">Preparing image…</div>}
                   <textarea
                     ref={textareaRef}
                     rows={1}
@@ -886,19 +888,30 @@ function Home() {
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
                     hidden
-                    disabled={streaming}
+                    disabled={streaming || preparingImage}
                     onChange={(event) => {
                       const file = event.currentTarget.files?.[0];
                       event.currentTarget.value = '';
                       if (!file) return;
-                      const validationError = validateImageFile(file);
-                      if (validationError) { setPendingImage(null); setError(validationError); return; }
                       setError('');
-                      setPendingImage({ file, previewUrl: URL.createObjectURL(file), mimeType: file.type as PendingImage['mimeType'] });
+                      setPreparingImage(true);
+                      void prepareImageFile(file)
+                        .then((preparedFile) => {
+                          setPendingImage({
+                            file: preparedFile,
+                            previewUrl: URL.createObjectURL(preparedFile),
+                            mimeType: preparedFile.type as PendingImage['mimeType'],
+                          });
+                        })
+                        .catch((reason: unknown) => {
+                          setPendingImage(null);
+                          setError(reason instanceof Error ? reason.message : 'This image could not be prepared. Try a different image.');
+                        })
+                        .finally(() => setPreparingImage(false));
                     }}
                     data-testid="input-image-file"
                   />
-                  <button type="button" className="image-attach-button" aria-label="Attach image" title="Attach an image" onClick={() => imageInputRef.current?.click()} disabled={streaming} data-testid="button-attach-image">
+                  <button type="button" className="image-attach-button" aria-label="Attach image" title="Attach an image" onClick={() => imageInputRef.current?.click()} disabled={streaming || preparingImage} data-testid="button-attach-image">
                     <ImagePlus size={15} aria-hidden="true" />
                   </button>
                   <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
@@ -914,7 +927,7 @@ function Home() {
                     <X size={17} />
                   </button>
                 ) : (
-                  <button className="send-button" type="submit" disabled={!draft.trim()} aria-label="Send message" title="Send message" data-testid="button-send-message">
+                  <button className="send-button" type="submit" disabled={!draft.trim() || preparingImage} aria-label="Send message" title="Send message" data-testid="button-send-message">
                     <ArrowUp size={18} />
                   </button>
                 )}
