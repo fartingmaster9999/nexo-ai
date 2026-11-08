@@ -1,5 +1,6 @@
 import { memo, useState } from 'react';
 import { AlertTriangle, Brain, ChevronDown, Info } from 'lucide-react';
+import './thinking-motion.css';
 import { splitReasoning } from '../lib/reasoning-sections';
 import type { QuizProgress } from '../lib/interactive-widgets';
 
@@ -46,7 +47,7 @@ function BrainFigure() {
     <span className="rs-fig rs-brain" aria-hidden="true">
       <span className="rs-stage">
         <span className="rs-halo" />
-        <span className="rs-layer l1" /><span className="rs-layer l2" /><i className="rs-spark" />
+        <span className="rs-layer l1" /><span className="rs-layer l2" /><i className="rs-spark" /><i className="rs-node n1" /><i className="rs-node n2" /><i className="rs-node n3" />
         <span className="rs-brain-icon"><Brain size={16} /></span>
       </span>
     </span>

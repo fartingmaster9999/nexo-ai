@@ -2,6 +2,8 @@ import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { ReplyStatus, type ReplyMode } from '../src/components/answer-details';
 import '../src/nexo.css';
+import '../src/refine.css';
+import '../src/motion.css';
 
 const cases: Array<{ mode: ReplyMode; compact: boolean }> = [
   { mode: 'normal', compact: false },
@@ -23,6 +25,17 @@ function Fixture() {
           </div>
         );
       })}
+      <div className="term is-live">
+        <span className="term-ellipsis" aria-hidden="true" />
+        <div className="agent-activity-list">
+          {['running', 'complete', 'error'].map((status) => (
+            <div key={status} className={`agent-activity-item status-${status}`}>
+              <span className="agent-activity-dot" aria-hidden="true" />
+              <span>{status}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </>
   );
 }
@@ -50,6 +63,18 @@ Object.assign(window, {
   },
   __verifyReplyStatusFixture() {
     const errors: string[] = [];
+    const runningDot = document.querySelector('.status-running .agent-activity-dot')!;
+    if (getComputedStyle(runningDot).animationName !== 'rsTmDot') {
+      errors.push('Agent running marker is not animated');
+    }
+    for (const status of ['complete', 'error']) {
+      if (getComputedStyle(document.querySelector(`.status-${status} .agent-activity-dot`)!).animationName !== 'none') {
+        errors.push(`Agent ${status} marker must be static`);
+      }
+    }
+    if (getComputedStyle(document.querySelector('.term-ellipsis')!, '::after').animationName !== 'rsTmLabel') {
+      errors.push('The live header ellipsis is not animated');
+    }
     const cases = [...document.querySelectorAll<HTMLElement>('.fixture-case')];
     const geometries = cases.map((fixtureCase) => {
       const status = fixtureCase.querySelector<HTMLElement>('.reply-status')!;
@@ -103,7 +128,7 @@ Object.assign(window, {
       }
     });
 
-    const loopNames = new Set(['rsOrbit', 'rsCounter', 'rsSpin', 'rsSpin2', 'rsP2']);
+    const loopNames = new Set(['rsTmDepth', 'rsTmP1', 'rsTmP2', 'rsTmP3', 'rsTmBrain', 'rsTmSpin', 'rsTmNode', 'rsTmOrbit', 'rsTmCounter', 'rsTmMer']);
     const loopSamples: Array<{ name: string; animation: string; delta: number }> = [];
     for (const item of geometries) {
       const animations = item.figure.getAnimations({ subtree: true }) as CSSAnimation[];
@@ -127,9 +152,9 @@ Object.assign(window, {
       }
     }
     for (const [mode, required] of [
-      ['normal', ['rsP2']],
-      ['deep', ['rsSpin', 'rsSpin2']],
-      ['search', ['rsOrbit', 'rsCounter']],
+      ['normal', ['rsTmDepth', 'rsTmP1', 'rsTmP2', 'rsTmP3']],
+      ['deep', ['rsTmBrain', 'rsTmSpin', 'rsTmNode']],
+      ['search', ['rsTmOrbit', 'rsTmCounter', 'rsTmMer']],
     ] as const) {
       for (const animation of required) {
         if (!loopSamples.some((sample) => sample.name.startsWith(`${mode}-`) && sample.animation === animation)) {
@@ -148,6 +173,12 @@ Object.assign(window, {
     const errors: string[] = [];
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
       errors.push('reduced-motion preference was not enabled in the browser');
+    }
+    const runningDot = document.querySelector('.status-running .agent-activity-dot')!;
+    if (getComputedStyle(runningDot).animationName !== 'none' ||
+        getComputedStyle(runningDot, '::after').animationName !== 'none' ||
+        getComputedStyle(document.querySelector('.term-ellipsis')!, '::after').animationName !== 'none') {
+      errors.push('Agent activity or header ellipsis still animates with reduced motion');
     }
     for (const fixtureCase of document.querySelectorAll<HTMLElement>('.fixture-case')) {
       const name = fixtureCase.dataset.case ?? 'unknown';
@@ -170,7 +201,7 @@ Object.assign(window, {
   __verifyMotionRestored() {
     const errors: string[] = [];
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) errors.push('reduced-motion preference was not cleared');
-    const expected = ['rsOrbit', 'rsCounter', 'rsSpin', 'rsSpin2', 'rsP2'];
+    const expected = ['rsTmDepth', 'rsTmOrbit', 'rsTmCounter', 'rsTmSpin', 'rsTmP2', 'rsTmBrain', 'rsTmNode', 'rsTmDot'];
     for (const animationName of expected) {
       if (!document.getAnimations().some((animation) => (animation as CSSAnimation).animationName === animationName)) {
         errors.push(`${animationName} did not resume after reduced motion was disabled`);
