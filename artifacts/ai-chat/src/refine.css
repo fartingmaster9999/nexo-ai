@@ -211,6 +211,12 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 .send-button { width: 40px; height: 40px; flex-basis: 40px; }
 .term-head { min-height: 40px; }
 .request-error button { min-width: 32px; min-height: 32px; }
+.agent-recovery { color: hsl(var(--foreground)); background: hsl(var(--muted) / .45); border-color: hsl(var(--border)); }
+.agent-recovery p { margin: 4px 0 8px; }
+.request-error.agent-recovery button { display: inline-flex; margin: 0 8px 0 0; padding: 5px 10px; border: 1px solid hsl(var(--border)); }
+.request-error.agent-recovery button:hover { background: hsl(var(--muted)); }
+.agent-recovery button:disabled { opacity: .55; cursor: not-allowed; }
+.agent-recovery button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
 .ws-head { min-height: 56px; }
 .ws-select { min-height: 38px; }
 .ws-btn { min-height: 38px; }

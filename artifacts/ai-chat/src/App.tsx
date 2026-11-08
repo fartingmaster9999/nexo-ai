@@ -23,7 +23,8 @@ import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type 
 import { executeCode, formatPreviewReview, readPreviewReview, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
 import { previewReviewHasIssues } from '@/lib/preview-review';
 import { startRequestDeadline, RESPONSE_DEADLINE_MS, AGENT_BUILD_DEADLINE_MS, AGENT_REVIEW_DEADLINE_MS } from '@/lib/request-deadlines';
-import { MAX_AGENT_DEFERRED_RETRIES, waitForAgentRetry } from '@/lib/agent-retry';
+import { MAX_AGENT_DEFERRED_RETRIES, waitForAgentWindow } from '@/lib/agent-retry';
+import { readAgentCheckpoint, writeAgentCheckpoint, deleteAgentCheckpoint, privateAgentHistory, extendAgentHistory, type AgentCheckpoint, type CheckpointState } from '@/lib/agent-checkpoint';
 import type { AgentWorkspaceTask } from '@/components/code-workspace';
 import { savedWorkspaceState } from '@/lib/workspace-recovery';
 import {
@@ -113,6 +114,24 @@ function Home() {
   const abortRef = useRef<AbortController | null>(null);
   const activeStreamId = useRef<string | null>(null);
   const flushRef = useRef<(() => void) | null>(null);
+  const checkpointRef = useRef<AgentCheckpoint | null>(null);
+  const [recovery, setRecovery] = useState<CheckpointState>({ checkpoint: null, error: '' });
+  useEffect(() => {
+    if (!streaming) {
+      try { setRecovery(activeId ? readAgentCheckpoint(localStorage, activeId) : { checkpoint: null, error: '' }); }
+      catch { setRecovery({ checkpoint: null, error: 'Agent recovery storage is unavailable.' }); }
+    }
+  }, [activeId, streaming]);
+  const cancelCheckpoint = () => {
+    const checkpoint = checkpointRef.current;
+    checkpointRef.current = null;
+    if (!checkpoint) return;
+    try { writeAgentCheckpoint(localStorage, { ...checkpoint, phase: 'cancelled' }); }
+    catch {
+      try { deleteAgentCheckpoint(localStorage, checkpoint.conversationId); }
+      catch { setError('The stopped Agent state could not be saved. Do not resume its recovery record.'); }
+    }
+  };
 
   const closeHistorySidebar = useCallback((fallback?: HTMLButtonElement) => {
     setSidebarOpen(false);
@@ -246,6 +265,7 @@ function Home() {
   }, [updateConversation]);
 
   const createConversation = useCallback(() => {
+    cancelCheckpoint();
     flushRef.current?.();
     flushRef.current = null;
     removePendingAssistant(activeStreamId.current);
@@ -273,6 +293,7 @@ function Home() {
   }, [activeId, removePendingAssistant, setConversations]);
 
   const returnHome = () => {
+    cancelCheckpoint();
     flushRef.current?.();
     flushRef.current = null;
     removePendingAssistant(activeStreamId.current);
@@ -329,6 +350,7 @@ function Home() {
   };
   const deleteConversation = (conversation: Conversation) => {
     if (activeStreamId.current === conversation.id) {
+      checkpointRef.current = null;
       flushRef.current?.();
       flushRef.current = null;
       abortRef.current?.abort();
@@ -336,7 +358,7 @@ function Home() {
       activeStreamId.current = null;
       setStreaming(false);
     }
-    try { deleteSavedProject(localStorage, conversation.id); }
+    try { deleteSavedProject(localStorage, conversation.id); deleteAgentCheckpoint(localStorage, conversation.id); }
     catch { setError('The conversation was deleted, but its saved project files could not be removed from this browser.'); }
     setConversations((items) => items.filter((item) => item.id !== conversation.id));
     persistConversations();
@@ -351,6 +373,7 @@ function Home() {
   };
 
   const stopResponse = () => {
+    cancelCheckpoint();
     flushRef.current?.();
     flushRef.current = null;
     removePendingAssistant(activeStreamId.current);
@@ -361,21 +384,23 @@ function Home() {
     setAgentCodeTask((task) => task?.status === 'running' ? { ...task, status: 'error', error: 'Stopped by you.' } : task);
   };
 
-  const sendMessage = async (event?: FormEvent, suggestedText?: string) => {
+  const sendMessage = async (event?: FormEvent, suggestedText?: string, resume?: AgentCheckpoint) => {
     event?.preventDefault();
     if (abortRef.current || streaming || preparingImage) return;
-    const prompt = (suggestedText ?? draft).trim();
-    const requestImage = pendingImage;
+    const prompt = (resume?.messages.at(-1)?.content ?? suggestedText ?? draft).trim();
+    const requestImage = resume && !resume.imageRequired ? null : pendingImage;
+    if (resume?.imageRequired && !requestImage) { setError('Reattach the original image before resuming. Image files are not saved in recovery records.'); return; }
     if (!prompt) {
       if (requestImage) setError('Add a message to send with your image.');
       return;
     }
     if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); return; }
-    const requestAgent = agentMode;
+    const requestAgent = resume ? true : agentMode;
     shouldAutoFollowMessages.current = true;
-    const requestDeepthink = deepthink;
+    const requestDeepthink = resume?.deepthink ?? deepthink;
 
     let conversation = activeConversation;
+    if (resume && (!conversation || conversation.id !== resume.conversationId)) return;
     if (!conversation) {
       conversation = {
         id: makeId(),
@@ -391,28 +416,34 @@ function Home() {
     }
 
     const conversationId = conversation.id;
+    if (!resume) {
+      try { deleteAgentCheckpoint(localStorage, conversationId); }
+      catch { setError('The previous Agent recovery record could not be cleared. Free browser storage before starting another request.'); return; }
+    }
     const userMessage: ChatMessage = {
       id: makeId(), role: 'user', content: prompt,
       ...(requestImage ? { imageAttached: true } : {}),
     };
     const fullMessages = [...conversation.messages.filter((m) => m.content.trim()), userMessage];
-    const requestMessages = prepareRequestMessages(fullMessages);
-    const assistantMessage: ChatMessage = { id: makeId(), role: 'assistant', content: '', deepthink: requestDeepthink, agentMode: requestAgent };
+    const requestMessages = resume?.messages ?? prepareRequestMessages(fullMessages);
+    const priorAssistant = resume ? conversation.messages.find(m => m.id === resume.assistantId && m.role === 'assistant') : undefined;
+    const assistantMessage: ChatMessage = priorAssistant ?? { id: resume?.assistantId ?? makeId(), role: 'assistant', content: '', deepthink: requestDeepthink, agentMode: requestAgent };
     setConversations((items) => {
       const exists = items.some((item) => item.id === conversationId);
       const updated: Conversation = {
         ...(exists ? items.find((item) => item.id === conversationId)! : conversation!),
         title: conversation!.messages.length === 0 ? titleFromPrompt(prompt) : conversation!.title,
-        messages: [...fullMessages, assistantMessage],
+        messages: resume ? priorAssistant ? conversation!.messages : [...conversation!.messages, assistantMessage] : [...fullMessages, assistantMessage],
         updatedAt: Date.now(),
       };
       return [updated, ...items.filter((item) => item.id !== conversationId)];
     });
     setDraft('');
     setError('');
+    setRecovery({ checkpoint: null, error: '' });
     setAgentCodeTask(null);
     setStreaming(true);
-    setVisibleReply({ id: conversationId, content: '' });
+    setVisibleReply({ id: conversationId, content: assistantMessage.content });
     if (requestAgent) {
       keepWorkspaceFor.current = conversationId;
       setAgentFull(true);
@@ -427,8 +458,8 @@ function Home() {
     const controller = new AbortController();
     abortRef.current = controller;
     activeStreamId.current = conversationId;
-    let received = '';
-    let shown = 0;
+    let received = assistantMessage.content;
+    let shown = received.length;
     let timer: number | null = null;
     let drainResolve: (() => void) | null = null;
     let pendingMessage = assistantMessage;
@@ -440,7 +471,7 @@ function Home() {
       updateConversation(conversationId, (item) => ({
       ...item,
       messages: item.messages.map((message, index) =>
-        index === item.messages.length - 1 && message.role === 'assistant' ? { ...snapshot, quizProgress: message.quizProgress } : message),
+        message.id === assistantMessage.id && message.role === 'assistant' ? { ...snapshot, quizProgress: message.quizProgress } : message),
       updatedAt: Date.now(),
       }));
     };
@@ -483,19 +514,33 @@ function Home() {
     flushRef.current = flushOutput;
     controller.signal.addEventListener('abort', flushOutput, { once: true });
     const clearBuildDeadline = startRequestDeadline(controller,
-      requestAgent ? AGENT_BUILD_DEADLINE_MS : RESPONSE_DEADLINE_MS,
+      requestAgent ? Math.max(1, AGENT_BUILD_DEADLINE_MS - (Date.now() - (resume?.startedAt ?? Date.now()))) : RESPONSE_DEADLINE_MS,
       requestAgent
         ? 'The Agent reached its build time limit. Your saved project is kept; ask Nexo to continue from the existing files.'
         : 'The response timed out. Your partial answer is kept; please try again.');
     let clearResponseDeadline: (() => void) | undefined;
     let connectTimeout: number | null = null;
     try {
-      let agentHistory: AgentToolExchange[] = [];
-      let agentToolCalls = 0;
-      let deferredRetries = 0;
-      const agentProvider: { current: 'gemini' | 'groq' | null } = { current: requestImage ? 'gemini' : null };
-      const agentModel: { current: string | null } = { current: null };
-      const agentTask: { current: StreamEvent['agentTask'] | null } = { current: null };
+      let agentHistory: AgentToolExchange[] = resume?.history ?? [];
+      let agentToolCalls = resume?.toolCalls ?? 0;
+      let deferredRetries = resume?.retries ?? 0;
+      const startedAt = resume?.startedAt ?? Date.now();
+      const agentProvider: { current: 'gemini' | 'groq' | null } = { current: resume?.provider ?? (requestImage ? 'gemini' : null) };
+      const agentModel: { current: string | null } = { current: resume?.model ?? null };
+      const agentTask: { current: NonNullable<StreamEvent['agentTask']> | null } = { current: resume?.task ?? null };
+      const saveContinuation = (phase: AgentCheckpoint['phase'] = 'ready', waitUntil = 0) => {
+        if (!requestAgent || controller.signal.aborted) return;
+        flushOutput();
+        const project = readSavedProject(localStorage, conversationId);
+        const checkpoint: AgentCheckpoint = {
+          version: 1, conversationId, assistantId: assistantMessage.id!, messages: requestMessages,
+          deepthink: requestDeepthink, imageRequired: Boolean(requestImage), provider: agentProvider.current, model: agentModel.current,
+          task: agentTask.current, history: privateAgentHistory(agentHistory, project),
+          toolCalls: agentToolCalls, retries: deferredRetries, startedAt, waitUntil, phase,
+        };
+        writeAgentCheckpoint(localStorage, checkpoint);
+        checkpointRef.current = checkpoint;
+      };
       const nextAgentTool: { current: AgentToolRequest | null } = { current: null };
       const nextAgentRetry: { current: StreamEvent['agentRetry'] | null } = { current: null };
       const encodedImage = requestImage ? {
@@ -567,7 +612,12 @@ function Home() {
         }
       };
 
+      if (resume) {
+        saveContinuation(resume.phase, resume.waitUntil);
+        await waitForAgentWindow(controller.signal, resume.waitUntil);
+      }
       while (true) {
+        controller.signal.throwIfAborted();
         nextAgentTool.current = null;
         nextAgentRetry.current = null;
         const responseStart = received.length;
@@ -579,7 +629,6 @@ function Home() {
         if (requestAgent && agentProvider.current) requestBody.agentProvider = agentProvider.current;
         if (requestAgent && agentModel.current) requestBody.agentModel = agentModel.current;
         if (requestAgent && agentTask.current) requestBody.agentTask = agentTask.current;
-        if (requestAgent && agentHistory.length) requestBody.agentHistory = agentHistory;
         if (requestAgent) requestBody.agentRetryCount = deferredRetries;
         if (requestAgent) {
           let savedProject = null;
@@ -589,6 +638,7 @@ function Home() {
             throw new Error(error instanceof Error ? error.message : 'Saved project data could not be read.');
           }
           const sharedFiles = selectedProjectFiles(savedProject);
+          if (agentHistory.length) requestBody.agentHistory = privateAgentHistory(agentHistory, savedProject);
           if (savedProject) requestBody.agentTask = 'coding';
           if (sharedFiles.length) requestBody.projectFiles = sharedFiles;
           else if (savedProject) {
@@ -598,6 +648,7 @@ function Home() {
           }
         }
         if (encodedImage && agentProvider.current === 'gemini') requestBody.image = encodedImage;
+        saveContinuation();
         const endpoint = requestAgent ? '/api/agent' : requestImage ? '/api/chat/image' : '/api/chat';
         clearResponseDeadline = startRequestDeadline(controller, RESPONSE_DEADLINE_MS,
           'This response timed out. Your saved project and partial answer are kept; ask Nexo to continue from the existing files.');
@@ -639,8 +690,10 @@ function Home() {
             throw new Error('Qwen is still rate-limited after automatic waiting. Try again after the provider window; no existing workspace files were changed by this rejection.');
           }
           deferredRetries++;
-          agentHistory = retry.history;
-          await waitForAgentRetry(controller.signal, retry.afterMs);
+          agentHistory = extendAgentHistory(agentHistory, retry.history);
+          const waitUntil = Date.now() + retry.afterMs;
+          saveContinuation('waiting', waitUntil);
+          await waitForAgentWindow(controller.signal, waitUntil);
           patchLast((message) => ({
             ...message,
             activity: message.activity?.map((entry) => entry.id === 'agent-provider-wait'
@@ -651,8 +704,20 @@ function Home() {
         }
         const tool = nextAgentTool.current as AgentToolRequest | null;
         if (!requestAgent || !tool) break;
+        // Never replay a call whose result (or uncertain in-flight outcome) was saved.
+        if (agentHistory.some(entry => entry.callId === tool.callId)) {
+          throw new Error('Agent repeated an already handled tool call. Saved files are unchanged; send a new request to continue.');
+        }
         if (agentHistory.length >= 6 || agentToolCalls >= 6) throw new Error('Nexo Agent reached its tool limit. Try a more focused request.');
         agentToolCalls += 1;
+        const completedHistory = extendAgentHistory(agentHistory, tool.history);
+        agentHistory = [...completedHistory, {
+          tool: tool.tool, callId: tool.callId, thoughtSignature: tool.thoughtSignature,
+          arguments: tool.arguments,
+          result: 'Interrupted tool: this call may already have saved its files or run in the browser. Do not replay this call. Inspect the current selected files; execution was not verified. Request a fresh check only if needed.',
+        }];
+        // Save the consumed call BEFORE any file write or browser execution.
+        saveContinuation('executing');
 
         const isProject = tool.tool === 'write_project';
         let projectEntrypoint: string | undefined;
@@ -678,15 +743,16 @@ function Home() {
             nextProject = createAgentProject(projectFiles, projectEntrypoint, previousProject);
           } catch (error) {
             const detail = error instanceof Error ? error.message.slice(0, 800) : 'The project update is invalid.';
-            agentHistory.push({
+            agentHistory = [...completedHistory, {
               tool: 'write_project', callId: tool.callId, thoughtSignature: tool.thoughtSignature,
               arguments: tool.arguments,
               result: `Project update was not applied; the existing files and preview were preserved. Fix the project update before claiming success. ${detail}`,
-            });
+            }];
             acceptEvent({ activity: { id: `agent-project-${tool.callId}`,
               label: 'Project validation found an issue; keeping the existing files while Agent corrects it',
               kind: 'code', status: 'error',
             } });
+            saveContinuation();
             continue;
           }
           projectFiles = nextProject.files;
@@ -695,6 +761,7 @@ function Home() {
           } catch {
             projectStorageError = 'Project changes could not be saved in this browser. Export a backup before leaving.';
           }
+          saveContinuation('executing');
         }
         const task: AgentWorkspaceTask = {
           id: tool.callId,
@@ -731,6 +798,18 @@ function Home() {
           executionError = error instanceof Error ? error.message : 'The browser code runner failed.';
         }
         if (controller.signal.aborted) return;
+        // Retain completed output even if a reload interrupts preview diagnostics or review.
+        agentHistory[agentHistory.length - 1] = {
+          ...agentHistory[agentHistory.length - 1],
+          result: [
+            `Nexo execution status: ${executionError || projectStorageError ? 'failed' : 'completed'}.`,
+            projectStorageError, executionError,
+            ...outputs.filter(output => ['stdout', 'stderr', 'status'].includes(output.kind))
+              .map(output => `${output.kind}: ${output.text ?? ''}`),
+            previewHtml ? 'HTML generated; preview checks not yet completed.' : '',
+          ].filter(Boolean).join('\n').slice(0, 8000),
+        };
+        saveContinuation();
         if (previewHtml && previewId) {
           setAgentCodeTask({ ...task, outputs, status: 'running', previewHtml, previewId });
           previewDiagnostics = await waitForPreviewDiagnostics(previewId, controller.signal);
@@ -751,6 +830,11 @@ function Home() {
               ).join('\n')}`
             : 'HTML preview loaded in the isolated browser; no runtime errors were reported.'
           : '';
+        agentHistory[agentHistory.length - 1] = {
+          ...agentHistory[agentHistory.length - 1],
+          result: [agentHistory.at(-1)!.result, previewText, previewReviewText].filter(Boolean).join('\n').slice(0, 8000),
+        };
+        saveContinuation();
         let gemmaReviewText = '';
         if (requestAgent) {
           const reviewActivityId = `agent-gemma-review-${tool.callId}`;
@@ -774,6 +858,7 @@ function Home() {
           const clearReviewDeadline = startRequestDeadline(reviewController, AGENT_REVIEW_DEADLINE_MS,
             'Gemma 4 review took too long; continuing with the run results.');
           try {
+            const reviewFiles = projectFiles ? selectedProjectFiles(readSavedProject(localStorage, conversationId)) : null;
             const reviewBody: Record<string, unknown> = {
               messages: requestMessages,
               deepthink: requestDeepthink,
@@ -782,8 +867,8 @@ function Home() {
               agentTask: 'document',
               agentReview: {
                 language,
-                source: projectFiles?.length
-                  ? projectFiles.map((file) => `--- ${file.path} ---\n${file.content}`).join('\n\n').slice(0, 24000)
+                source: reviewFiles
+                  ? reviewFiles.map((file) => `--- ${file.path} ---\n${file.content}`).join('\n\n').slice(0, 24000) || 'No project source is selected for review.'
                   : code.slice(0, 24000),
                 output: [
                   executionError ? `Execution error: ${executionError}` : '',
@@ -878,7 +963,7 @@ function Home() {
               : [...list, updated],
           };
         });
-        agentHistory = [...tool.history, {
+        agentHistory = [...completedHistory, {
           tool: tool.tool,
           callId: tool.callId,
           thoughtSignature: tool.thoughtSignature,
@@ -887,9 +972,14 @@ function Home() {
             : { language: tool.arguments.language, code: tool.arguments.code },
           result: resultText,
         }];
+        saveContinuation();
       }
       await drain();
       if (controller.signal.aborted) return;
+      if (requestAgent) {
+        deleteAgentCheckpoint(localStorage, conversationId);
+        checkpointRef.current = null;
+      }
       if (received.trim() && requestImage) setPendingImage((current) => current?.file === requestImage.file ? null : current);
       if (!received.trim()) {
         setError('Nexo AI returned an empty response. Try rephrasing or sending again.');
@@ -931,8 +1021,32 @@ function Home() {
         activeStreamId.current = null;
         flushRef.current = null;
         setStreaming(false);
+        checkpointRef.current = null;
       }
     }
+  };
+
+  const dismissRecovery = () => {
+    if (!activeId) return;
+    try {
+      deleteAgentCheckpoint(localStorage, activeId);
+      setRecovery({ checkpoint: null, error: '' });
+    } catch { setError('The Agent recovery record could not be removed from this browser.'); }
+  };
+  const resumeAgent = () => {
+    if (!activeId || streaming) return;
+    const fresh = readAgentCheckpoint(localStorage, activeId);
+    setRecovery(fresh);
+    const checkpoint = fresh.checkpoint;
+    if (!checkpoint || checkpoint.phase === 'cancelled') return;
+    const lastUser = activeConversation?.messages.filter(m => m.role === 'user').at(-1);
+    const latest = activeConversation?.messages.at(-1);
+    if (lastUser?.content !== checkpoint.messages.at(-1)?.content ||
+        latest?.role === 'assistant' && latest.id !== checkpoint.assistantId) {
+      setError('This conversation has newer messages. Start a new Agent request using the saved files instead.');
+      return;
+    }
+    void sendMessage(undefined, undefined, checkpoint);
   };
 
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1130,6 +1244,22 @@ function Home() {
             )}
           </div>
 
+          {!streaming && (recovery.checkpoint || recovery.error) && (
+            <div className="request-error agent-recovery" role="status" data-testid="agent-recovery">
+              <div>
+                <strong>{recovery.error ? 'Agent recovery unavailable' : recovery.checkpoint?.phase === 'cancelled' ? 'Agent build stopped' : 'Interrupted Agent build'}</strong>
+                <p>{recovery.error || (recovery.checkpoint?.phase === 'cancelled'
+                  ? 'You stopped this build. Saved files are kept; it will not resume.'
+                  : recovery.checkpoint?.phase === 'executing'
+                    ? 'The last tool may have been interrupted. Resume keeps saved files and reports the uncertain outcome without replaying that call.'
+                    : 'Completed tool results and saved files are kept. Nothing runs until you choose Resume Agent.')}</p>
+                {recovery.checkpoint?.imageRequired && <p>Reattach the original image before resuming. Images are not saved.</p>}
+                {recovery.checkpoint && recovery.checkpoint.phase !== 'cancelled' &&
+                  <button type="button" onClick={resumeAgent} disabled={recovery.checkpoint.imageRequired && !pendingImage} data-testid="button-resume-agent">Resume Agent</button>}
+                <button type="button" onClick={dismissRecovery} data-testid="button-dismiss-recovery">Dismiss recovery</button>
+              </div>
+            </div>
+          )}
           {error && (
             <div className="request-error" role="alert" data-testid="status-request-error">
               <AlertCircle size={16} aria-hidden="true" />

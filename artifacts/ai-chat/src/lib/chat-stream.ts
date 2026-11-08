@@ -1,6 +1,6 @@
 import type { Activity, AgentTask, Source, Notice } from '../components/answer-details';
 import type { RunLanguage } from './code-runner';
-import { validateProjectFiles, type ProjectFile } from './project-workspace';
+import { validateProjectFiles, type ProjectFile } from './project-workspace.ts';
 
 export type AgentToolExchange = {
   tool: 'web_search' | 'run_code' | 'write_project';
@@ -26,15 +26,26 @@ export type AgentToolRequest = {
 export type AgentRetryRequest = { afterMs: number; history: AgentToolExchange[] };
 export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentProvider?: 'gemini' | 'groq'; agentTask?: AgentTask; agentTool?: AgentToolRequest; agentRetry?: AgentRetryRequest };
 
-function isAgentHistory(history: unknown): history is AgentToolExchange[] {
+export function isAgentHistory(history: unknown): history is AgentToolExchange[] {
   return Array.isArray(history) && history.length <= 6 && history.every((entry) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
     const exchange = entry as Record<string, unknown>;
-    return (exchange.tool === 'web_search' || exchange.tool === 'run_code' || exchange.tool === 'write_project')
+    const common = (exchange.tool === 'web_search' || exchange.tool === 'run_code' || exchange.tool === 'write_project')
       && typeof exchange.callId === 'string' && Boolean(exchange.callId) && exchange.callId.length <= 128
-      && typeof exchange.thoughtSignature === 'string' && exchange.thoughtSignature.length <= 4096
-      && exchange.arguments !== null && typeof exchange.arguments === 'object'
+      && typeof exchange.thoughtSignature === 'string' && Boolean(exchange.thoughtSignature) && exchange.thoughtSignature.length <= 4096
+      && exchange.arguments !== null && typeof exchange.arguments === 'object' && !Array.isArray(exchange.arguments)
       && typeof exchange.result === 'string' && exchange.result.length <= 8_000;
+    if (!common) return false;
+    const args = exchange.arguments as Record<string, unknown>;
+    if (exchange.tool === 'run_code') {
+      return ['python', 'javascript', 'html'].includes(String(args.language)) &&
+        typeof args.code === 'string' && Boolean(args.code.trim()) && args.code.length <= 20_000;
+    }
+    if (exchange.tool === 'web_search') return typeof args.query === 'string' && args.query.trim().length >= 2 && args.query.length <= 300;
+    try {
+      const files = validateProjectFiles(args.files);
+      return typeof args.entrypoint === 'string' && files.some(file => file.path === args.entrypoint);
+    } catch { return false; }
   });
 }
 

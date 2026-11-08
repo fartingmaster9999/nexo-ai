@@ -1,5 +1,13 @@
 export const MAX_AGENT_DEFERRED_RETRIES = 3;
 
+/** A reload must honor the remaining provider window, not restart it. */
+export async function waitForAgentWindow(signal: AbortSignal, waitUntil: number): Promise<void> {
+  const remaining = Math.max(0, waitUntil - Date.now());
+  if (remaining > 60_250) throw new Error('The saved Agent wait is invalid.');
+  if (remaining) await waitForAgentRetry(signal, Math.max(250, remaining));
+  else signal.throwIfAborted();
+}
+
 /** Keep the build cancellable while no hosted API request is open. */
 export function waitForAgentRetry(signal: AbortSignal, delayMs: number): Promise<void> {
   signal.throwIfAborted();
