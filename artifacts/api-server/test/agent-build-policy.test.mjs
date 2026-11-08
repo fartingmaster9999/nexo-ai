@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { agentBuildPolicy } from "../src/lib/agent-build-policy.ts";
 import { buildGroqAgentRequest } from "../src/lib/groq-agent.ts";
+import { formatInteractionResult } from "../../ai-chat/src/lib/preview-interactions.ts";
 
 const input = (content, extras = {}) => ({ messages: [{ role: "user", content }], ...extras });
 const run = (result) => ({
@@ -47,4 +48,23 @@ test("budget exhaustion disables tools even when the implementation is unfinishe
   const request = buildGroqAgentRequest(input("Create a website"), new Date(), false);
   assert.equal(request.tool_choice, "none");
   assert.equal(request.tools, undefined);
+});
+
+test("a failed local interaction forces a focused Qwen repair with no additional permissions", () => {
+  const outcome = formatInteractionResult({ status: "complete", steps: [
+    { step: 1, action: "click", reason: "ok" },
+    { step: 2, action: "assertText", reason: "mismatch" },
+  ] });
+  const failedInput = input("Build a counter app", {
+    agentHistory: [run(`Nexo execution status: failed.\n${outcome}`)],
+  });
+  assert.equal(agentBuildPolicy(failedInput).requireTool, true);
+  const request = buildGroqAgentRequest(failedInput);
+  assert.equal(request.tool_choice, "required");
+  const context = JSON.stringify(request.messages);
+  assert.match(context, /Step 2 assertText: assertion did not match/);
+  assert.match(context, /Repair the observed defect/);
+  assert.match(context, /nexo-interaction-checks/);
+  assert.match(context, /no network, cookies, credentials, storage access, arbitrary JavaScript/i);
+  assert.match(request.model, /qwen/i);
 });

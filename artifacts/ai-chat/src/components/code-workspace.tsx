@@ -8,6 +8,8 @@ import {
   MAX_PREVIEW_DIAGNOSTICS,
   reportPreviewDiagnostics,
   reportPreviewReview,
+  reportPreviewInteractions,
+  readPreviewInteractions,
   sanitizePreviewDiagnostic,
   type PreviewDiagnostic,
   type RunLanguage,
@@ -31,6 +33,7 @@ import {
 } from '@/lib/project-workspace';
 import './code-workspace.css';
 import { WORKSPACE_DRAFT_KEY } from '@/lib/workspace-recovery';
+import { formatInteractionResult, interactionChecksHaveIssues, type InteractionResult } from '@/lib/preview-interactions';
 
 type Draft = { language: RunLanguage; code: string; edited: boolean };
 export type AgentWorkspaceTask = {
@@ -90,6 +93,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewDiagnostics, setPreviewDiagnostics] = useState<PreviewDiagnostic[]>([]);
   const [previewComplete, setPreviewComplete] = useState(false);
+  const [previewInteractions, setPreviewInteractions] = useState<InteractionResult>();
   const [hasRun, setHasRun] = useState(false);
   const [storageError, setStorageError] = useState('');
   const [project, setProject] = useState<SavedProject | null>(null);
@@ -224,7 +228,10 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
 
   useLayoutEffect(() => {
     if (!previewId) return;
+    setPreviewInteractions(undefined);
     let completed = false;
+    let runtimeComplete = false;
+    let interactionsComplete = false;
     const merge = (values: unknown[]) => {
       const next = [...previewDiagnosticsRef.current];
       const seen = new Set(next.map((entry) => `${entry.kind}\n${entry.message}\n${entry.source ?? ''}\n${entry.line ?? ''}`));
@@ -267,9 +274,18 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         reportPreviewDiagnostics(previewId, diagnostics, false);
       } else if (data.type === 'nexo-preview-review') {
         if (!completed) reportPreviewReview(previewId, data.review);
+      } else if (data.type === 'nexo-preview-interactions') {
+        if (completed || interactionsComplete || Object.keys(data).sort().join() !== 'previewId,result,type' ||
+            !reportPreviewInteractions(previewId, data.result)) return;
+        interactionsComplete = true;
+        setPreviewInteractions(readPreviewInteractions(previewId));
+        if (runtimeComplete) finish();
       } else if (data.type === 'nexo-preview-complete') {
-        if (!completed) reportPreviewReview(previewId, data.review);
-        finish(Array.isArray(data.diagnostics) ? data.diagnostics : []);
+        if (completed || runtimeComplete || !Array.isArray(data.diagnostics) || data.diagnostics.length > MAX_PREVIEW_DIAGNOSTICS) return;
+        runtimeComplete = true;
+        const diagnostics = merge(data.diagnostics);
+        reportPreviewDiagnostics(previewId, diagnostics, false);
+        if (interactionsComplete) finish();
       }
     };
     window.addEventListener('message', receive);
@@ -462,6 +478,8 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     );
     const errs = [
       runError,
+      ...(previewId && interactionChecksHaveIssues(readPreviewInteractions(previewId))
+        ? [formatInteractionResult(readPreviewInteractions(previewId))] : []),
       ...currentOutputs.filter((o) => o.kind === 'stderr').map((o) => o.text ?? ''),
       ...previewErrors,
     ].filter(Boolean).join('\n');
@@ -578,6 +596,12 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       {!previewComplete && <p className="ws-preview-status" role="status">Loading isolated preview…</p>}
       {previewComplete && previewDiagnostics.length === 0 && (
         <p className="ws-preview-status" role="status">Preview loaded. No runtime errors were reported.</p>
+      )}
+      {previewComplete && (
+        <pre className="ws-preview-status" role={interactionChecksHaveIssues(previewInteractions) ? 'alert' : 'status'}
+          data-testid="preview-interaction-results" style={{ whiteSpace: 'pre-wrap' }}>
+          {formatInteractionResult(previewInteractions)}
+        </pre>
       )}
       {previewDiagnostics.length > 0 && (
         <div className="ws-preview-diagnostics" role="alert" data-testid="preview-diagnostics">

@@ -20,7 +20,8 @@ import { HomeLanding } from '@/components/home-landing';
 import NotFound from '@/pages/not-found';
 import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
-import { executeCode, formatPreviewReview, readPreviewReview, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
+import { executeCode, formatPreviewReview, readPreviewReview, readPreviewInteractions, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
+import { formatInteractionResult, interactionChecksHaveIssues } from '@/lib/preview-interactions';
 import { previewReviewHasIssues } from '@/lib/preview-review';
 import { startRequestDeadline, RESPONSE_DEADLINE_MS, AGENT_BUILD_DEADLINE_MS, AGENT_REVIEW_DEADLINE_MS } from '@/lib/request-deadlines';
 import { MAX_AGENT_DEFERRED_RETRIES, waitForAgentWindow } from '@/lib/agent-retry';
@@ -780,6 +781,8 @@ function Home() {
         let previewDiagnostics: PreviewDiagnostic[] = [];
         let previewReviewText = '';
         let previewLayoutErrors = false;
+        let previewInteractionText = '';
+        let previewInteractionErrors = false;
         try {
           const executionCode = projectFiles && projectEntrypoint && language === 'html'
             ? bundleHtmlProject(projectFiles, projectEntrypoint)
@@ -816,6 +819,9 @@ function Home() {
           const review = readPreviewReview(previewId);
           previewReviewText = formatPreviewReview(review);
           previewLayoutErrors = previewReviewHasIssues(review);
+          const interactions = readPreviewInteractions(previewId);
+          previewInteractionText = formatInteractionResult(interactions);
+          previewInteractionErrors = interactionChecksHaveIssues(interactions);
         }
         if (controller.signal.aborted) return;
         const outputText = outputs
@@ -832,7 +838,10 @@ function Home() {
           : '';
         agentHistory[agentHistory.length - 1] = {
           ...agentHistory[agentHistory.length - 1],
-          result: [agentHistory.at(-1)!.result, previewText, previewReviewText].filter(Boolean).join('\n').slice(0, 8000),
+          result: [
+            ...(previewInteractionErrors ? ['Nexo execution status: failed.'] : []),
+            previewInteractionText, agentHistory.at(-1)!.result, previewText, previewReviewText,
+          ].filter(Boolean).join('\n').slice(0, 8000),
         };
         saveContinuation();
         let gemmaReviewText = '';
@@ -875,11 +884,12 @@ function Home() {
                   outputText,
                 ].filter(Boolean).join('\n').slice(-8000),
                 browserChecks: [
+                  previewInteractionText,
                   previewReviewText,
                   ...previewDiagnostics.map((diagnostic) =>
                     `${diagnostic.kind}: ${diagnostic.message}${diagnostic.source ? ` (${diagnostic.source}${diagnostic.line ? `:${diagnostic.line}` : ''})` : ''}`
                   ),
-                ].filter(Boolean).join('\n').slice(-4000),
+                ].filter(Boolean).join('\n').slice(0, 4000),
               },
             };
             const imageOutput = outputs.find((output) => output.kind === 'image' && output.dataUrl);
@@ -920,7 +930,7 @@ function Home() {
             reviewController.abort();
           }
         }
-        const hasPreviewErrors = previewDiagnostics.length > 0 || previewLayoutErrors;
+        const hasPreviewErrors = previewDiagnostics.length > 0 || previewLayoutErrors || previewInteractionErrors;
         setAgentCodeTask({
           ...task,
           outputs,
@@ -934,6 +944,7 @@ function Home() {
         const codeHasErrors = Boolean(projectStorageError || executionError || hasPreviewErrors);
         const resultText = [
           `Nexo execution status: ${codeHasErrors ? 'failed' : 'completed'}.`,
+          previewInteractionText,
           projectStorageError ? `Project save error: ${projectStorageError}` : '',
           executionError ? `Execution error: ${executionError}` : '',
           gemmaReviewText
@@ -950,6 +961,7 @@ function Home() {
             id: activityId,
             label: codeHasErrors
               ? projectStorageError ? 'Project could not be saved in this browser'
+                : previewInteractionErrors ? 'Local interaction checks failed; Agent will repair the project'
                 : previewLayoutErrors ? 'Browser checks found page issues; Agent will review them'
                 : previewDiagnostics.length ? 'HTML preview reported runtime errors' : 'Browser code run returned an error'
               : isProject ? 'Project saved and run in the isolated browser' : 'Code finished in the isolated browser',

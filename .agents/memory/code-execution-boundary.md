@@ -19,6 +19,12 @@ Do not enable `allow-forms` to make generated forms work. Support local JavaScri
 
 **How to apply:** Use validated, cancellable local submit events for button activation, Enter, and `requestSubmit`; preserve application cancellation and input validation. Retain the opaque origin and `form-action 'none'`, and verify actual interactions in the real sandbox rather than granting form navigation.
 
+Agent-authored interaction checks are limited evidence of selected local behavior, not independent proof of correctness or persistence. Do not repair a failing app by weakening its assertions.
+
+**Why:** The same code generator supplies both the implementation and its check plan. Passing those checks cannot establish that all requested behavior works, and the opaque origin intentionally cannot verify durable browser storage or a real backend.
+
+**How to apply:** Preserve meaningful assertions during focused repairs, distinguish absent checks from passing checks, and report unverified behavior honestly. Never relax sandbox permissions to expand check coverage.
+
 New Agent-authored files should be available for subsequent Agent edits by default, but explicit context deselections and manual-project privacy must survive revisions and reopening.
 
 **Why:** Follow-up requests lacked the source of the app Agent had just built, so the model guessed a replacement instead of editing the real project. Agent-authored source is already provider-visible; arbitrary manual files are not.
