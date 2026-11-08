@@ -2,6 +2,7 @@ import { isAgentHistory, type AgentToolExchange, type StreamEvent } from './chat
 import { AGENT_BUILD_DEADLINE_MS } from './request-deadlines.ts';
 import { MAX_AGENT_DEFERRED_RETRIES } from './agent-retry.ts';
 import type { SavedProject } from './project-workspace.ts';
+import { trackRecoveryEvent, type CheckpointIssue } from './recovery-analytics.ts';
 
 const PREFIX = 'nexo-agent-continuation:';
 const MAX_CHARS = 400_000;
@@ -23,8 +24,18 @@ export type AgentCheckpoint = {
   phase: 'ready' | 'waiting' | 'executing' | 'cancelled';
   // No images or unselected project source is captured in this record.
 };
-export type CheckpointState = { checkpoint: AgentCheckpoint | null; error: string };
+export type CheckpointState = { checkpoint: AgentCheckpoint | null; error: string; reason?: CheckpointIssue };
 export const agentCheckpointKey = (id: string) => `${PREFIX}${encodeURIComponent(id)}`;
+// Local-only keys deduplicate repeated reads; identifiers never reach the tracker.
+const reportedIssues = new WeakMap<object, Map<string, CheckpointIssue>>();
+function reportIssue(storage: object, id: string, reason: CheckpointIssue) {
+  let issues = reportedIssues.get(storage);
+  if (!issues) { issues = new Map(); reportedIssues.set(storage, issues); }
+  if (issues.get(id) === reason) return;
+  if (issues.size >= 100) issues.clear();
+  issues.set(id, reason);
+  trackRecoveryEvent('agent_checkpoint_rejected', { reason });
+}
 
 /** Keep locally completed results authoritative across provider continuations. */
 export function extendAgentHistory(previous: AgentToolExchange[], incoming: AgentToolExchange[]): AgentToolExchange[] {
@@ -57,17 +68,25 @@ function validate(value: unknown, id: string): AgentCheckpoint {
 }
 
 export function readAgentCheckpoint(storage: Pick<Storage, 'getItem'>, id: string): CheckpointState {
+  let reason: CheckpointIssue = 'storage_unavailable';
   try {
     const raw = storage.getItem(agentCheckpointKey(id));
-    if (!raw) return { checkpoint: null, error: '' };
+    if (!raw) {
+      reportedIssues.get(storage)?.delete(id);
+      return { checkpoint: null, error: '' };
+    }
+    reason = 'invalid';
     if (raw.length > MAX_CHARS) throw new Error('oversized');
     const checkpoint = validate(JSON.parse(raw), id);
     if (checkpoint.phase !== 'cancelled' && Date.now() - checkpoint.startedAt >= AGENT_BUILD_DEADLINE_MS) {
-      return { checkpoint: null, error: 'This interrupted Agent build has expired. Saved files are kept; send a new request to continue.' };
+      reportIssue(storage, id, 'expired');
+      return { checkpoint: null, reason: 'expired', error: 'This interrupted Agent build has expired. Saved files are kept; send a new request to continue.' };
     }
+    reportedIssues.get(storage)?.delete(id);
     return { checkpoint, error: '' };
   } catch {
-    return { checkpoint: null, error: 'The Agent recovery record is unreadable or from an unsupported version. Saved files and chat history are unchanged.' };
+    reportIssue(storage, id, reason);
+    return { checkpoint: null, reason, error: 'The Agent recovery record is unreadable or from an unsupported version. Saved files and chat history are unchanged.' };
   }
 }
 

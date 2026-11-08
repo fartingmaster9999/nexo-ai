@@ -28,6 +28,7 @@ import { MAX_AGENT_DEFERRED_RETRIES, waitForAgentWindow } from '@/lib/agent-retr
 import { readAgentCheckpoint, writeAgentCheckpoint, deleteAgentCheckpoint, privateAgentHistory, extendAgentHistory, type AgentCheckpoint, type CheckpointState } from '@/lib/agent-checkpoint';
 import type { AgentWorkspaceTask } from '@/components/code-workspace';
 import { savedWorkspaceState } from '@/lib/workspace-recovery';
+import { trackRecoveryEvent } from '@/lib/recovery-analytics';
 import {
   bundleHtmlProject,
   createAgentProject,
@@ -116,16 +117,35 @@ function Home() {
   const activeStreamId = useRef<string | null>(null);
   const flushRef = useRef<(() => void) | null>(null);
   const checkpointRef = useRef<AgentCheckpoint | null>(null);
+  const resumedControllerRef = useRef<AbortController | null>(null);
+  const recoveryNoticeRef = useRef<string | null>(null);
   const [recovery, setRecovery] = useState<CheckpointState>({ checkpoint: null, error: '' });
   useEffect(() => {
     if (!streaming) {
       try { setRecovery(activeId ? readAgentCheckpoint(localStorage, activeId) : { checkpoint: null, error: '' }); }
-      catch { setRecovery({ checkpoint: null, error: 'Agent recovery storage is unavailable.' }); }
+      catch { setRecovery({ checkpoint: null, reason: 'storage_unavailable', error: 'Agent recovery storage is unavailable.' }); }
     }
   }, [activeId, streaming]);
-  const cancelCheckpoint = () => {
+  useEffect(() => {
+    if (streaming || !activeId || !(recovery.checkpoint || recovery.error)) {
+      recoveryNoticeRef.current = null;
+      return;
+    }
+    // Identity is used only for local deduplication, never as an event property.
+    const key = `${activeId}:${recovery.checkpoint?.startedAt ?? recovery.reason}:${recovery.checkpoint?.phase ?? 'unavailable'}`;
+    if (recoveryNoticeRef.current === key) return;
+    recoveryNoticeRef.current = key;
+    trackRecoveryEvent('agent_recovery_notice_shown', {
+      phase: recovery.checkpoint?.phase ?? 'unavailable',
+      image_required: recovery.checkpoint?.imageRequired ?? false,
+    });
+  }, [activeId, streaming, recovery]);
+  const cancelCheckpoint = (location: 'stop' | 'new_chat' | 'home' | 'delete') => {
     const checkpoint = checkpointRef.current;
     checkpointRef.current = null;
+    if (checkpoint || resumedControllerRef.current) {
+      trackRecoveryEvent('agent_recovery_cancel', { location, resumed: resumedControllerRef.current !== null });
+    }
     if (!checkpoint) return;
     try { writeAgentCheckpoint(localStorage, { ...checkpoint, phase: 'cancelled' }); }
     catch {
@@ -266,7 +286,7 @@ function Home() {
   }, [updateConversation]);
 
   const createConversation = useCallback(() => {
-    cancelCheckpoint();
+    cancelCheckpoint('new_chat');
     flushRef.current?.();
     flushRef.current = null;
     removePendingAssistant(activeStreamId.current);
@@ -294,7 +314,7 @@ function Home() {
   }, [activeId, removePendingAssistant, setConversations]);
 
   const returnHome = () => {
-    cancelCheckpoint();
+    cancelCheckpoint('home');
     flushRef.current?.();
     flushRef.current = null;
     removePendingAssistant(activeStreamId.current);
@@ -351,6 +371,9 @@ function Home() {
   };
   const deleteConversation = (conversation: Conversation) => {
     if (activeStreamId.current === conversation.id) {
+      if (checkpointRef.current || resumedControllerRef.current) {
+        trackRecoveryEvent('agent_recovery_cancel', { location: 'delete', resumed: resumedControllerRef.current !== null });
+      }
       checkpointRef.current = null;
       flushRef.current?.();
       flushRef.current = null;
@@ -374,7 +397,7 @@ function Home() {
   };
 
   const stopResponse = () => {
-    cancelCheckpoint();
+    cancelCheckpoint('stop');
     flushRef.current?.();
     flushRef.current = null;
     removePendingAssistant(activeStreamId.current);
@@ -390,7 +413,10 @@ function Home() {
     if (abortRef.current || streaming || preparingImage) return;
     const prompt = (resume?.messages.at(-1)?.content ?? suggestedText ?? draft).trim();
     const requestImage = resume && !resume.imageRequired ? null : pendingImage;
-    if (resume?.imageRequired && !requestImage) { setError('Reattach the original image before resuming. Image files are not saved in recovery records.'); return; }
+    if (resume?.imageRequired && !requestImage) {
+      trackRecoveryEvent('agent_recovery_resume_blocked', { reason: 'image_required' });
+      setError('Reattach the original image before resuming. Image files are not saved in recovery records.'); return;
+    }
     if (!prompt) {
       if (requestImage) setError('Add a message to send with your image.');
       return;
@@ -457,6 +483,8 @@ function Home() {
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     const controller = new AbortController();
+    if (resume) resumedControllerRef.current = controller;
+    let recoveryResult: 'completed' | 'request_failed' | 'empty_response' = 'request_failed';
     abortRef.current = controller;
     activeStreamId.current = conversationId;
     let received = assistantMessage.content;
@@ -994,6 +1022,7 @@ function Home() {
       }
       if (received.trim() && requestImage) setPendingImage((current) => current?.file === requestImage.file ? null : current);
       if (!received.trim()) {
+        recoveryResult = 'empty_response';
         setError('Nexo AI returned an empty response. Try rephrasing or sending again.');
         updateConversation(conversationId, (item) => ({
           ...item,
@@ -1002,7 +1031,7 @@ function Home() {
           ),
           updatedAt: Date.now(),
         }));
-      }
+      } else recoveryResult = 'completed';
     } catch (requestError) {
       if (abortRef.current !== controller) return;
       if (abortRef.current === controller) flushRef.current?.();
@@ -1020,6 +1049,14 @@ function Home() {
         }));
       }
     } finally {
+      if (resume) {
+        const cancelled = controller.signal.aborted && controller.signal.reason?.name === 'AbortError';
+        trackRecoveryEvent('agent_recovery_result', {
+          outcome: cancelled ? 'cancelled' : recoveryResult === 'completed' ? 'completed' : 'failed',
+          reason: cancelled ? 'cancelled' : recoveryResult,
+        });
+        if (resumedControllerRef.current === controller) resumedControllerRef.current = null;
+      }
       clearBuildDeadline();
       clearResponseDeadline?.();
       if (connectTimeout !== null) window.clearTimeout(connectTimeout);
@@ -1043,18 +1080,36 @@ function Home() {
     try {
       deleteAgentCheckpoint(localStorage, activeId);
       setRecovery({ checkpoint: null, error: '' });
-    } catch { setError('The Agent recovery record could not be removed from this browser.'); }
+      trackRecoveryEvent('agent_recovery_dismiss', { outcome: 'dismissed' });
+    } catch {
+      trackRecoveryEvent('agent_recovery_dismiss', { outcome: 'storage_failed' });
+      setError('The Agent recovery record could not be removed from this browser.');
+    }
   };
   const resumeAgent = () => {
     if (!activeId || streaming) return;
-    const fresh = readAgentCheckpoint(localStorage, activeId);
+    trackRecoveryEvent('agent_recovery_resume', {
+      phase: recovery.checkpoint?.phase ?? 'unavailable',
+      image_required: recovery.checkpoint?.imageRequired ?? false,
+    });
+    let fresh: CheckpointState;
+    try { fresh = readAgentCheckpoint(localStorage, activeId); }
+    catch {
+      trackRecoveryEvent('agent_recovery_resume_blocked', { reason: 'storage_unavailable' });
+      setError('Agent recovery storage is unavailable.');
+      return;
+    }
     setRecovery(fresh);
     const checkpoint = fresh.checkpoint;
-    if (!checkpoint || checkpoint.phase === 'cancelled') return;
+    if (!checkpoint || checkpoint.phase === 'cancelled') {
+      trackRecoveryEvent('agent_recovery_resume_blocked', { reason: fresh.reason ?? (checkpoint ? 'cancelled' : 'missing') });
+      return;
+    }
     const lastUser = activeConversation?.messages.filter(m => m.role === 'user').at(-1);
     const latest = activeConversation?.messages.at(-1);
     if (lastUser?.content !== checkpoint.messages.at(-1)?.content ||
         latest?.role === 'assistant' && latest.id !== checkpoint.assistantId) {
+      trackRecoveryEvent('agent_recovery_resume_blocked', { reason: 'newer_messages' });
       setError('This conversation has newer messages. Start a new Agent request using the saved files instead.');
       return;
     }
