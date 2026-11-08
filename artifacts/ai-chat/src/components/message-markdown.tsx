@@ -7,6 +7,7 @@ import 'katex/dist/katex.min.css';
 import { CopyCodeButton } from './copy-code-button';
 import { rawCodeFromSource } from '@/lib/code-clipboard';
 import { fencedBlocks, type FencedBlock } from '@/lib/fenced-blocks';
+import { normalizeMathDelimiters } from '@/lib/markdown-math';
 import { parseWidget, WIDGET_LANGUAGE, type QuizProgress } from '@/lib/interactive-widgets';
 import { ErrorBoundary } from './error-boundary';
 
@@ -68,136 +69,6 @@ const components: Components = {
 const remarkPlugins = [remarkGfm, remarkMath];
 
 type MarkdownNode = { type: string; value?: string; children?: MarkdownNode[] };
-const INLINE_OPEN = '\\(';
-const INLINE_CLOSE = '\\)';
-const DISPLAY_OPEN = '\\[';
-const DISPLAY_CLOSE = '\\]';
-const RAW_TEX_COMMAND = /\\(?:frac|dfrac|tfrac|sqrt|sum|prod|int|oint|lim|alpha|beta|gamma|delta|theta|pi|sigma|mu|infty|cdot|times|leq|geq|neq|approx|equiv|partial|nabla|text|left|right|begin|end|overline|underline|hat|bar|vec|boxed|mathbb|mathcal|mathrm|operatorname|sin|cos|tan|log|ln|exp|pm|mp|rightarrow|to|implies|therefore|quad|qquad|cases|matrix|det|Pr|mathbf|dots)\b/;
-
-function isEscapedAt(source: string, index: number) {
-  let slashes = 0;
-  for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor--) slashes++;
-  return slashes % 2 === 1;
-}
-
-function findUnescaped(source: string, token: string, from: number) {
-  let index = source.indexOf(token, from);
-  while (index >= 0 && isEscapedAt(source, index)) index = source.indexOf(token, index + token.length);
-  return index;
-}
-
-function findCodeSpanEnd(source: string, start: number, ticks: number) {
-  const marker = '`'.repeat(ticks);
-  let end = source.indexOf(marker, start + ticks);
-  while (end >= 0) {
-    const isLongerRun = source[end - 1] === '`' || source[end + ticks] === '`';
-    if (!isLongerRun) return end + ticks;
-    end = source.indexOf(marker, end + ticks);
-  }
-  return -1;
-}
-
-function findMathOpening(source: string, from: number) {
-  for (let cursor = from; cursor < source.length;) {
-    if (source[cursor] === '`') {
-      let ticks = 1;
-      while (source[cursor + ticks] === '`') ticks++;
-      const codeEnd = findCodeSpanEnd(source, cursor, ticks);
-      if (codeEnd >= 0) {
-        cursor = codeEnd;
-        continue;
-      }
-    }
-    if (!isEscapedAt(source, cursor)) {
-      if (source.startsWith(INLINE_OPEN, cursor)) return { start: cursor, isDisplay: false };
-      if (source.startsWith(DISPLAY_OPEN, cursor)) return { start: cursor, isDisplay: true };
-    }
-    cursor++;
-  }
-  return null;
-}
-
-function isBareMathLine(line: string) {
-  const trimmed = line.trim();
-  if (!trimmed || line.startsWith('    ') || line.startsWith('\t') || /[`$]/.test(trimmed)
-    || trimmed.includes(INLINE_OPEN) || trimmed.includes(DISPLAY_OPEN)) return false;
-
-  const hasTexCommand = RAW_TEX_COMMAND.test(trimmed);
-  const hasEquationSyntax = /[=<>^_∑∫√±×÷≤≥≠≈]/.test(trimmed);
-  if (!hasTexCommand && !hasEquationSyntax) return false;
-
-  if (hasTexCommand) {
-    const prose = trimmed.replace(/\\[A-Za-z]+/g, ' ').replace(/[{}[\]\\]/g, ' ');
-    const words = prose.match(/[A-Za-z]{3,}/g) ?? [];
-    return words.length <= 2;
-  }
-
-  const words = trimmed.match(/[A-Za-z]{3,}/g) ?? [];
-  return words.length === 0 && /[A-Za-z0-9]/.test(trimmed);
-}
-
-/** Render unwrapped, standalone formulas without changing fenced or inline code. */
-function normalizeBareMathLines(source: string) {
-  return source.split(/(\r?\n)/).map((line) => {
-    if (line === '\n' || line === '\r\n' || !isBareMathLine(line)) return line;
-    return `\n\n$$\n${line.trim()}\n$$\n\n`;
-  }).join('');
-}
-
-/** Convert common TeX delimiters without touching fenced or inline code source. */
-function normalizeMathSegment(source: string) {
-  let output = '';
-  let cursor = 0;
-  while (cursor < source.length) {
-    if (source[cursor] === '`') {
-      let ticks = 1;
-      while (source[cursor + ticks] === '`') ticks++;
-      const end = findCodeSpanEnd(source, cursor, ticks);
-      if (end >= 0) {
-        output += source.slice(cursor, end);
-        cursor = end;
-        continue;
-      }
-    }
-
-    const opening = findMathOpening(source, cursor);
-    if (!opening) {
-      output += source.slice(cursor);
-      break;
-    }
-
-    const { start, isDisplay } = opening;
-    const open = isDisplay ? DISPLAY_OPEN : INLINE_OPEN;
-    const close = isDisplay ? DISPLAY_CLOSE : INLINE_CLOSE;
-    const end = findUnescaped(source, close, start + open.length);
-    const expression = end >= 0 ? source.slice(start + open.length, end).trim() : '';
-    if (end < 0 || !expression) {
-      output += source.slice(cursor, start + open.length);
-      cursor = start + open.length;
-      continue;
-    }
-
-    output += source.slice(cursor, start);
-    output += isDisplay ? `\n\n$$\n${expression}\n$$\n\n` : `$${expression}$`;
-    cursor = end + close.length;
-  }
-  return normalizeBareMathLines(output);
-}
-
-function normalizeMathDelimiters(source: string) {
-  const codeBlocks = fencedBlocks(source);
-  if (codeBlocks.length === 0) return normalizeMathSegment(source);
-
-  let result = '';
-  let cursor = 0;
-  for (const block of codeBlocks) {
-    result += normalizeMathSegment(source.slice(cursor, block.start));
-    result += source.slice(block.start, block.end);
-    cursor = block.end;
-  }
-  return result + normalizeMathSegment(source.slice(cursor));
-}
-
 /** Completed answers do not reparse Markdown on each streamed chunk or keystroke. */
 export const MessageMarkdown = memo(function MessageMarkdown(props: MarkdownProps) {
   const markdown = useMemo(() => normalizeMathDelimiters(props.content), [props.content]);

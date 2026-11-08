@@ -50,3 +50,9 @@ Scroll regression fixtures must reproduce the production CSS ancestry and place 
 **Why:** Earlier scroll checks passed because the fixture omitted the chat wrapper that activates descendant CSS rules; a separate touch failure came from targeting code below the pane's visible bounds. Programmatic scrollTop changes alone cannot detect gesture containment.
 
 **How to apply:** Confirm the element under the gesture point, include the production styles and wrappers, and compare the original behavior against the fix before concluding that a scroll regression is covered.
+
+Render common mathematical notation cleanly without rewriting literal code or ordinary prose.
+
+**Why:** The user specifically wants formulas typeset instead of exposed as raw TeX, while copied/generated code must retain its exact source.
+
+**How to apply:** Recognize common single- and double-escaped delimiters and clearly standalone formulas; keep fenced and inline code unchanged, and do not re-wrap content already inside display-math delimiters.

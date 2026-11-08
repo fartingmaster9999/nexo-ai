@@ -11,6 +11,7 @@
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:markdown-math": "node --test tests/markdown-math.test.mjs",
     "test:reply-status": "node tests/reply-status.visual.mjs",
     "test:images": "node --test tests/image-attachment.test.mjs && node tests/image-chat.browser.mjs",
     "test:agent": "node --test tests/request-deadlines.test.mjs tests/agent-retry.test.mjs tests/agent-checkpoint.test.mjs && node tests/agent-chat.browser.mjs && node tests/agent-recovery.browser.mjs",
