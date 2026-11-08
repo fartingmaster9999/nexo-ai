@@ -4,5 +4,6 @@ export const modules: ModuleMap = {
   "./components/mockups/nexo-ui/AnswerCraft.tsx": () => import("../components/mockups/nexo-ui/AnswerCraft.tsx"),
   "./components/mockups/nexo-ui/Current.tsx": () => import("../components/mockups/nexo-ui/Current.tsx"),
   "./components/mockups/nexo-ui/HomeLanding.tsx": () => import("../components/mockups/nexo-ui/HomeLanding.tsx"),
-  "./components/mockups/nexo-ui/Refined.tsx": () => import("../components/mockups/nexo-ui/Refined.tsx")
+  "./components/mockups/nexo-ui/Refined.tsx": () => import("../components/mockups/nexo-ui/Refined.tsx"),
+  "./components/mockups/nexo-welcome-baseline/Current.tsx": () => import("../components/mockups/nexo-welcome-baseline/Current.tsx")
 };
