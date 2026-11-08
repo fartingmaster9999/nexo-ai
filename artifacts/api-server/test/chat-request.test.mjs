@@ -4,6 +4,7 @@ import { buildChatRequest, isValidTimeZone, boundedHistory } from "../src/lib/ch
 import { extractSearchSources } from "../src/lib/search-activity.ts";
 import { needsWebSearch, isCodingRequest, buildSearchQuery } from "../src/lib/chat-policy.ts";
 import { chooseModels, openModelStream, USAGE_LIMIT_MESSAGE, PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK, markRateLimited, isCoolingDown, rateLimitDiagnostics } from "../src/lib/model-routing.ts";
+import { modelsForRequest, recordRateLimit, clearRateLimit } from "../src/lib/model-routing.ts";
 
 const messages = [{ role: "user", content: "What is 17 times 19?" }];
 
@@ -142,6 +143,46 @@ test("an actual 429 switches models once and emits a downgrade notice", async ()
 test("exhausting both models returns the exact requested usage message", async () => {
   await assert.rejects(openModelStream(["quota-a","quota-b"], async () => {throw {status:429};}, () => {}), {message:USAGE_LIMIT_MESSAGE});
   assert.equal(USAGE_LIMIT_MESSAGE, "You have reached your usage limits, please try again later");
+});
+
+test("cached cooldowns cannot alone declare every model exhausted", async () => {
+  markRateLimited("cached-primary", "600");
+  markRateLimited("cached-fallback", "120");
+  try {
+    assert.deepEqual(modelsForRequest(["cached-primary", "cached-fallback"]), ["cached-fallback"]);
+    const attempts = [];
+    const result = await openModelStream(["cached-primary", "cached-fallback"], async (model) => {
+      attempts.push(model);
+      return "live accepted";
+    }, () => {});
+    assert.deepEqual(attempts, ["cached-fallback"]);
+    assert.equal(result.stream, "live accepted");
+    assert.equal(isCoolingDown("cached-fallback"), false);
+  } finally {
+    clearRateLimit("cached-primary");
+    clearRateLimit("cached-fallback");
+  }
+});
+
+test("request-size rejections report safe counters without poisoning smaller requests", () => {
+  const error = {
+    status: 429,
+    error: { error: { message: "Rate limit reached for PRIVATE_ORG on tokens per minute (TPM): Limit 6,000, Used 0, Requested 8,200. PRIVATE_CREDENTIAL" } },
+    headers: new Headers({ "retry-after": "900" }),
+  };
+  markRateLimited("oversize-request-test", "900");
+  const diagnostics = recordRateLimit("oversize-request-test", error);
+  assert.equal(diagnostics.metric, "TPM");
+  assert.equal(diagnostics.quotaLimit, 6000);
+  assert.equal(diagnostics.quotaUsed, 0);
+  assert.equal(diagnostics.quotaRequested, 8200);
+  assert.equal(diagnostics.requestTooLarge, true);
+  assert.equal(isCoolingDown("oversize-request-test"), false);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /PRIVATE/);
+});
+
+test("missing model access is not reported as usage exhaustion", async () => {
+  await assert.rejects(openModelStream([], async () => "never", () => {}), /No compatible model/);
 });
 
 test("authorization errors are not incorrectly treated as usage limits", async () => {

@@ -8,7 +8,7 @@ import { searchWeb, type SearchResult } from "../lib/web-search";
 import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry";
 import {
   agentGenerationModelIds, agentSecurityModelIds, availableModelCatalog, classifyAgentTask,
-  isAgentTask, isCoolingDown, markRateLimited, modelLabel, routeAgentTask,
+  isAgentTask, isCoolingDown, clearRateLimit, modelsForRequest, recordRateLimit, rateLimitDiagnostics, modelLabel, routeAgentTask,
   routeGeminiAgentTask, type AgentTask,
 } from "../lib/model-routing";
 import { reviewAgentTool, screenPromptInjection } from "../lib/agent-security";
@@ -222,17 +222,13 @@ export function createAgentRouter({
         if (isCoolingDown(parsed.data.agentModel)) {
           groqFallback = true;
           groqPreferredLabel = modelLabel(parsed.data.agentModel);
-          groqCandidates = groqCandidates.filter((model) => !isCoolingDown(model));
+          groqCandidates = modelsForRequest(groqCandidates);
         }
       } else {
-        groqCandidates = groqCandidates.filter((model) => !isCoolingDown(model));
+        groqCandidates = modelsForRequest(groqCandidates);
         if (groqCandidates[0] !== routeAgentTask(agentTask, groqModels).preferredModel) {
           groqFallback = true;
         }
-      }
-      if (!groqCandidates.length) {
-        res.status(503).json({ error: `Every compatible Groq model for the ${agentTask} task is temporarily rate-limited. Please retry after the provider's retry window.` });
-        return;
       }
     } else {
       if (parsed.data.agentModel && !geminiCandidates.includes(parsed.data.agentModel)) {
@@ -247,17 +243,13 @@ export function createAgentRouter({
         if (isCoolingDown(parsed.data.agentModel)) {
           geminiFallback = true;
           geminiPreferredLabel = modelLabel(parsed.data.agentModel);
-          geminiCandidates = geminiCandidates.filter((model) => !isCoolingDown(model));
+          geminiCandidates = modelsForRequest(geminiCandidates);
         }
       } else {
-        geminiCandidates = geminiCandidates.filter((model) => !isCoolingDown(model));
+        geminiCandidates = modelsForRequest(geminiCandidates);
         if (geminiCandidates[0] !== routeGeminiAgentTask(agentTask, geminiModels).preferredModel) {
           geminiFallback = true;
         }
-      }
-      if (!geminiCandidates.length) {
-        res.status(503).json({ error: `Every catalog-verified Gemini model for the ${agentTask} task is temporarily rate-limited. Please retry after the provider's retry window.` });
-        return;
       }
     }
     if (parsed.data.timeZone !== undefined && !isValidTimeZone(parsed.data.timeZone)) {
@@ -296,6 +288,7 @@ export function createAgentRouter({
     let groqModelIndex = activeProvider === "groq" ? groqCandidates.indexOf(activeModel) : -1;
     let geminiModelIndex = activeProvider === "gemini" ? geminiCandidates.indexOf(activeModel) : -1;
     let groqFallbackUnavailable = false;
+    let pendingRateNotice: { id: string; message: string; model: string } | undefined;
     let idle: ReturnType<typeof setTimeout> | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     const deadline = setTimeout(() => {
@@ -428,7 +421,8 @@ export function createAgentRouter({
           groqCandidates = route.models;
           groqPreferredLabel = route.preferredLabel;
         }
-        const nextModel = groqCandidates.find((model) => !isCoolingDown(model));
+        groqCandidates = modelsForRequest(groqCandidates);
+        const nextModel = groqCandidates[0];
         if (!nextModel) {
           groqFallbackUnavailable = true;
           return false;
@@ -445,13 +439,11 @@ export function createAgentRouter({
           ...(status !== undefined ? { status } : {}),
         }, "Gemini Agent rate-limited; switching to a compatible Groq model");
         await emit({ model: activeModel, agentProvider: activeProvider, agentTask: activeTask });
-        await emit({
-          notice: {
+        pendingRateNotice = {
             id: "gemini-agent-qwen-fallback",
-            message: `Gemini ${modelLabel(previousModel)} is temporarily rate-limited. Nexo Agent switched to compatible Groq model ${modelLabel(activeModel)} and will keep the same task route.`,
+            message: `Gemini rejected this request with HTTP 429. Nexo Agent is continuing with Groq model ${modelLabel(activeModel)}.`,
             model: activeModel,
-          },
-        });
+        };
         return true;
       };
       let modelIdleRetries = 0;
@@ -567,7 +559,12 @@ export function createAgentRouter({
             headers: (error as { headers?: Headers }).headers,
           };
           if (activeProvider === "groq" && candidate.status === 429) {
-            markRateLimited(activeModel, candidate.headers?.get?.("retry-after"));
+            const diagnostics = recordRateLimit(activeModel, error);
+            req.log.warn({
+              event: "agent.provider.rate_limited",
+              provider: activeProvider, model: activeModel, task: activeTask, status: 429,
+              ...diagnostics,
+            }, "Provider rejected this Agent request with HTTP 429");
             const nextIndex = groqCandidates.findIndex((model, index) => index > groqModelIndex && !isCoolingDown(model));
             if (nextIndex >= 0) {
               const previousModel = activeModel;
@@ -581,13 +578,11 @@ export function createAgentRouter({
                 status: candidate.status,
               }, "Agent model was rate-limited; retrying with a compatible catalog model");
               await emit({ model: activeModel, agentProvider: activeProvider, agentTask: activeTask });
-              await emit({
-                notice: {
+              pendingRateNotice = {
                   id: "agent-model-rate-fallback",
-                  message: `${modelLabel(previousModel)} is temporarily rate-limited. Nexo Agent switched to compatible model ${modelLabel(activeModel)} for this task.`,
+                  message: `${modelLabel(previousModel)} rejected this request with HTTP 429. Nexo Agent is continuing with ${modelLabel(activeModel)}.`,
                   model: activeModel,
-                },
-              });
+              };
               continue;
             }
           }
@@ -623,6 +618,11 @@ export function createAgentRouter({
         }
 
         if (!modelResponse) throw new AgentPublicError("The Agent returned no response. Please try again.");
+        clearRateLimit(activeModel);
+        if (pendingRateNotice && (modelResponse.text.trim() || modelResponse.calls.length)) {
+          await emit({ notice: pendingRateNotice });
+          pendingRateNotice = undefined;
+        }
         if (groqFailureRetries > 0) {
           await emit({ activity: { id: "agent-provider-recovery", label: "Agent response recovered", kind: "info", status: "complete" } });
           repairToolRequest = false;
@@ -835,6 +835,7 @@ export function createAgentRouter({
         provider: activeProvider,
         model: activeModel,
         status,
+        ...(status === 429 ? rateLimitDiagnostics(error) : {}),
         timedOut,
         ...safeAgentFailureDetails(error),
         durationMs: Date.now() - startedAt,
@@ -844,7 +845,9 @@ export function createAgentRouter({
         : error instanceof AgentPublicError
           ? error.message
           : activeProvider === "groq" && status === 429
-            ? `Groq ${modelLabel(activeModel)} and its compatible fallbacks are temporarily rate-limited. Please try again later.`
+            ? rateLimitDiagnostics(error).requestTooLarge
+              ? "The provider rejected this Agent request because it is too large for its token allowance. Try a smaller project change or a new conversation. This does not mean every model is out of quota."
+              : `Groq rejected this request on ${modelLabel(activeModel)} with HTTP 429. This may be a token or request limit, not exhausted daily messages. Please try again later.`
             : activeProvider === "groq" && groqFailure?.kind === "groq_connection"
               ? "Nexo could not connect to Groq after a retry. Please try again shortly."
             : activeProvider === "groq" && groqFailure?.kind === "groq_timeout"

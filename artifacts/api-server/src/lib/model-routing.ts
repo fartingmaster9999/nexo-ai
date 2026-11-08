@@ -252,6 +252,20 @@ export function isCoolingDown(model: string): boolean {
   return (cooldowns.get(model) ?? 0) > Date.now();
 }
 
+/**
+ * Cooldowns are a routing hint, not proof that a new request will be rejected.
+ * If every candidate is cached, recheck just the earliest one, once per request.
+ */
+export function modelsForRequest(models: string[]): string[] {
+  const ready = models.filter((model) => !isCoolingDown(model));
+  if (ready.length || !models.length) return ready;
+  return [[...models].sort((a, b) => (cooldowns.get(a) ?? 0) - (cooldowns.get(b) ?? 0))[0]!];
+}
+
+export function clearRateLimit(model: string): void {
+  cooldowns.delete(model);
+}
+
 export function markRateLimited(model: string, retryAfter?: string | null): void {
   const seconds = retryAfter?.trim() ? Number(retryAfter) : NaN;
   const dateDelay = retryAfter && !Number.isFinite(seconds)
@@ -264,16 +278,40 @@ export function markRateLimited(model: string, retryAfter?: string | null): void
 /** Only allowlisted quota metadata; never log upstream bodies, prompts or credentials. */
 export function rateLimitDiagnostics(error: unknown) {
   const candidate = error as { headers?: Headers; error?: { error?: { message?: string }; message?: string } };
-  const message = candidate.error?.error?.message ?? candidate.error?.message ?? "";
+  const raw = candidate?.error?.error?.message ?? candidate?.error?.message;
+  const message = typeof raw === "string" ? raw.slice(0, 4000) : "";
   const metric = /\b(TPM|TPD|RPM|RPD|ITPM|OTPM)\b/i.exec(message)?.[1]?.toUpperCase();
+  const counter = (name: string): number | null => {
+    const text = new RegExp(`\\b${name}\\s*:?\\s*([\\d,]+(?:\\.\\d+)?)`, "i").exec(message)?.[1];
+    const value = text ? Number(text.replace(/,/g, "")) : NaN;
+    return Number.isFinite(value) && value >= 0 && value <= 1e12 ? value : null;
+  };
+  const quotaLimit = counter("Limit");
+  const quotaUsed = counter("Used");
+  const quotaRequested = counter("Requested");
+  const requestTooLarge = /request too large/i.test(message) ||
+    (metric !== undefined && /^(?:TPM|TPD|ITPM|OTPM)$/.test(metric) &&
+      quotaLimit !== null && quotaRequested !== null && quotaRequested > quotaLimit);
   return {
     metric: metric ?? "unknown",
-    retryAfter: candidate.headers?.get?.("retry-after") ?? null,
-    remainingRequests: candidate.headers?.get?.("x-ratelimit-remaining-requests") ?? null,
-    remainingTokens: candidate.headers?.get?.("x-ratelimit-remaining-tokens") ?? null,
-    tokenLimit: candidate.headers?.get?.("x-ratelimit-limit-tokens") ?? null,
-    resetTokens: candidate.headers?.get?.("x-ratelimit-reset-tokens") ?? null,
+    quotaLimit,
+    quotaUsed,
+    quotaRequested,
+    requestTooLarge,
+    retryAfter: candidate?.headers?.get?.("retry-after") ?? null,
+    remainingRequests: candidate?.headers?.get?.("x-ratelimit-remaining-requests") ?? null,
+    remainingTokens: candidate?.headers?.get?.("x-ratelimit-remaining-tokens") ?? null,
+    tokenLimit: candidate?.headers?.get?.("x-ratelimit-limit-tokens") ?? null,
+    resetTokens: candidate?.headers?.get?.("x-ratelimit-reset-tokens") ?? null,
   };
+}
+
+export function recordRateLimit(model: string, error: unknown) {
+  const diagnostics = rateLimitDiagnostics(error);
+  // A request that cannot fit is not evidence that a smaller request must wait.
+  if (!diagnostics.requestTooLarge) markRateLimited(model, diagnostics.retryAfter);
+  else clearRateLimit(model);
+  return diagnostics;
 }
 
 export class UsageLimitError extends Error {
@@ -287,20 +325,20 @@ export async function openModelStream<T>(
   onDowngrade: (model: string) => void,
   onRateLimit?: (model: string, diagnostics: ReturnType<typeof rateLimitDiagnostics>) => void,
 ): Promise<{ model: string; stream: T }> {
-  for (let index = 0; index < models.length; index++) {
-    const model = models[index]!;
-    if (isCoolingDown(model)) continue;
+  if (!models.length) throw new Error("No compatible model is available for this request.");
+  for (const model of modelsForRequest(models)) {
     try {
       const stream = await create(model);
+      clearRateLimit(model);
       // A fallback notice describes a confirmed usable stream, not a failed attempt.
-      if (index > 0) onDowngrade(model);
+      if (model !== models[0]) onDowngrade(model);
       return { model, stream };
     }
     catch (error) {
       const candidate = error as { status?: number; headers?: Headers };
       if (candidate.status !== 429) throw error;
-      markRateLimited(model, candidate.headers?.get?.("retry-after"));
-      onRateLimit?.(model, rateLimitDiagnostics(error));
+      const diagnostics = recordRateLimit(model, error);
+      onRateLimit?.(model, diagnostics);
     }
   }
   throw new UsageLimitError();

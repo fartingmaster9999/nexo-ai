@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, MessageSquare, PanelLeft, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, MessageSquare, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -22,6 +22,7 @@ import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, t
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
 import { executeCode, formatPreviewReview, readPreviewReview, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
 import type { AgentWorkspaceTask } from '@/components/code-workspace';
+import { savedWorkspaceState } from '@/lib/workspace-recovery';
 import {
   bundleHtmlProject,
   createSavedProject,
@@ -87,6 +88,7 @@ function Home() {
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [workspaceVisited, setWorkspaceVisited] = useState(false);
   const [agentFull, setAgentFull] = useState(false);
   const keepWorkspaceFor = useRef<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
@@ -151,6 +153,25 @@ function Home() {
     return null;
   }, [currentMessages]);
   const snippets = codeSource?.snippets ?? noSnippets;
+  const savedWorkspace = useMemo(() => {
+    try { return savedWorkspaceState(localStorage, activeId); }
+    catch { return { hasProject: false, hasDraft: false }; }
+  },
+    [activeId, workspaceOpen, agentCodeTask?.id]);
+  const canReopenWorkspace = Boolean(activeId && (workspaceVisited || savedWorkspace.hasProject ||
+    savedWorkspace.hasDraft || snippets.length || agentCodeTask));
+  const reopenWorkspace = () => {
+    const immersive = savedWorkspace.hasProject || Boolean(agentCodeTask) ||
+      currentMessages.some((message) => message.role === 'assistant' && message.agentMode);
+    setAgentFull(immersive);
+    setWorkspaceOpen(true);
+    if (immersive) {
+      setSidebarOpen(false);
+      setHomeHistoryOpen(false);
+    }
+  };
+
+  useEffect(() => { if (workspaceOpen) setWorkspaceVisited(true); }, [workspaceOpen]);
 
   useEffect(() => {
     if (!pendingImage) return;
@@ -161,9 +182,10 @@ function Home() {
     if (activeId && keepWorkspaceFor.current === activeId) return;
     keepWorkspaceFor.current = null;
     setWorkspaceOpen(false);
+    setWorkspaceVisited(false);
     setAgentFull(false);
   }, [activeId]);
-  const closeWorkspace = useCallback(() => { setWorkspaceOpen(false); setAgentFull(false); keepWorkspaceFor.current = null; }, []);
+  const closeWorkspace = useCallback(() => { setWorkspaceOpen(false); keepWorkspaceFor.current = null; }, []);
   useEffect(() => {
     if (!streaming || !activeId || !snippets.length || !codeSource || codeSource.index !== lastAssistantIndex) return;
     const key = `${activeId}:${codeSource.index}`;
@@ -394,6 +416,8 @@ function Home() {
       setWorkspaceOpen(true);
       setSidebarOpen(false);
       setHomeHistoryOpen(false);
+    } else if (!workspaceOpen) {
+      setAgentFull(false);
     }
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
@@ -855,6 +879,13 @@ function Home() {
               {activeConversation?.title ?? (activeId ? 'New conversation' : 'Home')}
             </div>
           </div>
+          {canReopenWorkspace && !workspaceOpen && (
+            <button type="button" className="ws-btn" onClick={reopenWorkspace}
+              aria-label="Open workspace" title="Reopen this conversation's workspace"
+              aria-controls="code-workspace" aria-expanded={false} data-testid="button-open-workspace">
+              <PanelRightOpen size={16} aria-hidden="true" /> Workspace
+            </button>
+          )}
           {!activeId && (
             <button className="icon-btn home-settings" type="button" onClick={() => setSettingsOpen(true)} aria-label="Appearance" title="Appearance" data-testid="button-home-settings">
               <Settings2 size={17} aria-hidden="true" />
@@ -1032,7 +1063,8 @@ function Home() {
           </div>
         </section>
       </main>
-      {workspaceOpen && (
+      {activeId && (workspaceOpen || workspaceVisited) && (
+        <div style={{ display: workspaceOpen ? 'contents' : 'none' }} hidden={!workspaceOpen}>
         <Suspense fallback={agentFull ? (
           <section className="workspace ws-immersive" aria-label="Agent workspace" data-testid="panel-workspace">
             <header className="wsi-head">
@@ -1048,8 +1080,9 @@ function Home() {
         <CodeWorkspace conversationId={activeId} snippets={snippets} onClose={closeWorkspace}
           returnFocus={() => textareaRef.current?.focus({ preventScroll: true })} canAsk={!streaming}
           isLight={theme.isLight} onAskFix={(text) => void sendMessage(undefined, text)} agentCode={agentCodeTask}
-          immersive={agentFull} waiting={agentFull && streaming && !agentCodeTask} />
+          immersive={agentFull} visible={workspaceOpen} waiting={agentFull && streaming && !agentCodeTask} />
         </Suspense>
+        </div>
       )}
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={onDeleteDialogOpenChange}>
         <AlertDialogContent data-testid="dialog-delete-conversation">

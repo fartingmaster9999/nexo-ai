@@ -11,6 +11,9 @@ import {
   PROMPT_GUARD_MODEL,
   SAFEGUARD_MODEL,
   SMALL_MODEL,
+  markRateLimited,
+  clearRateLimit,
+  isCoolingDown,
 } from "../src/lib/model-routing.ts";
 import { createAgentRouter } from "../src/routes/agent.ts";
 
@@ -75,6 +78,65 @@ function textStream(content) {
     yield { choices: [{ delta: { content } }] };
   })();
 }
+
+test("Agent rechecks one live model when every candidate has a cached cooldown", async () => {
+  const models = [SMALL_MODEL, PRIMARY_MODEL, CODING_FALLBACK];
+  for (let index = 0; index < models.length; index++) markRateLimited(models[index], String(600 + index * 100));
+  const attempts = [];
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if (models.includes(request.model)) attempts.push(request.model);
+      return textStream("Fresh request accepted");
+    } } },
+  };
+  try {
+    await withServer(createApp(client), async (url) => {
+      const response = await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Hello" }] }),
+      });
+      assert.equal(response.status, 200);
+      const events = await eventsFrom(response);
+      assert.ok(events.some((event) => event.content === "Fresh request accepted"));
+      assert.equal(events.some((event) => event.error), false);
+    });
+    assert.deepEqual(attempts, [SMALL_MODEL]);
+    assert.equal(isCoolingDown(SMALL_MODEL), false);
+  } finally {
+    models.forEach(clearRateLimit);
+  }
+});
+
+test("Agent logs actual request-size rejection and never claims untried models exhausted", async () => {
+  const models = [SMALL_MODEL, PRIMARY_MODEL, CODING_FALLBACK];
+  models.forEach(clearRateLimit);
+  const logs = [];
+  const logger = pino({ level: "warn" }, { write: (line) => logs.push(JSON.parse(line)) });
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if (!models.includes(request.model)) return textStream("safe");
+      throw new Groq.APIError(429, { message: "PRIVATE_ORG tokens per minute (TPM): Limit 6000, Used 0, Requested 8200 PRIVATE_KEY" }, undefined, new Headers({ "retry-after": "100" }));
+    } } },
+  };
+  await withServer(createApp(client, undefined, logger), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Hello" }] }),
+    }));
+    const error = events.find((event) => event.error)?.error;
+    assert.match(error, /too large/);
+    assert.doesNotMatch(error, /Every compatible|temporarily rate-limited/);
+    assert.equal(events.some((event) => event.notice?.id === "agent-model-rate-fallback"), false);
+  });
+  const rejection = logs.find((entry) => entry.event === "agent.provider.rate_limited");
+  assert.equal(rejection.status, 429);
+  assert.equal(rejection.requestTooLarge, true);
+  assert.equal(rejection.quotaRequested, 8200);
+  assert.doesNotMatch(JSON.stringify(logs), /PRIVATE/);
+  assert.ok(models.every((model) => !isCoolingDown(model)));
+});
 
 test("Groq diagnostics distinguish stream, connection and HTTP errors without provider payloads", () => {
   const streamed = groqAgentFailure(new Groq.APIError(undefined, {

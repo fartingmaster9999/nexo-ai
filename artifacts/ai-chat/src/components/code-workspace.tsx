@@ -4,6 +4,7 @@ import { EditorView } from '@codemirror/view';
 import { Play, Square, Wrench, X, RotateCcw, Download, Terminal, ArrowLeft, Eye, Code2, ScrollText } from 'lucide-react';
 import {
   executeCode,
+  makePreviewHtml,
   MAX_PREVIEW_DIAGNOSTICS,
   reportPreviewDiagnostics,
   reportPreviewReview,
@@ -28,6 +29,7 @@ import {
   type SavedProject,
 } from '@/lib/project-workspace';
 import './code-workspace.css';
+import { WORKSPACE_DRAFT_KEY } from '@/lib/workspace-recovery';
 
 type Draft = { language: RunLanguage; code: string; edited: boolean };
 export type AgentWorkspaceTask = {
@@ -44,7 +46,7 @@ export type AgentWorkspaceTask = {
   projectEntrypoint?: string;
   projectStorageError?: string;
 };
-const DRAFT_KEY = 'nexo-code-drafts-v1';
+const DRAFT_KEY = WORKSPACE_DRAFT_KEY;
 const WRAP_KEY = 'nexo-code-wrap-v1';
 function readDrafts(): Record<string, Draft> {
   try { const v = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
@@ -69,10 +71,11 @@ type Props = {
   agentCode?: AgentWorkspaceTask | null;
   immersive?: boolean;
   waiting?: boolean;
+  visible?: boolean;
 };
 type View = 'preview' | 'code' | 'console';
 
-export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, onAskFix, canAsk, isLight, agentCode, immersive = false, waiting = false }: Props) {
+export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, onAskFix, canAsk, isLight, agentCode, immersive = false, waiting = false, visible = true }: Props) {
   const [view, setView] = useState<View>('preview');
   const key = conversationId ?? '__scratch';
   const [drafts, setDrafts] = useState<Record<string, Draft>>(readDrafts);
@@ -100,7 +103,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const outputFrameRef = useRef<number | null>(null);
   const draftsRef = useRef(drafts);
   const saveTimerRef = useRef<number | null>(null);
-  const panelRef = useFocusTrap<HTMLElement>(!immersive);
+  const panelRef = useFocusTrap<HTMLElement>(visible && !immersive);
   draftsRef.current = drafts;
   outputsRef.current = outputs;
 
@@ -283,6 +286,20 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     previewDiagnosticsRef.current = [];
     setPreviewDiagnostics([]); setPreviewComplete(false); setHasRun(false);
   }, [key]);
+  useEffect(() => {
+    if (!visible || waiting || agentCode || !project || preview || projectLanguage(project.entrypoint) !== 'html') return;
+    try {
+      const id = crypto.randomUUID();
+      setPreview(makePreviewHtml(bundleHtmlProject(project.files, project.entrypoint), id));
+      setPreviewId(id);
+      setPreviewComplete(false);
+      setHasRun(true);
+      setView('preview');
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : 'The saved preview could not be restored.');
+      setView('code');
+    }
+  }, [project, preview, agentCode, visible, waiting]);
   useEffect(() => () => {
     const current = abortRef.current;
     abortRef.current = null;
@@ -333,11 +350,13 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const workspaceSize = useWorkspaceSize();
   const differs = !!generated && draft.edited && (generated.code !== draft.code || generated.language !== draft.language);
   const close = () => {
+    abortRef.current?.abort();
     onClose();
     window.requestAnimationFrame(returnFocus);
   };
 
   useEffect(() => {
+    if (!visible) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       if (document.querySelector('[role="dialog"]')) return;
@@ -349,7 +368,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose, returnFocus, immersive]);
+  }, [onClose, returnFocus, immersive, visible]);
 
   const stop = () => {
     const current = abortRef.current;

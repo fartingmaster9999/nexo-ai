@@ -3,11 +3,11 @@ name: Chat and reasoning interface constraints
 description: User-requested constraints for the chat, reasoning panel, workspace, and core visual direction.
 ---
 
-Outside Agent mode, the IDE should open automatically when Nexo generates code, with no physical button to open it manually. The new-conversation control should have no visible text and should be integrated into the sidebar.
+Outside Agent mode, the IDE should open automatically when Nexo generates code. A Workspace control may reopen existing work, but should not launch an empty IDE in an unrelated chat. The new-conversation control should have no visible text and should be integrated into the sidebar.
 
-**Why:** The user explicitly reversed the opt-in IDE request: it should open only when code is generated, and the manual Workspace button should be removed. The smaller embedded conversation control remains requested.
+**Why:** The user originally removed the manual IDE launcher, but subsequently explicitly requested that users be able to reopen the workspace. Preserve that recovery path without adding an empty IDE launcher everywhere.
 
-**How to apply:** Open the IDE when a newly generated supported code block arrives, without reopening it on every streaming update after dismissal. Do not show a manual open button. Retain an accessible label and tooltip on the icon-only conversation button.
+**How to apply:** Auto-open on newly generated supported code, not every streaming update after dismissal. Offer reopening for conversations with generated code, saved drafts, or saved projects, including after reload. Reopening must not require a new AI request or replace user edits with older generated code. Retain an accessible label and tooltip on the icon-only conversation button.
 
 Agent requests should open a full-screen workspace inside Nexo immediately, hide conversation history, and keep chat/composer compact beside a large generated-project preview.
 

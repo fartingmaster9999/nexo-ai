@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { copyRawCode, rawCodeFromSource } from '../src/lib/code-clipboard.ts';
 import { makePreviewHtml, sanitizePreviewDiagnostic, reportPreviewReview, reportPreviewDiagnostics, readPreviewReview } from '../src/lib/code-runner.ts';
 import { sanitizePreviewReview, formatPreviewReview, previewReviewInstrumentation } from '../src/lib/preview-review.ts';
+import { savedWorkspaceState, WORKSPACE_DRAFT_KEY } from '../src/lib/workspace-recovery.ts';
 import { workspaceBounds, clampWorkspaceWidth } from '../src/lib/workspace-size.ts';
 import { loadEditorLanguage } from '../src/lib/editor-language.ts';
 import {
@@ -55,6 +56,28 @@ test('workspace bounds preserve readable chat and adapt to tablet/mobile', () =>
   assert.deepEqual(workspaceBounds(390), { min: 390, max: 390 });
   assert.equal(clampWorkspaceWidth(3000, workspaceBounds(1440, 420)), 684);
   assert.equal(clampWorkspaceWidth(-1, workspaceBounds(1440)), 320);
+});
+
+test('workspace reopening finds only the current conversation and survives independent corrupt records', () => {
+  const records = new Map([
+    ['nexo-project-v1:agent-chat', '{broken project'],
+    [WORKSPACE_DRAFT_KEY, JSON.stringify({
+      'code-chat': { language: 'javascript', code: 'console.log(42)', edited: true },
+      'empty-draft': { language: 'python', code: '', edited: true },
+      'invalid-draft': { language: 'shell', code: 'no' },
+    })],
+  ]);
+  const storage = { getItem: (key) => records.get(key) ?? null };
+  assert.deepEqual(savedWorkspaceState(storage, 'agent-chat'), { hasProject: true, hasDraft: false });
+  assert.deepEqual(savedWorkspaceState(storage, 'code-chat'), { hasProject: false, hasDraft: true });
+  assert.deepEqual(savedWorkspaceState(storage, 'empty-draft'), { hasProject: false, hasDraft: true });
+  assert.deepEqual(savedWorkspaceState(storage, 'invalid-draft'), { hasProject: false, hasDraft: false });
+  assert.deepEqual(savedWorkspaceState(storage, 'other-chat'), { hasProject: false, hasDraft: false });
+  assert.deepEqual(savedWorkspaceState(storage, null), { hasProject: false, hasDraft: false });
+  records.set(WORKSPACE_DRAFT_KEY, '{corrupt');
+  assert.deepEqual(savedWorkspaceState(storage, 'agent-chat'), { hasProject: true, hasDraft: false });
+  assert.deepEqual(savedWorkspaceState({ getItem: () => { throw new Error('blocked'); } }, 'agent-chat'),
+    { hasProject: false, hasDraft: false });
 });
 
 test('HTML preview is instrumented, network-restricted, and diagnostics are bounded', () => {
