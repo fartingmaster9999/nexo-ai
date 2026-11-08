@@ -22,6 +22,7 @@ import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, t
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
 import { executeCode, formatPreviewReview, readPreviewReview, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
 import { startRequestDeadline, RESPONSE_DEADLINE_MS, AGENT_BUILD_DEADLINE_MS, AGENT_REVIEW_DEADLINE_MS } from '@/lib/request-deadlines';
+import { MAX_AGENT_DEFERRED_RETRIES, waitForAgentRetry } from '@/lib/agent-retry';
 import type { AgentWorkspaceTask } from '@/components/code-workspace';
 import { savedWorkspaceState } from '@/lib/workspace-recovery';
 import {
@@ -490,10 +491,12 @@ function Home() {
     try {
       let agentHistory: AgentToolExchange[] = [];
       let agentToolCalls = 0;
+      let deferredRetries = 0;
       const agentProvider: { current: 'gemini' | 'groq' | null } = { current: requestImage ? 'gemini' : null };
       const agentModel: { current: string | null } = { current: null };
       const agentTask: { current: StreamEvent['agentTask'] | null } = { current: null };
       const nextAgentTool: { current: AgentToolRequest | null } = { current: null };
+      const nextAgentRetry: { current: StreamEvent['agentRetry'] | null } = { current: null };
       const encodedImage = requestImage ? {
         mimeType: requestImage.mimeType,
         data: await imageFileToBase64(requestImage.file),
@@ -501,6 +504,10 @@ function Home() {
       const acceptEvent = (eventData: StreamEvent) => {
         if (abortRef.current !== controller) return;
         if (eventData.error) throw new Error(eventData.error);
+        if (eventData.agentRetry) {
+          if (!requestAgent) throw new Error('The server returned an unexpected Agent retry request.');
+          nextAgentRetry.current = eventData.agentRetry;
+        }
         if (eventData.agentTool) {
           if (!requestAgent) throw new Error('The server returned an unexpected Agent tool request.');
           nextAgentTool.current = eventData.agentTool;
@@ -561,6 +568,8 @@ function Home() {
 
       while (true) {
         nextAgentTool.current = null;
+        nextAgentRetry.current = null;
+        const responseStart = received.length;
         const requestBody: Record<string, unknown> = {
           messages: requestMessages,
           deepthink: requestDeepthink,
@@ -570,6 +579,7 @@ function Home() {
         if (requestAgent && agentModel.current) requestBody.agentModel = agentModel.current;
         if (requestAgent && agentTask.current) requestBody.agentTask = agentTask.current;
         if (requestAgent && agentHistory.length) requestBody.agentHistory = agentHistory;
+        if (requestAgent) requestBody.agentRetryCount = deferredRetries;
         if (requestAgent) {
           let savedProject = null;
           try {
@@ -617,6 +627,27 @@ function Home() {
         clearResponseDeadline();
         clearResponseDeadline = undefined;
         if (controller.signal.aborted) return;
+        const retry = nextAgentRetry.current as StreamEvent['agentRetry'] | null;
+        if (retry) {
+          if (nextAgentTool.current || received.length !== responseStart ||
+              retry.history.length < agentHistory.length ||
+              agentHistory.some((entry, index) => retry.history[index]?.callId !== entry.callId)) {
+            throw new Error('The Agent returned an unsafe continuation. Existing workspace files are unchanged.');
+          }
+          if (deferredRetries >= MAX_AGENT_DEFERRED_RETRIES) {
+            throw new Error('Qwen is still rate-limited after automatic waiting. Try again after the provider window; no existing workspace files were changed by this rejection.');
+          }
+          deferredRetries++;
+          agentHistory = retry.history;
+          await waitForAgentRetry(controller.signal, retry.afterMs);
+          patchLast((message) => ({
+            ...message,
+            activity: message.activity?.map((entry) => entry.id === 'agent-provider-wait'
+              ? { ...entry, label: `Resuming the same Qwen request (continuation ${deferredRetries}/${MAX_AGENT_DEFERRED_RETRIES})`, status: 'complete' as const }
+              : entry),
+          }));
+          continue;
+        }
         const tool = nextAgentTool.current as AgentToolRequest | null;
         if (!requestAgent || !tool) break;
         if (agentHistory.length >= 6 || agentToolCalls >= 6) throw new Error('Nexo Agent reached its tool limit. Try a more focused request.');

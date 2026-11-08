@@ -21,6 +21,7 @@ import type {
 
 import type {
   AgentChatInput,
+  AgentStreamEventEnvelope,
   ApiError,
   ChatInput,
   HealthStatus,
@@ -321,7 +322,7 @@ export const getStreamAgentChatUrl = () => {
  * Selects an available model by task, supports server-configured Gemini image analysis, and can run a tool-free Gemma 4 review of bounded generated source and isolated execution results. Model, task, and surfaced fallback persist through bounded web-search and isolated-browser tool continuations. Tool activity and sources are returned as SSE events; private model reasoning and image bytes are not exposed.
  * @summary Stream an Agent-mode response
  */
-export const streamAgentChat = async (agentChatInput: AgentChatInput, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {
+export const streamAgentChat = async (agentChatInput: AgentChatInput, options?: Parameters<typeof customFetch>[1]): Promise<AgentStreamEventEnvelope> => {
 
     const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
@@ -337,7 +338,7 @@ export const streamAgentChat = async (agentChatInput: AgentChatInput, options?: 
     }
     return headers;
   };
-return customFetch<unknown>(getStreamAgentChatUrl(),
+return customFetch<AgentStreamEventEnvelope>(getStreamAgentChatUrl(),
   {
     ...options,
     method: 'POST',

@@ -230,6 +230,12 @@ export interface AgentChatInput {
   /** Preserve the server-selected capability route through tool continuations */
   agentTask?: AgentChatInputAgentTask;
   /**
+     * Number of browser-side rate-limit deferrals already consumed in this build; never reset after a tool continuation. Presence also advertises that this client supports agentRetry SSE handoffs. Omit for legacy clients.
+     * @minimum 0
+     * @maximum 3
+     */
+  agentRetryCount?: number;
+  /**
      * Browser IANA timezone, validated by the server for current-time context
      * @maxLength 100
      */
@@ -252,6 +258,25 @@ export interface AgentChatInput {
   image?: ImageAttachment;
   agentReview?: AgentReviewContext;
 }
+
+export interface AgentRateLimitRetry {
+  /**
+     * Explicit provider retry delay plus bounded safety margin, in milliseconds.
+     * @minimum 250
+     * @maximum 60250
+     */
+  afterMs: number;
+  /** @maxItems 6 */
+  history: AgentToolExchange[];
+}
+
+/**
+ * One JSON payload inside an Agent SSE frame; other existing event fields remain supported.
+ */
+export interface AgentStreamEventEnvelope {
+  agentRetry?: AgentRateLimitRetry;
+  [key: string]: unknown;
+ }
 
 export interface ApiError {
   error: string;

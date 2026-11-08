@@ -26,6 +26,12 @@ export interface AgentChatInput {
   /** Preserve the server-selected capability route through tool continuations */
   agentTask?: AgentChatInputAgentTask;
   /**
+     * Number of browser-side rate-limit deferrals already consumed in this build; never reset after a tool continuation. Presence also advertises that this client supports agentRetry SSE handoffs. Omit for legacy clients.
+     * @minimum 0
+     * @maximum 3
+     */
+  agentRetryCount?: number;
+  /**
      * Browser IANA timezone, validated by the server for current-time context
      * @maxLength 100
      */

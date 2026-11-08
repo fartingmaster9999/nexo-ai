@@ -23,7 +23,20 @@ export type AgentToolRequest = {
   arguments: { entrypoint: string; files: ProjectFile[] };
   history: AgentToolExchange[];
 };
-export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentProvider?: 'gemini' | 'groq'; agentTask?: AgentTask; agentTool?: AgentToolRequest };
+export type AgentRetryRequest = { afterMs: number; history: AgentToolExchange[] };
+export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentProvider?: 'gemini' | 'groq'; agentTask?: AgentTask; agentTool?: AgentToolRequest; agentRetry?: AgentRetryRequest };
+
+function isAgentHistory(history: unknown): history is AgentToolExchange[] {
+  return Array.isArray(history) && history.length <= 6 && history.every((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    const exchange = entry as Record<string, unknown>;
+    return (exchange.tool === 'web_search' || exchange.tool === 'run_code' || exchange.tool === 'write_project')
+      && typeof exchange.callId === 'string' && Boolean(exchange.callId) && exchange.callId.length <= 128
+      && typeof exchange.thoughtSignature === 'string' && exchange.thoughtSignature.length <= 4096
+      && exchange.arguments !== null && typeof exchange.arguments === 'object'
+      && typeof exchange.result === 'string' && exchange.result.length <= 8_000;
+  });
+}
 
 function isAgentToolRequest(value: unknown): value is AgentToolRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -45,15 +58,7 @@ function isAgentToolRequest(value: unknown): value is AgentToolRequest {
       return false;
     }
   }
-  return tool.history.every((entry) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
-    const exchange = entry as Record<string, unknown>;
-    return (exchange.tool === 'web_search' || exchange.tool === 'run_code' || exchange.tool === 'write_project')
-      && typeof exchange.callId === 'string'
-      && typeof exchange.thoughtSignature === 'string'
-      && exchange.arguments !== null && typeof exchange.arguments === 'object'
-      && typeof exchange.result === 'string' && exchange.result.length <= 8_000;
-  });
+  return isAgentHistory(tool.history);
 }
 
 /** Incremental SSE decoding: UTF-8, LF/CRLF, comments, and split frames. */
@@ -95,6 +100,14 @@ export class ChatEventDecoder {
       if (event.done !== undefined && typeof event.done !== 'boolean') throw new Error('The server sent an invalid response event.');
       if (event.agentTool !== undefined && !isAgentToolRequest(event.agentTool)) {
         throw new Error('The server sent an invalid Agent code request.');
+      }
+      if (event.agentRetry !== undefined) {
+        const retry = event.agentRetry;
+        if (!retry || typeof retry !== 'object' ||
+            !Number.isInteger(retry.afterMs) || retry.afterMs < 250 || retry.afterMs > 60_250 ||
+            !isAgentHistory(retry.history) || event.agentTool !== undefined) {
+          throw new Error('The server returned an invalid Agent retry request.');
+        }
       }
       return [event];
     });

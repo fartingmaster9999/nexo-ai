@@ -82,6 +82,9 @@ export const StreamImageChatResponse = zod.unknown()
 export const streamAgentChatBodyDeepthinkDefault = false;
 export const streamAgentChatBodyAgentModelMax = 100;
 
+export const streamAgentChatBodyAgentRetryCountMin = 0;
+export const streamAgentChatBodyAgentRetryCountMax = 3;
+
 export const streamAgentChatBodyTimeZoneMax = 100;
 
 export const streamAgentChatBodyMessagesItemContentMax = 12000;
@@ -139,6 +142,7 @@ export const StreamAgentChatBody = zod.object({
   "agentProvider": zod.enum(['gemini', 'groq']).optional().describe('Continue an Agent run on its selected provider after a rate-limit fallback'),
   "agentModel": zod.string().max(streamAgentChatBodyAgentModelMax).optional().describe('Continue an Agent run on its selected provider model'),
   "agentTask": zod.enum(['coding', 'planning', 'reasoning', 'fast_worker', 'document', 'synthesis', 'classification', 'multimodal']).optional().describe('Preserve the server-selected capability route through tool continuations'),
+  "agentRetryCount": zod.number().int().min(streamAgentChatBodyAgentRetryCountMin).max(streamAgentChatBodyAgentRetryCountMax).optional().describe('Number of browser-side rate-limit deferrals already consumed in this build; never reset after a tool continuation. Presence also advertises that this client supports agentRetry SSE handoffs. Omit for legacy clients.'),
   "timeZone": zod.string().max(streamAgentChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
   "messages": zod.array(zod.object({
   "role": zod.enum(['user', 'assistant']),

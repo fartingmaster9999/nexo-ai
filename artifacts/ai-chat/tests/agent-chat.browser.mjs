@@ -22,6 +22,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
     const originalFetch = window.fetch.bind(window);
     window.__agentRequests = [];
     window.__agentReviewRequests = [];
+    window.__agentDeferrals = [];
     const nativeSetTimeout = window.setTimeout.bind(window);
     window.setTimeout = (callback, delay, ...args) =>
       nativeSetTimeout(callback, delay === 25000 ? 50 : delay, ...args);
@@ -45,6 +46,18 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
           }
           const events = [
             { content: "Gemma review: test-only independent finding for Qwen to verify." },
+            { done: true }
+          ];
+          return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
+            headers: { "Content-Type": "text/event-stream" }
+          });
+        }
+        if ((window.__agentRequests.length === 3 && window.__agentDeferrals.length === 0) ||
+            (window.__agentRequests.length === 4 && window.__agentDeferrals.length === 1)) {
+          window.__agentDeferrals.push(body);
+          const events = [
+            { activity: { id: "agent-provider-wait", label: "Waiting for Qwen's input-token window", kind: "info", status: "running" } },
+            { agentRetry: { afterMs: 250, history: body.agentHistory ?? [] } },
             { done: true }
           ];
           return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
@@ -154,13 +167,14 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
           });
         }
         if (window.__agentRequests.length === 10) {
-          return new Promise((_, reject) => {
-            const abort = () => {
-              window.__agentAbortObserved = true;
-              reject(new DOMException("Request stopped", "AbortError"));
-            };
-            if (init.signal?.aborted) abort();
-            else init.signal?.addEventListener("abort", abort, { once: true });
+          init.signal.addEventListener("abort", () => { window.__agentAbortObserved = true; }, { once: true });
+          const events = [
+            { activity: { id: "agent-provider-wait", label: "Waiting for Qwen before resuming", kind: "info", status: "running" } },
+            { agentRetry: { afterMs: 60000, history: body.agentHistory ?? [] } },
+            { done: true }
+          ];
+          return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
+            headers: { "Content-Type": "text/event-stream" }
           });
         }
         if (window.__agentRequests.length === 11) {
@@ -276,6 +290,11 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await waitFor(() => evaluate(`window.__agentRequests.length === 5`), "Qwen Agent code continuation", 20000);
   await waitFor(() => evaluate(`document.body.textContent.includes("Qwen Agent ran and checked its code.")`), "Qwen Agent final answer", 20000);
   const qwenRequests = await evaluate(`window.__agentRequests.slice(3)`);
+  assert.equal(qwenRequests[0].body.agentRetryCount, 1, "an empty build waits and resumes instead of failing");
+  assert.equal(qwenRequests[1].body.agentRetryCount, 2, "the retry budget persists after code execution");
+  const deferredRequests = await evaluate(`window.__agentDeferrals`);
+  assert.deepEqual(qwenRequests[0].body.messages, deferredRequests[0].messages);
+  assert.deepEqual(qwenRequests[1].body.agentHistory, deferredRequests[1].agentHistory, "a deferred continuation reuses execution results without rerunning the code");
   assert.equal(qwenRequests[0].body.agentProvider, undefined, "new text tasks let the server choose the provider");
   assert.equal(qwenRequests[1].body.agentProvider, "groq", "the provider fallback persists for code execution follow-up");
   assert.equal(qwenRequests[1].body.agentModel, "qwen/qwen3.8-27b");

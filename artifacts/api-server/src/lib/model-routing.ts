@@ -355,7 +355,7 @@ export function codingRateLimitMessage(error: unknown): string {
     : Number.isFinite(delay) && delay >= 0 && delay <= 86400
       ? `Retry after at least ${Math.max(1, Math.ceil(delay))} seconds.`
       : "Retry after the provider window.";
-  return `Qwen rejected this coding request with HTTP 429. ${detail} ${nextStep} Your saved project is kept, and Nexo has not switched your code to GPT-OSS.`;
+  return `Qwen rejected this coding request with HTTP 429. ${detail} ${nextStep} This rejection did not change any existing workspace files. Nexo has not switched your code to GPT-OSS.`;
 }
 
 export function recordRateLimit(model: string, error: unknown) {

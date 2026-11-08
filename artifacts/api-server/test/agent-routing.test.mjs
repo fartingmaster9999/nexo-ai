@@ -257,7 +257,7 @@ test("coding waits repeatedly for explicit provider windows without replaying sa
   assert.equal(attempts, 3);
 });
 
-test("coding stops after three waits when Qwen keeps rejecting the request", async () => {
+test("coding stops after three waits when the browser retry budget is also exhausted", async () => {
   clearRateLimit(CODING_FALLBACK);
   let attempts = 0;
   const client = {
@@ -273,7 +273,7 @@ test("coding stops after three waits when Qwen keeps rejecting the request", asy
     await withServer(createApp(client), async (url) => {
       const events = await eventsFrom(await fetch(url, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list app" }] }),
+        body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list app" }], agentRetryCount: 3 }),
       }));
       assert.equal(events.filter((event) => event.activity?.id === "agent-provider-wait" && event.activity.status === "running").length, 3);
       assert.match(events.find((event) => event.error)?.error, /output tokens per minute/);
@@ -281,6 +281,115 @@ test("coding stops after three waits when Qwen keeps rejecting the request", asy
     });
     assert.equal(attempts, 4);
   } finally { clearRateLimit(CODING_FALLBACK); }
+});
+
+test("input-token exhaustion defers a complete run and a later request resumes without replaying tools", async () => {
+  clearRateLimit(CODING_FALLBACK);
+  const requests = [];
+  const history = [{
+    tool: "run_code", callId: "existing-run", thoughtSignature: "groq-agent-v1",
+    arguments: { language: "html", code: "<h1>Existing working code</h1>" },
+    result: "No runtime errors. These results must not be executed again.",
+  }];
+  const input = {
+    agentRetryCount: 0,
+    messages: [
+      { role: "user", content: "Old coding context ".repeat(200) },
+      { role: "assistant", content: "An old answer" },
+      { role: "user", content: "Finish this website" },
+    ],
+    agentHistory: history,
+  };
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      requests.push(request);
+      assert.equal(request.model, CODING_FALLBACK);
+      if (requests.length <= 4) throw new Groq.APIError(429, {
+        message: "PRIVATE input tokens per minute (ITPM): Limit 7000, Used 6658, Requested 3958.",
+      }, undefined, new Headers({ "retry-after": "0" }));
+      return textStream("The existing website is ready.");
+    } } },
+  };
+  try {
+    await withServer(createApp(client), async (url) => {
+      const send = (body) => fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }).then(eventsFrom);
+      const events = await send(input);
+      const deferred = events.find((event) => event.agentRetry)?.agentRetry;
+      assert.deepEqual(deferred?.history, history);
+      assert.equal(deferred.afterMs, 250);
+      assert.equal(events.some((event) => event.error || event.agentTool), false);
+      assert.ok(JSON.stringify(requests[1]).length < JSON.stringify(requests[0]).length);
+      const resumed = await send({ ...input, agentHistory: deferred.history, agentRetryCount: 1 });
+      assert.ok(resumed.some((event) => event.content === "The existing website is ready."));
+      assert.equal(resumed.some((event) => event.agentTool || event.error), false);
+      assert.equal(requests.at(-1).messages.filter((message) => message.role === "tool").length, 1);
+      assert.equal(JSON.stringify(events).includes("PRIVATE"), false);
+      assert.equal((await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...input, agentRetryCount: 4 }),
+      })).status, 400);
+    });
+    assert.equal(requests.length, 5);
+  } finally { clearRateLimit(CODING_FALLBACK); }
+});
+
+test("legacy clients receive a clear quota error rather than an unsupported retry handoff", async () => {
+  clearRateLimit(CODING_FALLBACK);
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      throw new Groq.APIError(429, {
+        message: "Input tokens per minute (ITPM): Limit 7000, Used 6658, Requested 3958.",
+      }, undefined, new Headers({ "retry-after": "0" }));
+    } } },
+  };
+  try {
+    await withServer(createApp(client), async (url) => {
+      const events = await eventsFrom(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Build a small website" }] }),
+      }));
+      assert.equal(events.some((event) => event.agentRetry), false);
+      const message = events.find((event) => event.error)?.error;
+      assert.match(message, /input tokens per minute/);
+      assert.equal(message.includes("Your saved project"), false);
+    });
+  } finally { clearRateLimit(CODING_FALLBACK); }
+});
+
+test("an empty deferred coding run does not repeat the Gemini planning pass", async () => {
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      assert.equal(request.model, CODING_FALLBACK);
+      return textStream("Qwen continued the request.");
+    } } },
+  };
+  const app = express();
+  app.use(pinoHttp({ logger: pino({ level: "silent" }) }));
+  app.use(express.json());
+  app.use("/api", createAgentRouter({
+    getApiKey: () => "configured-for-test",
+    getGroqClient: () => client,
+    getGeminiModels: async () => { assert.fail("a deferred coding request must not restart planning"); },
+    fetchImpl: async () => { assert.fail("no Gemini planning call is needed"); },
+  }));
+  await withServer(app, async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Build a small website" }],
+        agentProvider: "groq", agentRetryCount: 1,
+      }),
+    }));
+    assert.ok(events.some((event) => event.content === "Qwen continued the request."));
+  });
 });
 
 test("stopping the stream cancels a Qwen wait before another model call", async () => {

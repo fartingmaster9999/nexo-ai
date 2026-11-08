@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentProviderRetryDelay } from "../src/lib/agent-provider-wait.ts";
+import { agentProviderRetryDelay, agentProviderDeferDelay } from "../src/lib/agent-provider-wait.ts";
 
 const quota = { requestTooLarge: false, metric: "OTPM", retryAfter: "11" };
 
@@ -29,5 +29,16 @@ test("Agent never waits on oversized requests, daily quotas or unspecified windo
     { retryAfter: null }, { retryAfter: "invalid" }, { retryAfter: "3600" },
   ]) {
     assert.equal(agentProviderRetryDelay({ ...quota, ...overrides }, { count: 0, totalMs: 0 }, 170_000), undefined);
+  }
+});
+
+test("the reported 31-second input window can be handed off after the hosted wait budget is used", () => {
+  const input = { requestTooLarge: false, metric: "ITPM", retryAfter: "31" };
+  assert.equal(agentProviderRetryDelay(input, { count: 2, totalMs: 62500 }, 50000), undefined);
+  assert.equal(agentProviderDeferDelay(input, 0), 31250);
+  assert.equal(agentProviderDeferDelay(input, 2), 31250);
+  assert.equal(agentProviderDeferDelay(input, 3), undefined);
+  for (const changed of [{ metric: "TPD" }, { metric: "unknown" }, { requestTooLarge: true }, { retryAfter: null }]) {
+    assert.equal(agentProviderDeferDelay({ ...input, ...changed }, 0), undefined);
   }
 });

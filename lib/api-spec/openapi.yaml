@@ -129,9 +129,11 @@ paths:
               $ref: "#/components/schemas/AgentChatInput"
       responses:
         "200":
-          description: Server-sent JSON events containing answer text, provider/model changes, tool activity, sources, a browser code request, completion, or a safe error.
+          description: Server-sent JSON events containing answer text, provider/model changes, tool activity, sources, a browser code request, a bounded agentRetry handoff, completion, or a safe error. Retry handoffs carry completed history; clients wait and resend without executing tools again.
           content:
-            text/event-stream: {}
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/AgentStreamEventEnvelope"
         "400":
           description: Invalid conversation or tool history
           content:
@@ -259,6 +261,11 @@ components:
           type: string
           enum: [coding, planning, reasoning, fast_worker, document, synthesis, classification, multimodal]
           description: Preserve the server-selected capability route through tool continuations
+        agentRetryCount:
+          type: integer
+          minimum: 0
+          maximum: 3
+          description: Number of browser-side rate-limit deferrals already consumed in this build; never reset after a tool continuation. Presence also advertises that this client supports agentRetry SSE handoffs. Omit for legacy clients.
         timeZone:
           type: string
           maxLength: 100
@@ -287,6 +294,27 @@ components:
           $ref: "#/components/schemas/AgentReviewContext"
       required:
         - messages
+    AgentStreamEventEnvelope:
+      type: object
+      description: One JSON payload inside an Agent SSE frame; other existing event fields remain supported.
+      additionalProperties: true
+      properties:
+        agentRetry:
+          $ref: "#/components/schemas/AgentRateLimitRetry"
+    AgentRateLimitRetry:
+      type: object
+      required: [afterMs, history]
+      properties:
+        afterMs:
+          type: integer
+          minimum: 250
+          maximum: 60250
+          description: Explicit provider retry delay plus bounded safety margin, in milliseconds.
+        history:
+          type: array
+          maxItems: 6
+          items:
+            $ref: "#/components/schemas/AgentToolExchange"
     AgentReviewContext:
       type: object
       description: Bounded source and isolated-run results for a tool-free Gemma 4 code review.

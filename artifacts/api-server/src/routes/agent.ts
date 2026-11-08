@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import Groq from "groq-sdk";
-import { StreamAgentChatBody, type AgentToolExchange } from "@workspace/api-zod";
+import { StreamAgentChatBody, type AgentRateLimitRetry, type AgentToolExchange } from "@workspace/api-zod";
 import { isValidTimeZone } from "../lib/chat-request";
 import { GeminiSseDecoder, validateImageData } from "../lib/gemini-image";
 import { isPublicUrl } from "../lib/public-scraper";
@@ -20,7 +20,7 @@ import {
 } from "../lib/gemini-agent";
 import { AgentOutputLimitError, buildGroqAgentRequest, collectGroqAgentResponse, groqAgentFailure } from "../lib/groq-agent";
 import { getChatClient, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
-import { agentProviderRetryDelay, MAX_AGENT_PROVIDER_WAITS } from "../lib/agent-provider-wait";
+import { agentProviderRetryDelay, agentProviderDeferDelay, MAX_AGENT_PROVIDER_WAITS } from "../lib/agent-provider-wait";
 
 // Leave cleanup headroom below the API service's 180-second hosting limit.
 const AGENT_DEADLINE_MS = 170_000;
@@ -219,7 +219,8 @@ export function createAgentRouter({
     let geminiCandidates: string[] = [];
     let geminiPreferredLabel = "";
     let geminiFallback = false;
-    const hasNewCodingRequest = agentTask === "coding" && !(parsed.data.agentHistory?.length);
+    const hasNewCodingRequest = agentTask === "coding" && !(parsed.data.agentHistory?.length) &&
+      !(parsed.data.agentRetryCount ?? 0);
     const needsGeminiCatalog = Boolean(apiKey) && (
       parsed.data.agentProvider === "gemini" ||
       isProgramReview ||
@@ -444,7 +445,7 @@ export function createAgentRouter({
           await emit({ activity: { id: activityId, label: "Prompt Guard screening is unavailable; server-side restrictions remain active", kind: "security", status: "error" } });
         }
       }
-      if (activeTask === "coding" && history.length === 0 && apiKey && geminiCandidates.length) {
+      if (hasNewCodingRequest && apiKey && geminiCandidates.length) {
         const plannerCandidates = modelsForRequest(geminiCandidates).slice(0, 2);
         await emit({ activity: { id: "agent-gemini-plan", label: "Gemini is planning the implementation for Qwen", kind: "thinking", status: "running" } });
         for (const plannerModel of plannerCandidates) {
@@ -610,7 +611,7 @@ export function createAgentRouter({
       let groqFailureRetries = 0;
       let repairToolRequest = false;
       let outputBudgetRetried = false;
-      let compactRequest = false;
+      let compactRequest = (parsed.data.agentRetryCount ?? 0) > 0;
       const providerWait = { count: 0, totalMs: 0 };
       while (true) {
         controller.signal.throwIfAborted();
@@ -753,6 +754,27 @@ export function createAgentRouter({
           }
           if (activeProvider === "groq" && candidate.status === 429) {
             const diagnostics = recordRateLimit(activeModel, error);
+            if (!compactRequest && /^(TPM|ITPM)$/.test(diagnostics.metric)) {
+              const compacted = buildGroqAgentRequest(agentInput, now(), allowTools, activeModel, securityNote(), codingPlan, true);
+              if (repairToolRequest) {
+                compacted.temperature = 0.2;
+                compacted.messages.push({ role: "system", content: TOOL_REPAIR_INSTRUCTION });
+              }
+              const compactedBytes = Buffer.byteLength(JSON.stringify(compacted), "utf8");
+              if (compactedBytes < requestBytes) {
+                compactRequest = true;
+                req.log.info({ event: "agent.context.compacted", provider: "groq", model: activeModel,
+                  status: 429, metric: diagnostics.metric, requestBytes, compactedBytes,
+                }, "Reducing input context before the next Qwen retry");
+                if (diagnostics.requestTooLarge) {
+                  await emit({ activity: { id: "agent-context-recovery",
+                    label: "Reducing older input context to fit Qwen's token allowance.",
+                    kind: "info", status: "running",
+                  } });
+                  continue;
+                }
+              }
+            }
             req.log.warn({
               event: "agent.provider.rate_limited",
               provider: activeProvider, model: activeModel, task: activeTask, status: 429,
@@ -780,7 +802,7 @@ export function createAgentRouter({
                 waitAttempt: providerWait.count, totalWaitMs: providerWait.totalMs,
               }, "Waiting for Qwen's explicit short retry window");
               await emit({ activity: { id: "agent-provider-wait",
-                label: `Waiting ${Math.ceil(retryDelay / 1000)} seconds for Qwen (retry ${providerWait.count}/${MAX_AGENT_PROVIDER_WAITS}). Your project is kept; you can stop at any time.`,
+                label: `Waiting ${Math.ceil(retryDelay / 1000)} seconds for Qwen (retry ${providerWait.count}/${MAX_AGENT_PROVIDER_WAITS}). No code is rerun while waiting; you can stop at any time.`,
                 kind: "info", status: "running",
               } });
               await waitForGeminiRetry(controller.signal, retryDelay);
@@ -788,6 +810,22 @@ export function createAgentRouter({
                 kind: "info", status: "complete",
               } });
               continue;
+            }
+            const deferDelay = activeTask === "coding" && parsed.data.agentRetryCount !== undefined
+              ? agentProviderDeferDelay(diagnostics, parsed.data.agentRetryCount ?? 0) : undefined;
+            if (deferDelay !== undefined) {
+              req.log.info({ event: "agent.provider.deferred", provider: "groq", model: activeModel,
+                delayMs: deferDelay, retryCount: parsed.data.agentRetryCount ?? 0,
+                metric: diagnostics.metric, completedToolCalls: history.length,
+              }, "Handing the provider wait to the browser to preserve the hosted request budget");
+              await emit({ activity: { id: "agent-provider-wait",
+                label: `Qwen is still limited. Waiting ${Math.ceil(deferDelay / 1000)} seconds before resuming this request.`,
+                kind: "info", status: "running",
+              } });
+              await emit({ agentRetry: { afterMs: deferDelay, history } satisfies AgentRateLimitRetry });
+              await emit({ done: true });
+              res.end();
+              return;
             }
             const nextIndex = groqCandidates.findIndex((model, index) => index > groqModelIndex && !isCoolingDown(model));
             if (nextIndex >= 0) {
