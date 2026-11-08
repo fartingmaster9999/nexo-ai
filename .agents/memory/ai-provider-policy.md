@@ -51,11 +51,11 @@ Explicit output allowances may justify one smaller-budget retry on the same mode
 
 **How to apply:** Learn caps only from verified provider quota metadata, bound recovery attempts, keep existing features, and reject truncated tool output before execution. Explain when a complete change cannot fit; do not claim the provider's limits have been bypassed.
 
-An Agent continuation can hit the output window after its project already ran successfully. Honor one explicit short provider retry window without rerunning saved tools or discarding the project.
+An Agent continuation can hit the output window after its project already ran successfully. Honor a bounded series of explicit short provider retry windows without rerunning saved tools or discarding the project.
 
-**Why:** The code-generation response used most of the available output allowance, and the immediate final-response call failed despite a working preview. Showing that as a failed build concealed the actual cause.
+**Why:** The code-generation response used most of the available output allowance, and the immediate final-response call failed despite a working preview. Showing that as a failed build concealed the actual cause. The user explicitly chose longer automatic waiting over having to resend a request after another short-window rejection.
 
-**How to apply:** Distinguish short-window exhaustion from an oversized response or daily quota; use the provider's stated delay rather than guessing, preserve tool results, remain on Qwen, and keep the wait bounded and cancellable.
+**How to apply:** Distinguish short-window exhaustion from an oversized response or daily quota; use the provider's stated delay rather than guessing, preserve tool results, remain on Qwen, and keep all waits bounded and cancellable. Reserve hosting-deadline headroom for the resumed response rather than spending the entire request lifetime waiting.
 
 A successful fallback should be described as a model switch that allows continued chatting, not as overall usage exhaustion.
 

@@ -157,7 +157,7 @@ test("coding quota failure never substitutes GPT-OSS or claims a fallback succee
   } finally { clearRateLimit(CODING_FALLBACK); }
 });
 
-test("coding waits once for an explicit short provider window without replaying saved tools", async () => {
+test("coding waits repeatedly for explicit provider windows without replaying saved tools", async () => {
   clearRateLimit(CODING_FALLBACK);
   let attempts = 0;
   const client = {
@@ -166,7 +166,7 @@ test("coding waits once for an explicit short provider window without replaying 
       if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
       assert.equal(request.model, CODING_FALLBACK);
       assert.match(request.messages.at(-1).content, /already checked/);
-      if (++attempts === 1) throw new Groq.APIError(429, {
+      if (++attempts <= 2) throw new Groq.APIError(429, {
         message: "Output tokens per minute (OTPM): Limit 1000, Used 985, Requested 241. Please try again in 0s.",
       }, undefined, new Headers());
       return textStream("The checked project is ready.");
@@ -184,10 +184,74 @@ test("coding waits once for an explicit short provider window without replaying 
       }),
     }));
     assert.ok(events.some((event) => event.activity?.id === "agent-provider-wait" && event.activity.status === "running"));
+    assert.equal(events.filter((event) => event.activity?.id === "agent-provider-wait" && event.activity.status === "running").length, 2);
     assert.ok(events.some((event) => event.content === "The checked project is ready."));
     assert.equal(events.some((event) => event.agentTool || event.error), false);
   });
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 3);
+});
+
+test("coding stops after three waits when Qwen keeps rejecting the request", async () => {
+  clearRateLimit(CODING_FALLBACK);
+  let attempts = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      assert.equal(request.model, CODING_FALLBACK);
+      attempts++;
+      throw new Groq.APIError(429, { message: "Output tokens per minute (OTPM): Limit 1000, Used 831, Requested 349." }, undefined, new Headers({ "retry-after": "0" }));
+    } } },
+  };
+  try {
+    await withServer(createApp(client), async (url) => {
+      const events = await eventsFrom(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list app" }] }),
+      }));
+      assert.equal(events.filter((event) => event.activity?.id === "agent-provider-wait" && event.activity.status === "running").length, 3);
+      assert.match(events.find((event) => event.error)?.error, /output tokens per minute/);
+      assert.equal(events.some((event) => event.agentTool || event.notice), false);
+    });
+    assert.equal(attempts, 4);
+  } finally { clearRateLimit(CODING_FALLBACK); }
+});
+
+test("stopping the stream cancels a Qwen wait before another model call", async () => {
+  clearRateLimit(CODING_FALLBACK);
+  let attempts = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      assert.equal(request.model, CODING_FALLBACK);
+      attempts++;
+      throw new Groq.APIError(429, { message: "Output tokens per minute (OTPM): Limit 1000, Used 831, Requested 349." }, undefined, new Headers({ "retry-after": "10" }));
+    } } },
+  };
+  try {
+    await withServer(createApp(client), async (url) => {
+      const controller = new AbortController();
+      const response = await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+        body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list app" }] }),
+      });
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let received = "";
+      try {
+        while (!received.includes("agent-provider-wait")) {
+          const chunk = await reader.read();
+          assert.equal(chunk.done, false);
+          received += decoder.decode(chunk.value, { stream: true });
+        }
+        controller.abort();
+        await assert.rejects(reader.read(), /abort/i);
+      } finally { reader.releaseLock(); }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(attempts, 1);
+    });
+  } finally { clearRateLimit(CODING_FALLBACK); }
 });
 
 test("quota diagnostics recover explicit delays without leaking provider text or confusing daily quotas", () => {

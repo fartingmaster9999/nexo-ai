@@ -8,7 +8,7 @@ import { searchWeb, type SearchResult } from "../lib/web-search";
 import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry";
 import {
   agentGenerationModelIds, agentSecurityModelIds, availableModelCatalog, classifyAgentTask,
-  isAgentTask, isCoolingDown, clearRateLimit, codingRateLimitMessage, modelsForRequest, recordRateLimit, rateLimitDiagnostics, reduceOutputBudget, shortProviderRetryDelay, modelLabel, routeAgentTask,
+  isAgentTask, isCoolingDown, clearRateLimit, codingRateLimitMessage, modelsForRequest, recordRateLimit, rateLimitDiagnostics, reduceOutputBudget, modelLabel, routeAgentTask,
   routeGeminiAgentTask, type AgentTask,
 } from "../lib/model-routing";
 import { reviewAgentTool, screenPromptInjection } from "../lib/agent-security";
@@ -20,6 +20,7 @@ import {
 } from "../lib/gemini-agent";
 import { AgentOutputLimitError, buildGroqAgentRequest, collectGroqAgentResponse, groqAgentFailure } from "../lib/groq-agent";
 import { getChatClient, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
+import { agentProviderRetryDelay, MAX_AGENT_PROVIDER_WAITS } from "../lib/agent-provider-wait";
 
 // Leave cleanup headroom below the API service's 180-second hosting limit.
 const AGENT_DEADLINE_MS = 170_000;
@@ -608,7 +609,7 @@ export function createAgentRouter({
       let groqFailureRetries = 0;
       let repairToolRequest = false;
       let outputBudgetRetried = false;
-      let providerWindowRetried = false;
+      const providerWait = { count: 0, totalMs: 0 };
       while (true) {
         controller.signal.throwIfAborted();
         const allowTools = !isProgramReview && toolCalls < MAX_AGENT_TOOL_CALLS;
@@ -740,17 +741,20 @@ export function createAgentRouter({
               await emit({ activity: { id: "agent-output-budget", label: "Fitting the build to Qwen's output allowance…", kind: "info", status: "running" } });
               continue;
             }
-            const retryDelay = activeTask === "coding" && !providerWindowRetried && !diagnostics.requestTooLarge
-              ? shortProviderRetryDelay(diagnostics.retryAfter) : undefined;
+            const retryDelay = activeTask === "coding"
+              ? agentProviderRetryDelay(diagnostics, providerWait, AGENT_DEADLINE_MS - (Date.now() - startedAt))
+              : undefined;
             if (retryDelay !== undefined) {
-              providerWindowRetried = true;
+              providerWait.count++;
+              providerWait.totalMs += retryDelay;
               // A completed rejected attempt is not a stalled provider stream.
               clearTimeout(idle);
               req.log.warn({ event: "agent.provider.wait", provider: "groq", model: activeModel,
                 delayMs: retryDelay, metric: diagnostics.metric,
+                waitAttempt: providerWait.count, totalWaitMs: providerWait.totalMs,
               }, "Waiting for Qwen's explicit short retry window");
               await emit({ activity: { id: "agent-provider-wait",
-                label: `Qwen needs ${Math.ceil(retryDelay / 1000)} seconds before continuing. Your project is kept.`,
+                label: `Waiting ${Math.ceil(retryDelay / 1000)} seconds for Qwen (retry ${providerWait.count}/${MAX_AGENT_PROVIDER_WAITS}). Your project is kept; you can stop at any time.`,
                 kind: "info", status: "running",
               } });
               await waitForGeminiRetry(controller.signal, retryDelay);
