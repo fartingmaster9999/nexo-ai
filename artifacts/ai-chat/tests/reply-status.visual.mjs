@@ -142,6 +142,7 @@ try {
   await delay(100);
 
   const baseline = await evaluate('window.__verifyReplyStatusFixture()');
+  const transitions = await evaluate('window.__runReplyStatusTransitions()');
   await cdp('Emulation.setEmulatedMedia', {
     media: 'screen',
     features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
@@ -157,6 +158,7 @@ try {
 
   const errors = [
     ...baseline.errors,
+    ...transitions.errors,
     ...reducedMotion.errors,
     ...restoredMotion.errors,
   ];
@@ -166,7 +168,7 @@ try {
     console.error(JSON.stringify({ geometry: baseline.geometry, loopSamples: baseline.loopSamples }, null, 2));
     process.exitCode = 1;
   } else {
-    console.log(`ReplyStatus visual regression checks passed (${baseline.geometry.length} states, ${baseline.loopSamples.length} loop endpoints, 32 rerenders, reduced-motion toggled).`);
+    console.log(`ReplyStatus visual regression checks passed (${baseline.geometry.length} states, ${baseline.loopSamples.length} loop endpoints, live transitions, 32 rerenders, reduced-motion toggled).`);
   }
 } finally {
   socket?.close();

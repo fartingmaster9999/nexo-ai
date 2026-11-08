@@ -1,6 +1,8 @@
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
-import { ReplyStatus, type ReplyMode } from '../src/components/answer-details';
+import { useState } from 'react';
+import { LiveReplyIndicator, ReplyStatus, ThinkingPanel, type ChatMessage, type ReplyMode } from '../src/components/answer-details';
+import { MessageMarkdown } from '../src/components/message-markdown';
 import '../src/nexo.css';
 import '../src/refine.css';
 import '../src/motion.css';
@@ -14,6 +16,44 @@ const cases: Array<{ mode: ReplyMode; compact: boolean }> = [
   { mode: 'search', compact: true },
 ];
 
+type TransitionStage = 'normal' | 'deep' | 'search' | 'search-complete' | 'complete';
+let setTransitionStage: ((stage: TransitionStage) => void) | undefined;
+
+function LiveTransitionFixture() {
+  const [stage, setStage] = useState<TransitionStage>('normal');
+  setTransitionStage = setStage;
+  const live = stage !== 'complete';
+  const hasContent = stage === 'deep' || stage === 'search' || stage === 'search-complete' || stage === 'complete';
+  const searching = stage === 'search';
+  const message: ChatMessage = {
+    role: 'assistant',
+    content: hasContent ? 'This streamed reply stays mounted while its status changes.' : '',
+    deepthink: stage !== 'normal',
+    agentMode: true,
+    activity: [
+      { id: 'agent-work', label: 'Agent is checking sources', kind: 'thinking', status: live ? 'running' : 'complete' },
+      ...(searching
+        ? [{ id: 'web-search', label: 'Searching the web for sources', kind: 'search' as const, status: 'running' as const }]
+        : stage === 'search-complete'
+          ? [{ id: 'web-search', label: 'Searching the web for sources', kind: 'search' as const, status: 'complete' as const }]
+          : []),
+    ],
+  };
+
+  return (
+    <section data-testid="transition-case" data-stage={stage}>
+      <ThinkingPanel message={message} live={live} index={999} />
+      <div className="message-text" data-testid="transition-message">
+        {!hasContent
+          ? <LiveReplyIndicator message={message} live={live} />
+          : <MessageMarkdown content={message.content} live={live} conversationId="fixture" messageId="transition" />}
+        {hasContent && live && <LiveReplyIndicator message={message} live={live} hasContent />}
+        {hasContent && live && <span className="typing-caret" aria-hidden="true" />}
+      </div>
+    </section>
+  );
+}
+
 function Fixture() {
   return (
     <>
@@ -25,6 +65,7 @@ function Fixture() {
           </div>
         );
       })}
+      <LiveTransitionFixture />
       <div className="term is-live">
         <span className="term-ellipsis" aria-hidden="true" />
         <div className="agent-activity-list">
@@ -60,6 +101,69 @@ Object.assign(window, {
         render();
       });
     }
+  },
+  __runReplyStatusTransitions() {
+    const errors: string[] = [];
+    const transition = document.querySelector<HTMLElement>('[data-testid="transition-case"]')!;
+    const readStatuses = () => [...transition.querySelectorAll<HTMLElement>('.reply-status')];
+    const verifyStatus = (mode: ReplyMode | null, label?: string, compact?: boolean) => {
+      const statuses = readStatuses();
+      if (statuses.length !== (mode ? 1 : 0)) {
+        errors.push(`${stageName()}: expected ${mode ? 1 : 0} live indicators, found ${statuses.length}`);
+      }
+      const status = statuses[0];
+      if (!mode || !status) return;
+      if (status.dataset.mode !== mode) errors.push(`${stageName()}: expected ${mode} indicator, found ${status.dataset.mode}`);
+      if (status.getAttribute('role') !== 'status') errors.push(`${stageName()}: indicator lost its status role`);
+      if (status.getAttribute('aria-label') !== label) errors.push(`${stageName()}: expected accessible label "${label}", found "${status.getAttribute('aria-label')}"`);
+      if (status.classList.contains('is-compact') !== Boolean(compact)) errors.push(`${stageName()}: incorrect compact indicator state`);
+    };
+    const stageName = () => transition.dataset.stage ?? 'transition';
+    const setStage = (stage: TransitionStage) => {
+      flushSync(() => setTransitionStage?.(stage));
+    };
+    const verifyAgentRunning = () => {
+      const dot = transition.querySelector<HTMLElement>('.status-running .agent-activity-dot');
+      if (!dot || getComputedStyle(dot).animationName !== 'rsTmDot') errors.push(`${stageName()}: running Agent marker is not animated`);
+    };
+
+    const toggle = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
+    if (!toggle) errors.push('transition: Agent activity toggle is missing');
+    else flushSync(() => toggle.click());
+    const button = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
+    if (button?.getAttribute('aria-label') !== 'Hide Agent activity') errors.push(`transition: Agent activity accessible label is incorrect (${button?.getAttribute('aria-label') ?? 'missing'})`);
+    verifyStatus('normal', 'Working on it', false);
+    verifyAgentRunning();
+
+    setStage('deep');
+    verifyStatus('deep', 'Deepthink is working', true);
+    const streamedParagraph = transition.querySelector<HTMLElement>('.message-text p');
+    if (!streamedParagraph) errors.push('deep: streamed reply paragraph is missing');
+
+    setStage('search');
+    verifyStatus('search', 'Searching the web for sources', false);
+    if (transition.querySelector('.message-text .reply-status')) errors.push('search: a thinking indicator competes with the search indicator');
+    if (!transition.querySelector('[data-testid="status-searching-999"]')) errors.push('search: search activity indicator is not inside the activity panel');
+    if (transition.querySelector('.message-text p') !== streamedParagraph) errors.push('search: unrelated streamed reply content was remounted');
+
+    setStage('search-complete');
+    verifyStatus('deep', 'Deepthink is working', true);
+    if (transition.querySelector('[data-testid="status-searching-999"]')) errors.push('search-complete: search indicator remained after search stopped');
+    if (transition.querySelector('.message-text p') !== streamedParagraph) errors.push('search-complete: unrelated streamed reply content was remounted');
+
+    setStage('complete');
+    verifyStatus(null);
+    if (transition.querySelector('.term-ellipsis')) errors.push('complete: live header ellipsis remained after completion');
+    if (transition.querySelector('.term.is-live')) errors.push('complete: activity panel remained marked live');
+    if (transition.querySelector('.message-text p') !== streamedParagraph) errors.push('complete: streamed reply content was remounted');
+    const activityButton = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
+    if (activityButton?.getAttribute('aria-label') !== 'Hide Agent activity') errors.push('complete: Agent activity accessible label changed incorrectly');
+    for (const dot of transition.querySelectorAll<HTMLElement>('.agent-activity-dot')) {
+      if (getComputedStyle(dot).animationName !== 'none' || getComputedStyle(dot, '::after').animationName !== 'none') {
+        errors.push('complete: finished Agent marker is still animated');
+      }
+    }
+    return { errors };
   },
   __verifyReplyStatusFixture() {
     const errors: string[] = [];

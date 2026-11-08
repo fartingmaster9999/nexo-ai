@@ -81,6 +81,12 @@ export const ReplyStatus = memo(function ReplyStatus({ mode, label, compact = fa
   );
 });
 
+/** Show the reply's thinking mode unless a live search activity owns the status. */
+export function LiveReplyIndicator({ message, live, hasContent = false }: { message: ChatMessage; live: boolean; hasContent?: boolean }) {
+  if (!live || isSearching(message, live) || (hasContent && !message.deepthink)) return null;
+  return <ReplyStatus mode={message.deepthink ? 'deep' : 'normal'} compact={hasContent} />;
+}
+
 /** Backwards-compatible wrapper. */
 export function BrainThinking({ deep }: { deep: boolean }) {
   return <ReplyStatus mode={deep ? 'deep' : 'normal'} />;

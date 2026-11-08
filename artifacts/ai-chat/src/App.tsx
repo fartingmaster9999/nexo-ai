@@ -18,7 +18,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { SettingsDialog } from '@/components/settings-dialog';
 import { HomeLanding } from '@/components/home-landing';
 import NotFound from '@/pages/not-found';
-import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type ChatMessage } from '@/components/answer-details';
+import { LiveReplyIndicator, NoticeBanner, ThinkingPanel, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
 import { executeCode, formatPreviewReview, readPreviewReview, readPreviewInteractions, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
 import { formatInteractionResult, interactionChecksHaveIssues } from '@/lib/preview-interactions';
@@ -1309,12 +1309,12 @@ function Home() {
                         {message.role === 'assistant' && <NoticeBanner notices={message.notices} index={index} />}
                         {message.role === 'assistant' && <ThinkingPanel message={message} live={isLive} index={index} />}
                         <div className={`message-text ${message.role === 'assistant' ? 'markdown' : ''}`} data-testid={`message-content-${index}`}>
-                          {isPending ? (isSearching(message, isLive) ? null : <ReplyStatus mode={replyDeepthink ? 'deep' : 'normal'} />) : message.role === 'assistant' ? (
+                          {isPending ? <LiveReplyIndicator message={{ ...message, deepthink: replyDeepthink }} live={isLive} /> : message.role === 'assistant' ? (
                             <MessageMarkdown content={displayContent} live={isLive} conversationId={activeConversation!.id}
                               messageId={message.id ?? `legacy-${index}`} quizProgress={message.quizProgress}
                               onQuizProgress={updateQuizProgress} sources={message.sources} />
                           ) : message.content}
-                          {isLive && displayContent && replyDeepthink && !isSearching(message, isLive) && <ReplyStatus mode="deep" compact />}
+                          {isLive && displayContent && <LiveReplyIndicator message={{ ...message, deepthink: replyDeepthink }} live={isLive} hasContent />}
                           {isLive && displayContent && <span className="typing-caret" aria-hidden="true" />}
                         </div>
                         {message.role === 'user' && message.imageAttached && (
