@@ -21,6 +21,7 @@ import NotFound from '@/pages/not-found';
 import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
 import { executeCode, formatPreviewReview, readPreviewReview, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
+import { startRequestDeadline, RESPONSE_DEADLINE_MS, AGENT_BUILD_DEADLINE_MS, AGENT_REVIEW_DEADLINE_MS } from '@/lib/request-deadlines';
 import type { AgentWorkspaceTask } from '@/components/code-workspace';
 import { savedWorkspaceState } from '@/lib/workspace-recovery';
 import {
@@ -479,7 +480,12 @@ function Home() {
     };
     flushRef.current = flushOutput;
     controller.signal.addEventListener('abort', flushOutput, { once: true });
-    const deadline = window.setTimeout(() => controller.abort(new Error('The response timed out. Your partial answer is kept; please try again.')), 180000);
+    const clearBuildDeadline = startRequestDeadline(controller,
+      requestAgent ? AGENT_BUILD_DEADLINE_MS : RESPONSE_DEADLINE_MS,
+      requestAgent
+        ? 'The Agent reached its build time limit. Your saved project is kept; ask Nexo to continue from the existing files.'
+        : 'The response timed out. Your partial answer is kept; please try again.');
+    let clearResponseDeadline: (() => void) | undefined;
     let connectTimeout: number | null = null;
     try {
       let agentHistory: AgentToolExchange[] = [];
@@ -582,6 +588,8 @@ function Home() {
         }
         if (encodedImage && agentProvider.current === 'gemini') requestBody.image = encodedImage;
         const endpoint = requestAgent ? '/api/agent' : requestImage ? '/api/chat/image' : '/api/chat';
+        clearResponseDeadline = startRequestDeadline(controller, RESPONSE_DEADLINE_MS,
+          'This response timed out. Your saved project and partial answer are kept; ask Nexo to continue from the existing files.');
         connectTimeout = window.setTimeout(() => controller.abort(new Error('The server did not respond in time. Please try again.')), 30000);
         const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}${endpoint}`, {
           method: 'POST',
@@ -606,6 +614,8 @@ function Home() {
         }
         if (!response.body) throw new Error('This browser could not open the response stream. Please try again.');
         await consumeChatStream(response.body, controller, acceptEvent);
+        clearResponseDeadline();
+        clearResponseDeadline = undefined;
         if (controller.signal.aborted) return;
         const tool = nextAgentTool.current as AgentToolRequest | null;
         if (!requestAgent || !tool) break;
@@ -726,7 +736,8 @@ function Home() {
           const abortReview = () => reviewController.abort(controller.signal.reason);
           if (controller.signal.aborted) abortReview();
           else controller.signal.addEventListener('abort', abortReview, { once: true });
-          let reviewConnectTimeout: number | undefined;
+          const clearReviewDeadline = startRequestDeadline(reviewController, AGENT_REVIEW_DEADLINE_MS,
+            'Gemma 4 review took too long; continuing with the run results.');
           try {
             const reviewBody: Record<string, unknown> = {
               messages: requestMessages,
@@ -756,8 +767,6 @@ function Home() {
             if (imageMatch && imageMatch[1].length <= 2_000_000) {
               reviewBody.image = { mimeType: 'image/png', data: imageMatch[1].replace(/\s/g, '') };
             }
-            reviewConnectTimeout = window.setTimeout(() =>
-              reviewController.abort(new Error('Gemma 4 review connection timed out.')), 45_000);
             const reviewResponse = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/agent`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -765,8 +774,6 @@ function Home() {
               body: JSON.stringify(reviewBody),
               signal: reviewController.signal,
             });
-            window.clearTimeout(reviewConnectTimeout);
-            reviewConnectTimeout = undefined;
             if (!reviewResponse.ok || !reviewResponse.body) {
               throw new Error('Gemma 4 reviewer is unavailable.');
             }
@@ -788,7 +795,7 @@ function Home() {
             gemmaReviewText = 'The Gemma 4 review was unavailable. Continue using the source, runtime output, and browser checks.';
             setReviewActivity('error', 'Gemma 4 review unavailable; Qwen will continue with the run results');
           } finally {
-            if (reviewConnectTimeout !== undefined) window.clearTimeout(reviewConnectTimeout);
+            clearReviewDeadline();
             controller.signal.removeEventListener('abort', abortReview);
             reviewController.abort();
           }
@@ -874,7 +881,8 @@ function Home() {
         }));
       }
     } finally {
-      window.clearTimeout(deadline);
+      clearBuildDeadline();
+      clearResponseDeadline?.();
       if (connectTimeout !== null) window.clearTimeout(connectTimeout);
       flushOutput();
       persistConversations();

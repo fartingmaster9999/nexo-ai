@@ -17,8 +17,20 @@ export class AgentOutputLimitError extends Error {
 }
 const MAX_TOOL_ARGUMENT_CHARS = 140_000;
 
+export class AgentToolFormatError extends Error {
+  constructor(readonly code: "invalid_tool_json" | "incomplete_tool_request") {
+    super(code === "invalid_tool_json"
+      ? "Qwen returned invalid Agent tool arguments."
+      : "Qwen returned an incomplete Agent tool request.");
+    this.name = "AgentToolFormatError";
+  }
+}
+
 /** Never retain upstream messages, failed_generation, prompts, or response bodies. */
 export function groqAgentFailure(error: unknown) {
+  if (error instanceof AgentToolFormatError) {
+    return { kind: "groq_generation", code: error.code, status: undefined, retryable: true, repairTool: true };
+  }
   if (!(error instanceof Groq.APIError)) return undefined;
   if (error instanceof Groq.APIUserAbortError) {
     return { kind: "groq_cancelled", code: "cancelled", status: undefined, retryable: false, repairTool: false };
@@ -232,12 +244,12 @@ export async function collectGroqAgentResponse(
     try {
       args = JSON.parse(call.arguments);
     } catch {
-      throw new Error("Qwen returned invalid Agent tool arguments.");
+      throw new AgentToolFormatError("invalid_tool_json");
     }
     if (!call.callId || call.callId.length > 128 ||
         (call.name !== "web_search" && call.name !== "run_code" && call.name !== "write_project") ||
         !args || typeof args !== "object" || Array.isArray(args)) {
-      throw new Error("Qwen returned an incomplete Agent tool request.");
+      throw new AgentToolFormatError("incomplete_tool_request");
     }
     return {
       tool: call.name as "web_search" | "run_code" | "write_project",

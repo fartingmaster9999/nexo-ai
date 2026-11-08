@@ -160,8 +160,8 @@ function safeAgentFailureDetails(error: unknown) {
   if (error instanceof GeminiAgentApiError) {
     return { failureKind: "gemini_http", failureReason: `HTTP ${error.status}` };
   }
-  if (error instanceof Groq.APIError) {
-    const failure = groqAgentFailure(error)!;
+  const failure = groqAgentFailure(error);
+  if (failure) {
     return {
       failureKind: failure.kind,
       failureReason: failure.code,

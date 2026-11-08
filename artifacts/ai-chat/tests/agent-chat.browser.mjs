@@ -22,6 +22,9 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
     const originalFetch = window.fetch.bind(window);
     window.__agentRequests = [];
     window.__agentReviewRequests = [];
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = (callback, delay, ...args) =>
+      nativeSetTimeout(callback, delay === 25000 ? 50 : delay, ...args);
     window.__agentAbortObserved = false;
     window.fetch = async (input, init = {}) => {
       const url = typeof input === "string" ? input : input.url;
@@ -29,6 +32,17 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
         const body = JSON.parse(init.body);
         if (body.agentReview) {
           window.__agentReviewRequests.push({ url, body });
+          if (window.__agentReviewRequests.length === 2) {
+            return new Response(new ReadableStream({
+              start(stream) {
+                stream.enqueue(new TextEncoder().encode(": reviewer connected but stalled\\n\\n"));
+                init.signal.addEventListener("abort", () => {
+                  window.__reviewAbortObserved = true;
+                  stream.error(init.signal.reason);
+                }, { once: true });
+              },
+            }), { headers: { "Content-Type": "text/event-stream" } });
+          }
           const events = [
             { content: "Gemma review: test-only independent finding for Qwen to verify." },
             { done: true }
@@ -268,6 +282,8 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.equal(qwenRequests[1].body.agentTask, "coding");
   assert.equal(qwenRequests[1].body.agentHistory[0].callId, "qwen-browser-code");
   assert.match(qwenRequests[1].body.agentHistory[0].result, /qwen-run-ok/);
+  assert.match(qwenRequests[1].body.agentHistory[0].result, /Gemma 4 review was unavailable/);
+  assert.equal(await evaluate(`window.__reviewAbortObserved`), true, "a stalled optional reviewer is cancelled without stopping Qwen");
 
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-send-message"]'))`), "composer after Qwen response");
   await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);

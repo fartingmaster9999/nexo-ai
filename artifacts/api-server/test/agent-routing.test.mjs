@@ -437,6 +437,37 @@ test("Agent caps connection recovery and does not retry authorization failures",
   }
 });
 
+test("malformed Qwen tool JSON is repaired once before execution, then fails clearly if still invalid", async () => {
+  for (const recover of [true, false]) {
+    let attempts = 0;
+    const client = {
+      models: { list: async () => ({ data: catalog }) },
+      chat: { completions: { create: async (request) => {
+        if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+        assert.equal(request.model, CODING_FALLBACK);
+        attempts++;
+        if (attempts > 1) assert.match(request.messages.at(-1).content, /valid tool call/);
+        if (recover && attempts > 1) return toolStream();
+        return (async function* () {
+          yield { choices: [{ delta: { tool_calls: [{
+            index: 0, id: "bad", function: { name: "run_code", arguments: '{"PRIVATE":"unfinished' },
+          }] } }] };
+        })();
+      } } },
+    };
+    await withServer(createApp(client), async (url) => {
+      const events = await eventsFrom(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Build a browser counter" }] }),
+      }));
+      assert.equal(attempts, 2);
+      assert.equal(JSON.stringify(events).includes("PRIVATE"), false);
+      assert.equal(events.some((event) => event.agentTool), recover);
+      if (!recover) assert.match(events.find((event) => event.error)?.error, /valid tool request after a retry/);
+    });
+  }
+});
+
 test("Agent routes coding to Qwen, exposes security signals, and preserves model/task on continuation", async () => {
   const modelRequests = [];
   const securityCalls = [];

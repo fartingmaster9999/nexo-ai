@@ -14,3 +14,7 @@ Prune whole older turns for API context, not saved history or pieces of the newe
 Keep partial replies on interruption; do not automatically regenerate a response after streaming has begun.
 **Why:** A retry can duplicate output, spend additional quota, and overwrite useful partial work.
 **How to apply:** Distinguish cancellation, connection failures, and actual provider quota errors. Release request resources and allow a new user-initiated message.
+
+Budget a multi-step Agent build separately from each provider request, and keep optional reviews within their own cancellable deadline.
+**Why:** Automatic quota waits and independent post-run reviews can consume most of a single response-sized budget before the coding model gets a chance to continue. A reviewer that keeps its connection alive must not monopolize the whole build.
+**How to apply:** Reserve time for code execution and subsequent provider calls, respect each hosted request's deadline, and let Qwen proceed with runtime checks when the optional reviewer exceeds its budget. This does not guarantee recovery from an unrelated provider or generation failure.
