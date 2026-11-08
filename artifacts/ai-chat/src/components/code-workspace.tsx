@@ -21,6 +21,7 @@ import { useFocusTrap } from '@/hooks/use-focus-trap';
 import { ProjectFilesPanel } from './project-files-panel';
 import {
   bundleHtmlProject,
+  createAgentProject,
   createSavedProject,
   projectLanguage,
   readSavedProject,
@@ -154,7 +155,13 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     } catch (error) {
       persistenceError ||= error instanceof Error ? error.message : 'Saved project data could not be read.';
     }
-    const next = createSavedProject(agentCode.projectFiles, agentCode.projectEntrypoint, previous?.selectedPaths ?? []);
+    let next: SavedProject;
+    try {
+      next = createAgentProject(agentCode.projectFiles, agentCode.projectEntrypoint, previous);
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : 'The project update is invalid; existing files were kept.');
+      return;
+    }
     setProject(next);
     setActiveProjectPath(next.entrypoint);
     if (conversationId && !persistenceError) {

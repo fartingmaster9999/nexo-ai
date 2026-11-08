@@ -1,7 +1,7 @@
 export type InputMessage = { role: "user" | "assistant"; content: string };
 
 export function isCodingRequest(text: string): boolean {
-  return /```|\b(code|coding|debug|program(?:ming)?|script|function|algorithm|numpy|scipy|matplotlib|python|javascript|typescript|html|css|sql|compile|compiler|traceback|stack trace)\b/i.test(text);
+  return /```|\b(code|coding|debug|program(?:ming)?|script|function|algorithms?|numpy|scipy|matplotlib|python|javascript|typescript|html|css|sql|react|vue|svelte|jsx|tsx|java|rust|kotlin|swift|ruby|golang|bash|frontend|backend|refactor|unit tests?|regex|pseudocode|compile|compiler|traceback|stack trace|website|webpage|web app|web site|web page)\b|\b(?:build|create|make|implement|fix|improve|redesign)\b[\s\S]{0,60}\b(?:app|site|game|calculator|counter|dashboard|todo|to-do|task list|button|interface|UI|component)\b/i.test(text);
 }
 
 /** 2024 is the user's search policy, not a claim about a model's training cutoff. */

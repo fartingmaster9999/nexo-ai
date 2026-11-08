@@ -13,6 +13,24 @@ Run generated Python and JavaScript only in an opaque-origin browser sandbox wit
 
 **How to apply:** Keep previews in `sandbox="allow-scripts"` iframes without `allow-same-origin`; bind messages to the exact iframe and a per-preview ID, cap diagnostic count and text, and display/forward diagnostics only as plain untrusted text.
 
+Do not enable `allow-forms` to make generated forms work. Support local JavaScript submit handlers while retaining the native submission and network restrictions.
+
+**Why:** The iframe sandbox can block form submission before a valid page's `submit` listener runs. A generated task list consequently showed no runtime errors but its Add button did nothing. Successful rendering and structural metrics are not proof that the controls work.
+
+**How to apply:** Use validated, cancellable local submit events for button activation, Enter, and `requestSubmit`; preserve application cancellation and input validation. Retain the opaque origin and `form-action 'none'`, and verify actual interactions in the real sandbox rather than granting form navigation.
+
+New Agent-authored files should be available for subsequent Agent edits by default, but explicit context deselections and manual-project privacy must survive revisions and reopening.
+
+**Why:** Follow-up requests lacked the source of the app Agent had just built, so the model guessed a replacement instead of editing the real project. Agent-authored source is already provider-visible; arbitrary manual files are not.
+
+**How to apply:** Default newly generated files into context, preserve existing opt-outs, and do not silently share older unselected or manual files. If an existing project has no files shared, ask for file selection before editing instead of inventing its implementation.
+
+Agent project updates are file upserts, not implicit deletion requests. Validate the combined project before replacing saved files or the working preview.
+
+**Why:** A real revision returned only updated HTML; treating it as a complete replacement dropped its stylesheet and broke the app. Missing assets must not turn an attempted improvement into data loss.
+
+**How to apply:** Retain unmentioned files, keep the entrypoint in update payloads, enforce total limits after merging, and reject missing local assets before committing. Feed validation errors back to Agent for correction while preserving the previous project. File deletion remains an explicit user action.
+
 Load only the editor language in use and Python packages needed by the executed code, rather than preloading all language modes or scientific packages.
 
 **Why:** The user explicitly requested not to load every language or every Python library. Earlier requests to make scientific libraries available do not mean they should all be downloaded and imported on each run.

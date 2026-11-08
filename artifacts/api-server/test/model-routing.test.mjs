@@ -31,8 +31,21 @@ test("Agent chooses only catalog-listed task models and identifies compatible fa
   const ids = [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK];
   assert.deepEqual(routeAgentTask("planning", ids).models, [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK]);
   assert.equal(routeAgentTask("planning", ids).fallback, false);
-  assert.deepEqual(routeAgentTask("coding", ids).models, [CODING_FALLBACK, SMALL_MODEL, PRIMARY_MODEL]);
+  assert.deepEqual(routeAgentTask("coding", ids).models, [CODING_FALLBACK]);
   assert.equal(routeAgentTask("coding", ids).fallback, false);
+  assert.deepEqual(routeAgentTask("coding", [PRIMARY_MODEL, SMALL_MODEL]).models, []);
+  assert.equal(classifyAgentTask({ messages: [{ role: "user", content: "Make me a task list app" }] }), "coding");
+  assert.equal(classifyAgentTask({ messages: [{ role: "user", content: "Make a website for my club" }] }), "coding");
+  assert.equal(classifyAgentTask({ messages: [{ role: "user", content: "Write a React component" }] }), "coding");
+  assert.equal(classifyAgentTask({ messages: [
+    { role: "user", content: "Build a task list app" },
+    { role: "assistant", content: "The preview is ready." },
+    { role: "user", content: "Add a filter to show only unfinished tasks" },
+  ] }), "coding");
+  assert.equal(classifyAgentTask({ messages: [{ role: "user", content: "Finish checking it" }],
+    agentHistory: [{ tool: "write_project" }],
+  }), "coding");
+  assert.equal(classifyAgentTask({ messages: [{ role: "user", content: "Create\n a task list app" }] }), "coding");
 
   const onlyQwen = routeAgentTask("classification", [CODING_FALLBACK]);
   assert.deepEqual(onlyQwen.models, [CODING_FALLBACK]);

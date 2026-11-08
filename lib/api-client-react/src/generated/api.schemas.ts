@@ -195,6 +195,28 @@ export interface AgentToolExchange {
   sources?: AgentSource[];
 }
 
+export type AgentReviewContextLanguage = typeof AgentReviewContextLanguage[keyof typeof AgentReviewContextLanguage];
+
+
+export const AgentReviewContextLanguage = {
+  python: 'python',
+  javascript: 'javascript',
+  html: 'html',
+} as const;
+
+/**
+ * Bounded source and isolated-run results for a tool-free Gemma 4 code review.
+ */
+export interface AgentReviewContext {
+  language: AgentReviewContextLanguage;
+  /** @maxLength 24000 */
+  source: string;
+  /** @maxLength 8000 */
+  output?: string;
+  /** @maxLength 4000 */
+  browserChecks?: string;
+}
+
 export interface AgentChatInput {
   /** Use high thinking level instead of medium */
   deepthink?: boolean;
@@ -228,6 +250,7 @@ export interface AgentChatInput {
      */
   projectFiles?: AgentProjectFile[];
   image?: ImageAttachment;
+  agentReview?: AgentReviewContext;
 }
 
 export interface ApiError {

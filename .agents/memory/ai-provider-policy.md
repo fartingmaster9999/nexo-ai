@@ -15,11 +15,23 @@ The user chose their own Gemini API key for image understanding and Nexo Agent. 
 
 **How to apply:** Read `GEMINI_API_KEY` from the server environment only. Never pass it to the browser, write it into tracked configuration, or reuse it as a Groq credential.
 
-The user permits fallback between models within Groq: use GPT-OSS 120B normally, GPT-OSS 20B after ordinary-chat quota exhaustion, and Qwen3.8 27B after coding quota exhaustion. Prefer a dedicated coder model only if Groq actually makes one available.
+Prefer Gemini for non-coding Agent work when configured. For coding, Gemini may supply an implementation brief, but Qwen remains responsible for generating and repairing code. Favor useful planning and verification over minimum latency.
 
-**Why:** The user requested these model-specific fallbacks to keep chatting after per-model limits are reached. This changes the model policy, not the prohibition on OpenAI-hosted inference or Replit AI billing.
+**Why:** The user reported zero Gemini calls alongside many Groq calls and explicitly said longer waits were acceptable if quality improved. They still require coding to be handled by Qwen, not GPT-OSS.
 
-**How to apply:** Make downgrades visible, do not invent unavailable model IDs, and do not imply model switching can bypass an account-wide quota.
+**How to apply:** Do not route coding around Gemini merely because its code generator is Qwen. Keep the planning pass bounded, advisory, and free of tools or hidden thought disclosure. Explain when Gemini is unavailable on the actual running server and let Qwen continue without inventing quota exhaustion. Ordinary non-Agent chat remains on Groq.
+
+Use only live-catalog Gemma 4 models for the Agent's independent post-run code review. Feed its bounded findings and the isolated runner's outputs/checks to Qwen as untrusted tool results; Gemma must not modify code or execute tools.
+
+**Why:** The user wants a second model to spot defects in the generated program for Qwen to fix. The browser preview deliberately uses an opaque-origin sandbox and does not expose page pixels or DOM text to the parent.
+
+**How to apply:** Review generated source, runtime output, and sanitized structural preview checks. A generated plot image may be reviewed when supplied; do not claim visual screenshot inspection for HTML websites. If Gemma 4 is unavailable, let Qwen continue without the review and state that it was skipped. Never weaken preview isolation to capture content.
+
+Use GPT-OSS 120B for ordinary text chat, with GPT-OSS 20B as its quota fallback. Coding belongs to Qwen, in both ordinary chat and Agent mode; do not fall back to GPT-OSS for code generation.
+
+**Why:** After reporting repeated errors and poor generated code, the user explicitly changed the coding policy: “Coding should be handled by qwen not gpt-oss.” This supersedes the earlier coding-fallback arrangement, without changing the provider restriction.
+
+**How to apply:** Pin coding and its tool continuations to the catalog-verified Qwen model, ignoring stale GPT/Gemini route hints from older clients. Retain coding intent across follow-ups such as “add a filter”; classifying only the latest wording previously sent project edits back to GPT-OSS. If Qwen is unavailable or genuinely limited, explain that rather than substituting GPT-OSS. Keep Gemini image analysis separate. Never invent unavailable model IDs or imply that routing bypasses provider quotas.
 
 Validate Groq model capabilities with a live request instead of trusting the SDK's general option types.
 
@@ -29,9 +41,21 @@ Validate Groq model capabilities with a live request instead of trusting the SDK
 
 Do not interpret every Groq 429 as exhausted daily requests. Token and request limits are independent and organization-wide; reasoning and repeated conversation history consume tokens.
 
-**Why:** A reported quota issue was reproducible as Nexo downgrading while direct 120B calls still succeeded with daily request allowance remaining. Later diagnostics confirmed a daily token (TPD) rejection despite remaining daily requests. Cached cooldowns can also reject new requests without checking the provider, and a single oversized request does not prove a model is generally unavailable.
+**Why:** A reported quota issue was reproducible as Nexo downgrading while direct 120B calls still succeeded with daily request allowance remaining. Diagnostics subsequently identified both daily token (TPD) and output-token-per-minute (OTPM) rejections despite remaining daily requests. A single build can exceed an output allowance even when the request counter is almost unused. Cached cooldowns and oversized requests are not proof of model-wide exhaustion.
 
 **How to apply:** Prefer models outside provider retry windows, but treat cooldowns as routing hints rather than proof of current exhaustion. When every compatible candidate is cached, permit one bounded live check of the earliest-expiring candidate and clear its cooldown on success. Do not cache request-size rejections as model-wide outages. Retain only allowlisted quota diagnostics (metric, numeric counters, reset/retry headers), never raw upstream bodies or prompts. Distinguish observed limits from an unproven historical cause, especially across Replit and Vercel accounts.
+
+Explicit output allowances may justify one smaller-budget retry on the same model, not a change of coding provider or an incomplete project.
+
+**Why:** Large code generations were being described as exhausted model quotas and sent to GPT-OSS. Fitting a small complete implementation can recover from a size rejection, but truncating tool JSON or replacing an existing project with a stub would lose correctness.
+
+**How to apply:** Learn caps only from verified provider quota metadata, bound recovery attempts, keep existing features, and reject truncated tool output before execution. Explain when a complete change cannot fit; do not claim the provider's limits have been bypassed.
+
+An Agent continuation can hit the output window after its project already ran successfully. Honor one explicit short provider retry window without rerunning saved tools or discarding the project.
+
+**Why:** The code-generation response used most of the available output allowance, and the immediate final-response call failed despite a working preview. Showing that as a failed build concealed the actual cause.
+
+**How to apply:** Distinguish short-window exhaustion from an oversized response or daily quota; use the provider's stated delay rather than guessing, preserve tool results, remain on Qwen, and keep the wait bounded and cancellable.
 
 A successful fallback should be described as a model switch that allows continued chatting, not as overall usage exhaustion.
 

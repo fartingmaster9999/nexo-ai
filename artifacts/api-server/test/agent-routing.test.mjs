@@ -4,7 +4,7 @@ import express from "express";
 import pino from "pino";
 import pinoHttp from "pino-http";
 import Groq from "groq-sdk";
-import { groqAgentFailure } from "../src/lib/groq-agent.ts";
+import { buildGroqAgentRequest, collectGroqAgentResponse, groqAgentFailure } from "../src/lib/groq-agent.ts";
 import {
   CODING_FALLBACK,
   PRIMARY_MODEL,
@@ -79,6 +79,122 @@ function textStream(content) {
   })();
 }
 
+test("coding pins Qwen through an output-budget retry and tool continuation, ignoring old GPT/Gemini routes", async () => {
+  clearRateLimit(CODING_FALLBACK);
+  const requests = [];
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if (request.model !== CODING_FALLBACK) {
+        assert.ok([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model), "GPT-OSS must not generate code");
+        return { choices: [{ message: { content: "0" } }] };
+      }
+      requests.push(request);
+      if (requests.length === 1) throw new Groq.APIError(429, {
+        message: "Output tokens per minute (OTPM): Limit 1000, Requested 1434.",
+      }, undefined, new Headers());
+      if (requests.length === 2) {
+        assert.equal(request.max_completion_tokens, 850);
+        assert.match(request.messages[0].content, /compact, complete index\.html/);
+        return toolStream();
+      }
+      assert.equal(request.max_completion_tokens, 850);
+      assert.match(request.messages.at(-1).content, /stdout: 4/);
+      return textStream("Qwen checked the result.");
+    } } },
+  };
+  await withServer(createApp(client), async (url) => {
+    const body = {
+      messages: [
+        { role: "user", content: "Make me a task list app" },
+        { role: "assistant", content: "The project is ready." },
+        { role: "user", content: "Add a filter to show unfinished tasks" },
+      ],
+      agentProvider: "gemini", agentModel: PRIMARY_MODEL, agentTask: "reasoning",
+    };
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }));
+    const tool = events.find((event) => event.agentTool)?.agentTool;
+    assert.ok(tool);
+    assert.ok(events.some((event) => event.model === CODING_FALLBACK));
+    assert.equal(events.some((event) => event.model?.includes("gpt-oss")), false);
+    const continued = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, agentHistory: [{
+        tool: tool.tool, callId: tool.callId, thoughtSignature: tool.thoughtSignature,
+        arguments: tool.arguments, result: "stdout: 4",
+      }] }),
+    }));
+    assert.ok(continued.some((event) => event.content === "Qwen checked the result."));
+  });
+  assert.equal(requests.length, 3);
+});
+
+test("coding quota failure never substitutes GPT-OSS or claims a fallback succeeded", async () => {
+  clearRateLimit(CODING_FALLBACK);
+  const attempts = [];
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      attempts.push(request.model);
+      throw new Groq.APIError(429, { message: "Requests per minute (RPM): Limit 30, Used 30, Requested 1" }, undefined, new Headers());
+    } } },
+  };
+  try {
+    await withServer(createApp(client), async (url) => {
+      const events = await eventsFrom(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Build a browser counter" }] }),
+      }));
+      assert.match(events.find((event) => event.error)?.error, /Qwen rejected this coding request/);
+      assert.equal(events.some((event) => event.notice), false);
+    });
+    assert.deepEqual(attempts, [CODING_FALLBACK]);
+  } finally { clearRateLimit(CODING_FALLBACK); }
+});
+
+test("coding waits once for an explicit short provider window without replaying saved tools", async () => {
+  clearRateLimit(CODING_FALLBACK);
+  let attempts = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      assert.equal(request.model, CODING_FALLBACK);
+      assert.match(request.messages.at(-1).content, /already checked/);
+      if (++attempts === 1) throw new Groq.APIError(429, {
+        message: "Output tokens per minute (OTPM): Limit 1000, Used 985, Requested 241.",
+      }, undefined, new Headers({ "retry-after": "0" }));
+      return textStream("The checked project is ready.");
+    } } },
+  };
+  await withServer(createApp(client), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Build a task list app" }],
+        agentHistory: [{
+          tool: "run_code", callId: "saved-run", thoughtSignature: "groq-agent-v1",
+          arguments: { language: "javascript", code: "console.log('checked')" }, result: "already checked",
+        }],
+      }),
+    }));
+    assert.ok(events.some((event) => event.activity?.id === "agent-provider-wait" && event.activity.status === "running"));
+    assert.ok(events.some((event) => event.content === "The checked project is ready."));
+    assert.equal(events.some((event) => event.agentTool || event.error), false);
+  });
+  assert.equal(attempts, 2);
+});
+
+test("truncated Qwen tool output is rejected before incomplete code can run", async () => {
+  const stream = (async function* () {
+    yield { choices: [{ delta: { tool_calls: [{ index: 0, id: "partial", function: { name: "write_project", arguments: '{"files":[' } }] } }] };
+    yield { choices: [{ delta: {}, finish_reason: "length" }] };
+  })();
+  await assert.rejects(collectGroqAgentResponse(stream, new AbortController().signal), /No incomplete code was run/);
+});
 test("Agent rechecks one live model when every candidate has a cached cooldown", async () => {
   const models = [SMALL_MODEL, PRIMARY_MODEL, CODING_FALLBACK];
   for (let index = 0; index < models.length; index++) markRateLimited(models[index], String(600 + index * 100));
@@ -106,6 +222,25 @@ test("Agent rechecks one live model when every candidate has a cached cooldown",
   } finally {
     models.forEach(clearRateLimit);
   }
+});
+
+test("Agent context includes complete project code once and retains newer selected edits", () => {
+  const files = [{ path: "index.html", content: "<p>ORIGINAL_SOURCE_MARKER</p>" }];
+  const input = {
+    messages: [{ role: "user", content: "Build a task list" }],
+    projectFiles: files,
+    agentHistory: [{
+      tool: "write_project", callId: "saved-project", thoughtSignature: "groq-agent-v1",
+      arguments: { files, entrypoint: "index.html" }, result: "The preview loaded.",
+    }],
+  };
+  const unchanged = JSON.stringify(buildGroqAgentRequest(input).messages);
+  assert.equal(unchanged.split("ORIGINAL_SOURCE_MARKER").length - 1, 1);
+  const edited = JSON.stringify(buildGroqAgentRequest({
+    ...input, projectFiles: [{ path: "index.html", content: "<p>NEW_SELECTED_EDIT</p>" }],
+  }).messages);
+  assert.match(edited, /ORIGINAL_SOURCE_MARKER/);
+  assert.match(edited, /NEW_SELECTED_EDIT/);
 });
 
 test("Agent logs actual request-size rejection and never claims untried models exhausted", async () => {

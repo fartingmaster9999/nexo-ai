@@ -1,5 +1,5 @@
 import type { ChatCompletionCreateParamsStreaming } from "groq-sdk/resources/chat/completions";
-import { PRIMARY_MODEL } from "./model-routing";
+import { PRIMARY_MODEL, outputTokenBudget, outputBudgetInstruction } from "./model-routing";
 import { widgetInstructions } from "./widget-instructions";
 
 export const CHAT_MODEL = PRIMARY_MODEL;
@@ -76,13 +76,14 @@ export function buildChatRequest(input: ChatInput, now = new Date(), context: Re
         : {}),
     temperature: 0.6,
     top_p: 0.95,
-    max_completion_tokens: input.deepthink === true ? 8192 : 4096,
+    max_completion_tokens: outputTokenBudget(context.model ?? CHAT_MODEL, input.deepthink === true ? 8192 : 4096),
     tool_choice: "none",
     messages: [
       {
         role: "system",
         content: [
           "You are Nexo AI. Answer directly: concise for simple questions, thorough for complex ones. Verify calculations; acknowledge uncertainty. Never invent facts, citations, tool results or capabilities.",
+          outputBudgetInstruction(context.model ?? CHAT_MODEL),
           `The server's current UTC date and time is ${now.toISOString()}. The user's timezone is ${timeZone}; their current local date and time is ${localTime}. Use this clock context, not your training date.`,
           context.webContext
             ? "The application searched and scraped the web externally for this question. Use the supplied public-source excerpts for changing facts. Check dates, distinguish forecasts from confirmed events, and cite actual source URLs with Markdown links."

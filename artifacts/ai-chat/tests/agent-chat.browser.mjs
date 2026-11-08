@@ -21,11 +21,22 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await evaluate(`(() => {
     const originalFetch = window.fetch.bind(window);
     window.__agentRequests = [];
+    window.__agentReviewRequests = [];
     window.__agentAbortObserved = false;
     window.fetch = async (input, init = {}) => {
       const url = typeof input === "string" ? input : input.url;
       if (url.endsWith("/api/agent")) {
         const body = JSON.parse(init.body);
+        if (body.agentReview) {
+          window.__agentReviewRequests.push({ url, body });
+          const events = [
+            { content: "Gemma review: test-only independent finding for Qwen to verify." },
+            { done: true }
+          ];
+          return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\\n\\n").join(""), {
+            headers: { "Content-Type": "text/event-stream" }
+          });
+        }
         window.__agentRequests.push({ url, body });
         if (window.__agentRequests.length === 1) {
           const events = ${JSON.stringify(liveEvents)} ?? [
@@ -215,6 +226,11 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.equal(requests[1].body.agentHistory[0].callId, liveTool?.callId ?? "browser-code-1");
   assert.equal(requests[1].body.agentHistory[0].thoughtSignature, liveTool?.thoughtSignature ?? "opaque-browser-signature");
   assert.match(requests[1].body.agentHistory[0].result, new RegExp(expectedOutput));
+  const agentReviews = await evaluate(`window.__agentReviewRequests`);
+  assert.equal(agentReviews.length, 1);
+  assert.match(agentReviews[0].body.agentReview.source, /console\.log/);
+  assert.equal(agentReviews[0].body.agentReview.language, "javascript");
+  assert.match(requests[1].body.agentHistory[0].result, /test-only independent finding for Qwen to verify/);
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute("aria-pressed")`), "true");
   assert.equal(await evaluate(`Object.keys(localStorage).some(key => key === "nexo-agent" && localStorage.getItem(key) === "1")`), true);
 
@@ -235,7 +251,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await cdp("Input.insertText", { text: "Start a code task that I can stop." });
   await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
   await waitFor(() => evaluate(`window.__agentRequests.length === 3`), "second Agent code request");
-  await waitFor(() => evaluate(`document.querySelector('[data-testid="panel-workspace"] .ws-agent-label')?.textContent === "Agent running"`), "running Agent code");
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-stop-response"]'))`), "running Agent code");
   await evaluate(`document.querySelector('[data-testid="button-stop-response"]').click()`);
   await waitFor(() => evaluate(`document.querySelector('[data-testid="panel-workspace"]')?.textContent.includes("Stopped by you.")`), "Agent code cancellation");
   assert.equal(await evaluate(`window.__agentRequests.length`), 3, "stopped browser code is not sent for another model turn");
@@ -268,7 +284,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.match(htmlContinuation[1].body.agentHistory[0].result, /HTML_PREVIEW_RUNTIME_FAILURE/);
   assert.match(htmlContinuation[2].body.agentHistory[1].result, /no runtime errors were reported/);
   assert.equal(await evaluate(`document.querySelector('[data-testid="frame-preview"]').getAttribute("sandbox")`), "allow-scripts");
-  assert.ok(await evaluate(`document.querySelector(".cm-content")?.textContent.includes("Corrected preview")`), "The revised HTML is shown in the workspace editor");
+  assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute("srcdoc")?.includes("Corrected preview")`), "The revised HTML is shown in the isolated preview");
 
   await cdp("DOM.setFileInputFiles", { nodeId: imageInput, files: [imagePath] });
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="image-attachment-preview"]'))`), "image attachment for failed Agent request");
@@ -300,17 +316,25 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
   await waitFor(() => evaluate(`window.__agentRequests.length === 12`), "multi-file project execution", 30000);
   await waitFor(() => evaluate(`document.body.textContent.includes("Nexo saved and previewed the multi-file project.")`), "project Agent response", 20000);
+  if (await evaluate(`Boolean(document.querySelector('[data-testid="button-open-workspace"]'))`)) {
+    await evaluate(`document.querySelector('[data-testid="button-open-workspace"]').click()`);
+  }
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="tab-view-code"]'))`), "project code tab");
+  await evaluate(`document.querySelector('[data-testid="tab-view-code"]').click()`);
   await waitFor(() => evaluate(`document.querySelector('[data-testid="project-files-panel"]')?.textContent.includes("3 files")`), "visible saved project files");
   assert.equal(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute('sandbox')`), "allow-scripts");
   assert.equal(await evaluate(`document.querySelector('[data-testid="project-files-panel"]')?.textContent.includes("index.html")`), true);
   const storedProject = await evaluate(`Object.entries(localStorage).find(([key]) => key.startsWith("nexo-project-v1:"))?.[1]`);
   assert.ok(storedProject);
   assert.equal(JSON.parse(storedProject).files.length, 3);
-  assert.deepEqual(JSON.parse(storedProject).selectedPaths, [], "files are not shared with Agent until the user selects them");
-  assert.equal((await evaluate(`window.__agentRequests[11].body.projectFiles`)), undefined, "the generated project is not implicitly re-sent as selected context");
+  assert.deepEqual(JSON.parse(storedProject).selectedPaths, ["index.html", "styles.css", "app.js"], "new Agent files stay selected for their build follow-up");
+  const projectFollowup = await evaluate(`window.__agentRequests[11].body`);
+  assert.equal(projectFollowup.projectFiles.length, 3, "Agent-authored project files stay available for its code follow-up");
+  assert.match(projectFollowup.agentHistory.at(-1).result, /test-only independent finding for Qwen to verify/);
 
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-send-message"]'))`), "composer after project Agent response");
-  await evaluate(`document.querySelector('[aria-label="Share styles.css with Nexo"]').click()`);
+  await evaluate(`document.querySelector('[aria-label="Share index.html with Nexo"]').click()`);
+  await evaluate(`document.querySelector('[aria-label="Share app.js with Nexo"]').click()`);
   await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
   await cdp("Input.insertText", { text: "Revise the selected project style." });
   await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);

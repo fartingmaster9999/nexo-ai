@@ -1,4 +1,5 @@
 import type Groq from "groq-sdk";
+import { isCodingRequest } from "./chat-policy";
 
 export const PRIMARY_MODEL = "openai/gpt-oss-120b";
 export const SMALL_MODEL = "openai/gpt-oss-20b";
@@ -86,7 +87,7 @@ const preferredModels: Record<AgentTask, { model?: string; label: string; models
   coding: {
     model: CODING_FALLBACK,
     label: "Qwen3.8 27B",
-    models: [CODING_FALLBACK, SMALL_MODEL, PRIMARY_MODEL],
+    models: [CODING_FALLBACK],
   },
   planning: {
     model: PRIMARY_MODEL,
@@ -158,10 +159,15 @@ export function classifyAgentTask(input: {
   deepthink?: boolean;
   image?: unknown;
   projectFiles?: unknown[];
+  agentHistory?: Array<{ tool: string }>;
 }): AgentTask {
   if (input.image) return "multimodal";
   const prompt = input.messages.at(-1)?.content.toLowerCase() ?? "";
-  if (input.projectFiles?.length || /\b(code|coding|debug|bug|build|implement|program|script|test|refactor|run|html|javascript|typescript|python)\b/i.test(prompt)) {
+  const recentCodingIntent = input.messages.filter((message) => message.role === "user").slice(-6)
+    .some((message) => isCodingRequest(message.content));
+  if (input.projectFiles?.length || recentCodingIntent ||
+      input.agentHistory?.some((exchange) => exchange.tool === "write_project") ||
+      /\b(bug|build|implement|test|refactor|run)\b/i.test(prompt)) {
     return "coding";
   }
   if (/\b(document|pdf|report|spreadsheet|contract|attachment|file)\b/i.test(prompt)) return "document";
@@ -243,9 +249,7 @@ export function modelLabel(model: string): string {
 }
 
 export function chooseModels(ids: string[], coding: boolean): string[] {
-  const coder = coding ? ids.find((id) => /coder/i.test(id) && !/guard/i.test(id)) : undefined;
-  return [...new Set([coder ?? PRIMARY_MODEL, coding ? CODING_FALLBACK : SMALL_MODEL])]
-    .filter((id) => ids.includes(id));
+  return (coding ? [CODING_FALLBACK] : [PRIMARY_MODEL, SMALL_MODEL]).filter((id) => ids.includes(id));
 }
 
 export function isCoolingDown(model: string): boolean {
@@ -264,6 +268,14 @@ export function modelsForRequest(models: string[]): string[] {
 
 export function clearRateLimit(model: string): void {
   cooldowns.delete(model);
+}
+
+/** Honor only explicit, short retry windows; never guess a daily quota reset. */
+export function shortProviderRetryDelay(retryAfter: string | null, now = Date.now()): number | undefined {
+  if (!retryAfter?.trim()) return undefined;
+  const seconds = Number(retryAfter);
+  const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter) - now;
+  return Number.isFinite(delay) && delay >= 0 && delay <= 60_000 ? Math.ceil(delay) + 250 : undefined;
 }
 
 export function markRateLimited(model: string, retryAfter?: string | null): void {
@@ -314,6 +326,34 @@ export function recordRateLimit(model: string, error: unknown) {
   return diagnostics;
 }
 
+const outputBudgets = new Map<string, { tokens: number; expires: number }>();
+
+/** Learn only from an explicit provider output-token allowance, never from request counts. */
+export function reduceOutputBudget(model: string, error: unknown): number | undefined {
+  const quota = rateLimitDiagnostics(error);
+  if (quota.metric !== "OTPM" || !quota.requestTooLarge || quota.quotaLimit === null) return undefined;
+  const tokens = Math.min(8192, Math.floor(quota.quotaLimit * 0.85));
+  if (tokens < 256 || tokens >= outputTokenBudget(model, 8193)) return undefined;
+  outputBudgets.set(model, { tokens, expires: Date.now() + 300_000 });
+  return tokens;
+}
+
+export function outputTokenBudget(model: string, requested: number): number {
+  const budget = outputBudgets.get(model);
+  if (!budget || budget.expires <= Date.now()) {
+    outputBudgets.delete(model);
+    return requested;
+  }
+  return Math.min(requested, budget.tokens);
+}
+
+export function outputBudgetInstruction(model: string): string {
+  const budget = outputTokenBudget(model, 8193);
+  return budget < 8193
+    ? `The provider reported a small output-token allowance. Fit the ENTIRE response, including tool JSON, within ${budget} tokens. For a new browser app, prefer one compact, complete index.html with inline CSS and JavaScript, real working interactions, and no external dependencies. Preserve the user's existing features when editing; do not replace their project with a stub to fit. If a complete correct change cannot fit, explain the limitation briefly instead of emitting truncated code.`
+    : "";
+}
+
 export class UsageLimitError extends Error {
   constructor() { super(USAGE_LIMIT_MESSAGE); }
 }
@@ -326,7 +366,10 @@ export async function openModelStream<T>(
   onRateLimit?: (model: string, diagnostics: ReturnType<typeof rateLimitDiagnostics>) => void,
 ): Promise<{ model: string; stream: T }> {
   if (!models.length) throw new Error("No compatible model is available for this request.");
-  for (const model of modelsForRequest(models)) {
+  const candidates = modelsForRequest(models);
+  const budgetRetries = new Set<string>();
+  for (let index = 0; index < candidates.length; index++) {
+    const model = candidates[index]!;
     try {
       const stream = await create(model);
       clearRateLimit(model);
@@ -339,6 +382,10 @@ export async function openModelStream<T>(
       if (candidate.status !== 429) throw error;
       const diagnostics = recordRateLimit(model, error);
       onRateLimit?.(model, diagnostics);
+      if (!budgetRetries.has(model) && reduceOutputBudget(model, error) !== undefined) {
+        budgetRetries.add(model);
+        index--; // Retry the same model once with its verified, smaller output allowance.
+      }
     }
   }
   throw new UsageLimitError();

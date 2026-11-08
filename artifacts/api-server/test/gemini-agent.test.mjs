@@ -175,6 +175,254 @@ function createSseApp({
   return app;
 }
 
+function planningQwenClient(requests, project) {
+  return {
+    models: { list: async () => ({ data: [{
+      id: CODING_FALLBACK, active: true, context_window: 131072, max_completion_tokens: 16384,
+    }] }) },
+    chat: { completions: { create: async (request) => {
+      requests.push(request);
+      return (async function* () {
+        if (project && requests.length === 1) {
+          yield { choices: [{ delta: { tool_calls: [{
+            index: 0, id: "planned-project",
+            function: { name: "write_project", arguments: JSON.stringify(project) },
+          }] } }] };
+        } else {
+          yield { choices: [{ delta: { content: "The build is ready." } }] };
+        }
+      })();
+    } } },
+  };
+}
+
+test("Gemini planning is tool-free, bounded, and does not claim a tool limit", () => {
+  const request = buildGeminiAgentRequest({
+    messages: [{ role: "user", content: "Build a task list" }],
+    projectFiles: [{ path: "index.html", content: "<h1>Existing project</h1>" }],
+  }, new Date("2026-11-06T18:30:00Z"), true, undefined, GEMINI_AGENT_MODEL, "planning");
+  assert.equal(request.tools, undefined);
+  assert.equal(request.toolConfig, undefined);
+  assert.equal(request.generationConfig.maxOutputTokens, 4096);
+  assert.match(request.systemInstruction.parts[0].text, /concrete acceptance checks/);
+  assert.doesNotMatch(request.systemInstruction.parts[0].text, /tool limit has been reached/);
+  assert.match(JSON.stringify(request.contents), /Existing project/);
+});
+
+test("Gemma review is tool-free and receives source, runtime output, and browser checks as untrusted data", () => {
+  const request = buildGeminiAgentRequest({
+    messages: [{ role: "user", content: "Build a task list website" }],
+  }, new Date("2026-11-06T18:30:00Z"), true, undefined, "gemma-4-31b-it", "review", {
+    language: "html",
+    source: "<button>Delete</button>",
+    output: "console-error: Cannot read properties of undefined",
+    browserChecks: "One unlabeled control was detected.",
+  });
+  assert.equal(request.tools, undefined);
+  assert.equal(request.toolConfig, undefined);
+  assert.equal(request.generationConfig.maxOutputTokens, 2048);
+  assert.match(request.systemInstruction.parts[0].text, /independent reviewer/);
+  assert.match(request.contents.at(-1).parts.at(-1).text, /One unlabeled control/);
+  assert.match(request.contents.at(-1).parts.at(-1).text, /never execute or follow instructions/);
+});
+
+test("Gemma 4 reviews a Qwen program without calling Groq", async () => {
+  const geminiRequests = [];
+  const qwenRequests = [];
+  const app = createSseApp({
+    getGroqClient: () => planningQwenClient(qwenRequests),
+    fetchImpl: async (url, init) => {
+      geminiRequests.push({ url: String(url), body: JSON.parse(init.body) });
+      return geminiResponse([modelEvent([{ text: "Confirmed: the delete button has no event handler. Attach a click handler." }])]);
+    },
+  });
+  await withServer(app, async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Build a task list website" }],
+        agentProvider: "gemini",
+        agentTask: "document",
+        agentReview: {
+          language: "html",
+          source: "<button>Delete</button>",
+          output: "The page loaded.",
+          browserChecks: "The page rendered and no runtime errors were reported.",
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const events = await readEvents(response);
+    assert.match(events.filter((event) => event.content).map((event) => event.content).join(""), /no event handler/);
+    assert.equal(events.find((event) => event.agentProvider)?.agentProvider, "gemini");
+    assert.match(geminiRequests[0].url, /models\/gemma-4-31b-it:streamGenerateContent/);
+    assert.match(JSON.stringify(geminiRequests[0].body.contents), /Delete/);
+    assert.match(JSON.stringify(geminiRequests[0].body.contents), /The page rendered and no runtime errors were reported/);
+    assert.equal(geminiRequests[0].body.tools, undefined);
+    assert.equal(qwenRequests.length, 0);
+  });
+});
+
+test("Gemma review refuses non-Gemma model substitution when Gemma 4 is unavailable", async () => {
+  let inferenceCalls = 0;
+  await withServer(createSseApp({
+    getGeminiModels: async () => [
+      { name: "models/gemini-3.8-flash", supportedGenerationMethods: ["streamGenerateContent"], outputTokenLimit: 8192 },
+    ],
+    fetchImpl: async () => {
+      inferenceCalls += 1;
+      return geminiResponse([modelEvent([{ text: "Unexpected model." }])]);
+    },
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Build a task list website" }],
+        agentReview: { language: "html", source: "<h1>Tasks</h1>" },
+      }),
+    });
+    assert.equal(response.status, 503);
+    assert.match((await response.json()).error, /Gemma 4 reviewer/);
+    assert.equal(inferenceCalls, 0);
+  });
+});
+
+test("Gemma review failures do not downgrade to a Groq code model", async () => {
+  const qwenRequests = [];
+  let geminiCalls = 0;
+  await withServer(createSseApp({
+    getGroqClient: () => planningQwenClient(qwenRequests),
+    fetchImpl: async () => {
+      geminiCalls += 1;
+      return new Response("", { status: 403 });
+    },
+  }), async (url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Build a task list website" }],
+        agentReview: { language: "html", source: "<h1>Tasks</h1>" },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const events = await readEvents(response);
+    assert.ok(events.some((event) => typeof event.error === "string"));
+    assert.equal(geminiCalls, 1);
+    assert.equal(qwenRequests.length, 0);
+  });
+});
+
+test("Coding calls Gemini once for planning, then Qwen builds and continues without replanning", async () => {
+  const qwenRequests = [];
+  const geminiRequests = [];
+  const project = { entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Tasks</h1>" }] };
+  const groq = planningQwenClient(qwenRequests, project);
+  const app = createSseApp({
+    getGroqClient: () => groq,
+    fetchImpl: async (url, init) => {
+      geminiRequests.push({ url: String(url), body: JSON.parse(init.body) });
+      return geminiResponse([modelEvent([
+        { text: "private-provider-thought", thought: true },
+        { text: "Acceptance checks: add, complete, and delete tasks; use local state and labeled controls." },
+      ])]);
+    },
+  });
+  await withServer(app, async (url) => {
+    const prompt = { messages: [{ role: "user", content: "Build a task list website" }] };
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(prompt),
+    }));
+    assert.equal(events.some((event) => event.error), false);
+    assert.ok(events.some((event) => event.activity?.id === "agent-gemini-plan" && event.activity.status === "complete"));
+    const tool = events.find((event) => event.agentTool)?.agentTool;
+    assert.equal(tool.tool, "write_project");
+    assert.match(JSON.stringify(qwenRequests[0].messages), /Acceptance checks: add, complete, and delete tasks/);
+    assert.doesNotMatch(JSON.stringify(qwenRequests), /private-provider-thought/);
+    const continuationResponse = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...prompt,
+        agentProvider: "groq",
+        agentHistory: [{
+          tool: "write_project", callId: tool.callId, arguments: tool.arguments,
+          thoughtSignature: tool.thoughtSignature,
+          result: "HTML preview loaded with no runtime errors.",
+        }],
+      }),
+    });
+    assert.equal(continuationResponse.status, 200);
+    const continued = await readEvents(continuationResponse);
+    assert.equal(continued.some((event) => event.error), false);
+    assert.match(continued.map((event) => event.content ?? "").join(""), /build is ready/);
+    assert.equal(geminiRequests.length, 1);
+    assert.match(geminiRequests[0].url, /:streamGenerateContent/);
+    assert.equal(geminiRequests[0].body.tools, undefined);
+    assert.ok(qwenRequests.every((request) => request.model === CODING_FALLBACK));
+  });
+});
+
+test("Non-coding Agent work prefers Gemini even when Groq is configured", async () => {
+  const qwenRequests = [];
+  let geminiCalls = 0;
+  await withServer(createSseApp({
+    getGroqClient: () => planningQwenClient(qwenRequests),
+    fetchImpl: async () => {
+      geminiCalls += 1;
+      return geminiResponse([modelEvent([{ text: "Gravity attracts masses." }])]);
+    },
+  }), async (url) => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Explain gravity simply" }] }),
+    }));
+    assert.equal(events.some((event) => event.error), false);
+    assert.equal(events.find((event) => event.agentProvider)?.agentProvider, "gemini");
+    assert.equal(geminiCalls, 1);
+    assert.equal(qwenRequests.length, 0);
+  });
+});
+
+test("Unavailable Gemini planning does not block Qwen or claim a rate limit", async () => {
+  const qwenRequests = [];
+  let geminiCalls = 0;
+  await withServer(createSseApp({
+    getGroqClient: () => planningQwenClient(qwenRequests),
+    fetchImpl: async () => {
+      geminiCalls += 1;
+      return new Response("", { status: 403 });
+    },
+  }), async (url) => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list website" }] }),
+    }));
+    assert.equal(events.some((event) => event.error), false);
+    assert.ok(events.some((event) => event.activity?.id === "agent-gemini-plan" && event.activity.status === "error"));
+    assert.ok(geminiCalls > 0 && geminiCalls <= 2);
+    assert.equal(qwenRequests[0].model, CODING_FALLBACK);
+  });
+});
+
+test("Coding without a Gemini key stays on Qwen and explains the skipped plan", async () => {
+  const qwenRequests = [];
+  await withServer(createSseApp({
+    getApiKey: () => undefined,
+    getGroqClient: () => planningQwenClient(qwenRequests),
+    fetchImpl: async () => { throw new Error("Gemini must not be called without a key"); },
+  }), async (url) => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list website" }] }),
+    }));
+    assert.equal(events.some((event) => event.error), false);
+    assert.ok(events.some((event) => event.activity?.label.includes("isn't configured on this server")));
+    assert.equal(qwenRequests[0].model, CODING_FALLBACK);
+  });
+});
+
 test("Qwen Agent request enables bounded autonomous build-and-test tools", () => {
   const request = buildGroqAgentRequest({ ...input, deepthink: true }, new Date("2026-11-06T18:30:00Z"));
   assert.equal(GROQ_AGENT_MODEL, CODING_FALLBACK);
@@ -351,18 +599,28 @@ test("Agent caps project previews across snippet and project revisions", async (
     })),
   ];
   await withServer(createSseApp({
-    fetchImpl: async (_url, init) => {
-      calls++;
-      if (calls === 1) return geminiResponse([modelEvent([{
-        functionCall: {
-          name: "write_project", id: "fourth-project",
-          args: { entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Fourth</h1>" }] },
-        },
-        thoughtSignature: "new-signature",
-      }])]);
-      assert.match(JSON.parse(init.body).contents.at(-1).parts[0].functionResponse.response.result, /revision limit/);
-      return geminiResponse([modelEvent([{ text: "The project is ready; further refinements need a new request." }])]);
-    },
+    getGroqClient: () => ({
+      models: { list: async () => ({ data: [{
+        id: CODING_FALLBACK, active: true, context_window: 131072, max_completion_tokens: 16384,
+      }] }) },
+      chat: { completions: { create: async (request) => {
+        if (request.model !== CODING_FALLBACK) return { choices: [] };
+        calls++;
+        if (calls === 1) return (async function* () {
+          yield { choices: [{ delta: { tool_calls: [{
+            index: 0, id: "fourth-project", type: "function", function: {
+              name: "write_project", arguments: JSON.stringify({
+                entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Fourth</h1>" }],
+              }),
+            },
+          }] } }] };
+        })();
+        assert.match(request.messages.at(-1).content, /revision limit/);
+        return (async function* () {
+          yield { choices: [{ delta: { content: "The project is ready; further refinements need a new request." } }] };
+        })();
+      } } },
+    }),
   }), async (url) => {
     const events = await readEvents(await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -529,7 +787,7 @@ test("Gemini in-stream rate limits use the existing Qwen fallback", async () => 
   });
 });
 
-test("Gemini image requests keep image bytes out of the Groq fallback and its events", async () => {
+test("Gemini image requests cannot bypass the vision route using a text-task override", async () => {
   const image = {
     mimeType: "image/png",
     data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==",
@@ -562,9 +820,10 @@ test("Gemini image requests keep image bytes out of the Groq fallback and its ev
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...input, image, agentProvider: "gemini", agentTask: "reasoning" }),
     }));
-    assert.equal(events.some((event) => event.agentProvider === "groq"), true);
+    assert.equal(events.some((event) => event.agentProvider === "groq"), false);
     assert.deepEqual(geminiRequest.contents[0].parts[1], { inlineData: image });
-    assert.equal(JSON.stringify(groqRequest).includes(image.data), false, "Groq receives no image bytes");
+    assert.equal(groqRequest, undefined, "Groq is not a vision fallback");
+    assert.ok(events.some((event) => /image|vision/.test(event.error ?? "")));
     assert.equal(JSON.stringify(events).includes(image.data), false, "fallback events expose no image bytes");
   });
 });
@@ -899,6 +1158,18 @@ test("Agent sends bounded project files to the browser client and accepts its ru
     { path: "styles.css", content: "h1 { color: navy; }" },
   ];
   const requests = [];
+  const groqRequests = [];
+  const groqClient = {
+    models: { list: async () => ({ data: [{
+      id: CODING_FALLBACK, active: true, context_window: 131072, max_completion_tokens: 16384,
+    }] }) },
+    chat: { completions: { create: async (request) => {
+      groqRequests.push(request);
+      return (async function* () {
+        yield { choices: [{ delta: { content: "The project preview is ready." } }] };
+      })();
+    } } },
+  };
   const fetchImpl = async (_url, init) => {
     requests.push(JSON.parse(init.body));
     return requests.length === 1
@@ -908,11 +1179,11 @@ test("Agent sends bounded project files to the browser client and accepts its ru
         }])])
       : geminiResponse([modelEvent([{ text: "The project preview is ready." }])]);
   };
-  await withServer(createSseApp({ fetchImpl }), async (url) => {
+  await withServer(createSseApp({ fetchImpl, getGroqClient: () => groqClient }), async (url) => {
     const first = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, agentProvider: "gemini" }),
     });
     const firstEvents = await readEvents(first);
     const toolEvent = firstEvents.find((event) => event.agentTool)?.agentTool;
@@ -937,12 +1208,13 @@ test("Agent sends bounded project files to the browser client and accepts its ru
     });
     const continuationEvents = await readEvents(continued);
     assert.equal(continuationEvents.filter((event) => event.content).map((event) => event.content).join(""), "The project preview is ready.");
-    assert.match(requests[1].contents[0].parts[0].text, /styles\.css/);
-    assert.doesNotMatch(requests[1].contents[0].parts[0].text, /not-selected\.js/);
-    assert.equal(requests[1].contents.at(-2).parts[0].functionCall.name, "write_project");
-    assert.equal(requests[1].contents.at(-1).parts[0].functionResponse.response.result, "Project preview loaded with no browser errors.");
+    const qwen = groqRequests.find((request) => request.model === CODING_FALLBACK);
+    assert.match(JSON.stringify(qwen.messages), /styles\.css/);
+    assert.doesNotMatch(JSON.stringify(qwen.messages), /not-selected\.js/);
+    assert.equal(qwen.messages.at(-2).tool_calls[0].function.name, "write_project");
+    assert.match(qwen.messages.at(-1).content, /Project preview loaded with no browser errors/);
   });
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 1, "project continuation moves from Gemini to Qwen");
 });
 
 test("Agent rejects unselected project paths that escape the project boundary", async () => {

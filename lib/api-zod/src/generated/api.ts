@@ -76,7 +76,7 @@ export const StreamImageChatResponse = zod.unknown()
 
 
 /**
- * Selects an available model by task from the configured Groq catalog, uses Prompt Guard and GPT-OSS Safeguard as secondary security signals when available, and supports Gemini image analysis only when configured. Model, task, and surfaced fallback persist through bounded web-search and isolated-browser tool continuations. Tool activity and sources are returned as SSE events; private model reasoning and image bytes are not exposed.
+ * Selects an available model by task, supports server-configured Gemini image analysis, and can run a tool-free Gemma 4 review of bounded generated source and isolated execution results. Model, task, and surfaced fallback persist through bounded web-search and isolated-browser tool continuations. Tool activity and sources are returned as SSE events; private model reasoning and image bytes are not exposed.
  * @summary Stream an Agent-mode response
  */
 export const streamAgentChatBodyDeepthinkDefault = false;
@@ -126,6 +126,12 @@ export const streamAgentChatBodyImageDataMax = 4194304;
 
 
 export const streamAgentChatBodyImageDataRegExp = new RegExp('^[A-Za-z0-9+/]+={0,2}$');
+export const streamAgentChatBodyAgentReviewSourceMax = 24000;
+
+export const streamAgentChatBodyAgentReviewOutputMax = 8000;
+
+export const streamAgentChatBodyAgentReviewBrowserChecksMax = 4000;
+
 
 
 export const StreamAgentChatBody = zod.object({
@@ -167,7 +173,13 @@ export const StreamAgentChatBody = zod.object({
   "image": zod.object({
   "mimeType": zod.enum(['image/jpeg', 'image/png', 'image/webp']),
   "data": zod.string().min(streamAgentChatBodyImageDataMin).max(streamAgentChatBodyImageDataMax).regex(streamAgentChatBodyImageDataRegExp).describe('Base64-encoded image bytes without a data URL prefix')
-}).optional()
+}).optional(),
+  "agentReview": zod.object({
+  "language": zod.enum(['python', 'javascript', 'html']),
+  "source": zod.string().max(streamAgentChatBodyAgentReviewSourceMax),
+  "output": zod.string().max(streamAgentChatBodyAgentReviewOutputMax).optional(),
+  "browserChecks": zod.string().max(streamAgentChatBodyAgentReviewBrowserChecksMax).optional()
+}).optional().describe('Bounded source and isolated-run results for a tool-free Gemma 4 code review.')
 })
 
 export const StreamAgentChatResponse = zod.unknown()

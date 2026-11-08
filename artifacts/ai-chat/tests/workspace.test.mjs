@@ -6,12 +6,14 @@ import { copyRawCode, rawCodeFromSource } from '../src/lib/code-clipboard.ts';
 import { makePreviewHtml, sanitizePreviewDiagnostic, reportPreviewReview, reportPreviewDiagnostics, readPreviewReview } from '../src/lib/code-runner.ts';
 import { sanitizePreviewReview, formatPreviewReview, previewReviewInstrumentation } from '../src/lib/preview-review.ts';
 import { savedWorkspaceState, WORKSPACE_DRAFT_KEY } from '../src/lib/workspace-recovery.ts';
+import { previewFormInstrumentation } from '../src/lib/preview-forms.ts';
 import { workspaceBounds, clampWorkspaceWidth } from '../src/lib/workspace-size.ts';
 import { loadEditorLanguage } from '../src/lib/editor-language.ts';
 import {
   bundleHtmlProject,
   createSavedProject,
   deleteSavedProject,
+  createAgentProject,
   readSavedProject,
   selectedProjectFiles,
   validateProjectFiles,
@@ -92,6 +94,8 @@ test('HTML preview is instrumented, network-restricted, and diagnostics are boun
   assert.match(preview, /preview-test-id/);
   assert.match(preview, /<h1>Ready<\/h1>/);
   assert.doesNotMatch(preview, /allow-same-origin/);
+  assert.doesNotMatch(preview, /allow-forms/);
+  assert.match(preview, /form-action 'none'/);
 
   const diagnostic = sanitizePreviewDiagnostic({
     kind: 'error',
@@ -103,6 +107,54 @@ test('HTML preview is instrumented, network-restricted, and diagnostics are boun
   assert.equal(diagnostic.source, 'https://example.test/assets/app.js');
   assert.equal(diagnostic.line, 12);
   assert.equal(sanitizePreviewDiagnostic({ kind: 'unexpected', message: 'x' }), null);
+});
+
+test('sandbox form bridge runs local submit handlers with validation and no navigation', () => {
+  const listeners = new Map();
+  class Form {
+    isConnected = true;
+    noValidate = false;
+    valid = true;
+    events = [];
+    elements = [];
+    reportValidity() { return this.valid; }
+    dispatchEvent(event) { this.events.push(event); return false; }
+  }
+  class Submit {
+    constructor(type, options) { this.type = type; Object.assign(this, options); }
+  }
+  vm.runInNewContext(previewFormInstrumentation(), {
+    window: { addEventListener: (type, listener) => listeners.set(type, listener) },
+    HTMLFormElement: Form, SubmitEvent: Submit, DOMException, Event,
+  });
+  const form = new Form();
+  const button = { tagName: 'BUTTON', type: 'submit', form, matches: () => false };
+  form.elements = [button];
+  const click = {
+    button: 0, defaultPrevented: false, target: { closest: () => button },
+    preventDefault() { this.defaultPrevented = true; },
+  };
+  listeners.get('click')(click);
+  assert.equal(click.defaultPrevented, true, 'native submission is prevented');
+  assert.equal(form.events.length, 1);
+  assert.equal(form.events[0].type, 'submit');
+  assert.equal(form.events[0].submitter, button);
+  assert.equal(form.events[0].cancelable, true);
+  form.valid = false;
+  form.requestSubmit(button);
+  assert.equal(form.events.length, 1, 'invalid input does not submit');
+  form.valid = true;
+  form.requestSubmit(button);
+  assert.equal(form.events.length, 2);
+  listeners.get('keydown')({
+    key: 'Enter', defaultPrevented: false, target: { tagName: 'INPUT', type: 'text', form, matches: () => false },
+    preventDefault() {},
+  });
+  assert.equal(form.events.length, 3, 'Enter uses the same local submit path');
+  assert.throws(() => form.requestSubmit({ ...button, form: new Form() }), /different form/);
+  listeners.get('click')({ ...click, defaultPrevented: true });
+  assert.equal(form.events.length, 3, 'application cancellation is respected');
+  assert.doesNotMatch(previewFormInstrumentation(), /fetch\s*\(|location\s*=|\.submit\s*\(/);
 });
 
 test('preview review accepts only bounded metrics and keeps them through diagnostics completion', () => {
@@ -203,6 +255,51 @@ test('HTML project preview embeds only local CSS and classic JavaScript assets',
     { path: 'index.html', content: '<script type="module" src="app.js"></script>' },
     { path: 'app.js', content: 'export {}' },
   ], 'index.html'), /does not support JavaScript modules/);
+});
+
+test('Agent follow-ups retain generated source while respecting explicit deselection', () => {
+  const files = [{ path: 'index.html', content: '<button>Run</button>' }, { path: 'app.js', content: 'void 0' }];
+  const first = createAgentProject(files, 'index.html', null);
+  assert.deepEqual(first.selectedPaths, ['index.html', 'app.js']);
+  const optedOut = { ...first, selectedPaths: ['index.html'] };
+  const revised = createAgentProject([...files, { path: 'style.css', content: 'button{}' }], 'index.html', optedOut);
+  assert.deepEqual(revised.selectedPaths, ['index.html', 'style.css']);
+  assert.deepEqual(selectedProjectFiles(revised).map((file) => file.path), ['index.html', 'style.css']);
+  assert.deepEqual(createSavedProject(files, 'index.html').selectedPaths, [], 'manual projects are not auto-shared');
+});
+
+test('partial Agent edits preserve assets and reject broken updates before replacing a project', () => {
+  const original = createAgentProject([
+    { path: 'index.html', content: '<link rel="stylesheet" href="style.css"><button>Original</button><script src="app.js"></script>' },
+    { path: 'style.css', content: 'button { color: blue; }' },
+    { path: 'app.js', content: 'document.querySelector("button").value = "ready";' },
+  ], 'index.html', null);
+  const revised = createAgentProject([
+    { path: 'index.html', content: '<link rel="stylesheet" href="style.css"><button>Revised</button><script src="app.js"></script>' },
+  ], 'index.html', original);
+  assert.equal(revised.files.length, 3);
+  assert.equal(revised.files.find((file) => file.path === 'style.css').content, 'button { color: blue; }');
+  assert.match(bundleHtmlProject(revised.files, revised.entrypoint), /value = "ready"/);
+  const snapshot = JSON.stringify(revised);
+  assert.throws(() => createAgentProject([
+    { path: 'index.html', content: '<link rel="stylesheet" href="missing.css">' },
+  ], 'index.html', revised), /stylesheet.*not found/);
+  assert.equal(JSON.stringify(revised), snapshot, 'invalid updates do not mutate the working project');
+});
+
+test('deferred project scripts run after the DOM in order without losing shared globals', () => {
+  const html = bundleHtmlProject([
+    { path: 'index.html', content: '<html><head><script defer src="a.js"></script><script src="b.js" defer></script></head><body><button id="action">Run</button></body></html>' },
+    { path: 'a.js', content: 'const action = document.getElementById("action");' },
+    { path: 'b.js', content: 'action.value = "working";' },
+  ], 'index.html');
+  assert.ok(html.indexOf('<button') < html.indexOf('const action'));
+  assert.ok(html.indexOf('const action') < html.indexOf('action.value'));
+  assert.ok(html.indexOf('action.value') < html.indexOf('</body>'));
+  const button = {};
+  const context = vm.createContext({ document: { getElementById: () => button } });
+  for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) vm.runInContext(script[1], context);
+  assert.equal(button.value, 'working');
 });
 
 test('editor modes are selected dynamically and repeated loads share a promise', async () => {

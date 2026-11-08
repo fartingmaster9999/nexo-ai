@@ -60,6 +60,20 @@ export function projectStorageKey(conversationId: string): string {
   return `${PROJECT_KEY_PREFIX}${encodeURIComponent(conversationId)}`;
 }
 
+/** Agent-authored files are already provider-visible; keep explicit opt-outs. */
+export function createAgentProject(files: unknown, entrypoint: string, previous: SavedProject | null): SavedProject {
+  const updates = validateProjectFiles(files);
+  const merged = new Map(previous?.files.map((file) => [file.path, file]) ?? []);
+  updates.forEach((file) => merged.set(file.path, file));
+  const next = createSavedProject([...merged.values()], entrypoint, previous?.selectedPaths);
+  // Validate references before persisting or replacing the working preview.
+  bundleHtmlProject(next.files, entrypoint);
+  const existing = new Set(previous?.files.map((file) => file.path) ?? []);
+  const selected = new Set(next.selectedPaths);
+  next.files.forEach((file) => { if (!existing.has(file.path)) selected.add(file.path); });
+  return { ...next, selectedPaths: [...selected] };
+}
+
 export function readSavedProject(storage: Storage, conversationId: string): SavedProject | null {
   const raw = storage.getItem(projectStorageKey(conversationId));
   if (!raw) return null;
@@ -141,6 +155,7 @@ export function bundleHtmlProject(files: ProjectFile[], entrypoint: string): str
   const fileMap = new Map(safeFiles.map((file) => [file.path, file.content]));
   let html = fileMap.get(entrypoint);
   if (html === undefined) throw new Error('The HTML entry file is missing.');
+  const deferredScripts: string[] = [];
 
   html = html.replace(/<link\b[^>]*>/gi, (tag) => {
     const rel = getAttribute(tag, 'rel');
@@ -157,12 +172,25 @@ export function bundleHtmlProject(files: ProjectFile[], entrypoint: string): str
       const src = doubleQuoted ?? singleQuoted ?? unquoted ?? '';
       const path = localAssetPath(src, entrypoint);
       if (path === null) return tag;
-      if (/\btype\s*=\s*["']module["']/i.test(`${before} ${after}`)) {
+      if (getAttribute(tag, 'type')?.toLowerCase() === 'module') {
         throw new Error('This project preview does not support JavaScript modules yet. Use classic script files referenced by index.html.');
       }
       const script = fileMap.get(path);
       if (script === undefined) throw new Error(`The project script “${path}” was not found.`);
-      return `<script>${escapeRawText(script, 'script')}</script>`;
+      const bundled = `<script>${escapeRawText(script, 'script')}</script>`;
+      // Inline scripts ignore defer. Move deferred local assets after the DOM,
+      // preserving their order and shared global scope instead of wrapping them.
+      if (/\sdefer(?:\s|=|>)/i.test(tag) && !/\sasync(?:\s|=|>)/i.test(tag)) {
+        deferredScripts.push(bundled);
+        return '';
+      }
+      return bundled;
     });
+  if (deferredScripts.length) {
+    const scripts = deferredScripts.join('\n');
+    html = /<\/body\s*>/i.test(html)
+      ? html.replace(/<\/body\s*>/i, (closing) => `${scripts}\n${closing}`)
+      : `${html}\n${scripts}`;
+  }
   return html;
 }

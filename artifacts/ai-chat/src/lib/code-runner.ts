@@ -1,4 +1,5 @@
 import { previewReviewInstrumentation, sanitizePreviewReview, type PreviewReview } from './preview-review.ts';
+import { previewFormInstrumentation } from './preview-forms.ts';
 export { formatPreviewReview } from './preview-review.ts';
 export type RunLanguage = 'python' | 'javascript' | 'html';
 export type RunOutput = { kind: 'stdout' | 'stderr' | 'status' | 'image'; text?: string; dataUrl?: string };
@@ -176,7 +177,7 @@ function previewInstrumentation(previewId: string) {
 /** HTML previews run with an opaque origin and a restrictive policy; never add allow-same-origin. */
 export function makePreviewHtml(code: string, previewId: string): string {
   const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";
-  const head = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${previewInstrumentation(previewId)}</script><script>${previewReviewInstrumentation(previewId)}</script>`;
+  const head = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${previewInstrumentation(previewId)}</script><script>${previewReviewInstrumentation(previewId)}</script><script>${previewFormInstrumentation()}</script>`;
   const source = code.replace(/^\s*<!doctype\b[^>]*>/i, '');
   let documentHtml: string;
   if (/<head\b[^>]*>/i.test(source)) {

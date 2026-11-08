@@ -4,7 +4,7 @@ import { buildChatRequest, isValidTimeZone, boundedHistory } from "../src/lib/ch
 import { extractSearchSources } from "../src/lib/search-activity.ts";
 import { needsWebSearch, isCodingRequest, buildSearchQuery } from "../src/lib/chat-policy.ts";
 import { chooseModels, openModelStream, USAGE_LIMIT_MESSAGE, PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK, markRateLimited, isCoolingDown, rateLimitDiagnostics } from "../src/lib/model-routing.ts";
-import { modelsForRequest, recordRateLimit, clearRateLimit } from "../src/lib/model-routing.ts";
+import { modelsForRequest, recordRateLimit, clearRateLimit, shortProviderRetryDelay } from "../src/lib/model-routing.ts";
 
 const messages = [{ role: "user", content: "What is 17 times 19?" }];
 
@@ -120,11 +120,12 @@ test("search is selective, honors the 2024 policy and does not waste searches on
   assert.match(buildSearchQuery([{role:"user",content:"Weather in Chicago"}, {role:"assistant",content:"Sunny"}, {role:"user",content:"What about tomorrow?"}]), /Weather in Chicago/);
 });
 
-test("model selection uses a real coder when available and the requested fallbacks otherwise", () => {
+test("coding uses Qwen only while ordinary chat retains GPT-OSS fallbacks", () => {
   const ids = [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK];
   assert.deepEqual(chooseModels(ids, false), [PRIMARY_MODEL, SMALL_MODEL]);
-  assert.deepEqual(chooseModels(ids, true), [PRIMARY_MODEL, CODING_FALLBACK]);
-  assert.deepEqual(chooseModels([...ids,"qwen/example-coder"], true), ["qwen/example-coder", CODING_FALLBACK]);
+  assert.deepEqual(chooseModels(ids, true), [CODING_FALLBACK]);
+  assert.deepEqual(chooseModels([...ids,"qwen/example-coder"], true), [CODING_FALLBACK]);
+  assert.deepEqual(chooseModels([PRIMARY_MODEL, SMALL_MODEL], true), []);
 });
 
 test("an actual 429 switches models once and emits a downgrade notice", async () => {
@@ -185,6 +186,17 @@ test("missing model access is not reported as usage exhaustion", async () => {
   await assert.rejects(openModelStream([], async () => "never", () => {}), /No compatible model/);
 });
 
+test("provider wait accepts short explicit windows but never invents a long quota reset", () => {
+  assert.equal(shortProviderRetryDelay("14"), 14250);
+  assert.equal(shortProviderRetryDelay("60"), 60250);
+  assert.equal(shortProviderRetryDelay("61"), undefined);
+  assert.equal(shortProviderRetryDelay(null), undefined);
+  assert.equal(shortProviderRetryDelay("invalid"), undefined);
+  assert.equal(shortProviderRetryDelay("-1"), undefined);
+  assert.equal(shortProviderRetryDelay("3600"), undefined);
+  const now = Date.parse("2026-11-08T00:00:00Z");
+  assert.equal(shortProviderRetryDelay("Sun, 08 Nov 2026 00:00:15 GMT", now), 15250);
+});
 test("authorization errors are not incorrectly treated as usage limits", async () => {
   let attempts = 0;
   await assert.rejects(openModelStream(["auth-a","auth-b"], async () => {attempts++;throw Object.assign(new Error("Denied"),{status:401});}, () => {}));

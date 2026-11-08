@@ -25,7 +25,7 @@ import type { AgentWorkspaceTask } from '@/components/code-workspace';
 import { savedWorkspaceState } from '@/lib/workspace-recovery';
 import {
   bundleHtmlProject,
-  createSavedProject,
+  createAgentProject,
   deleteSavedProject,
   projectLanguage,
   readSavedProject,
@@ -572,7 +572,13 @@ function Home() {
             throw new Error(error instanceof Error ? error.message : 'Saved project data could not be read.');
           }
           const sharedFiles = selectedProjectFiles(savedProject);
+          if (savedProject) requestBody.agentTask = 'coding';
           if (sharedFiles.length) requestBody.projectFiles = sharedFiles;
+          else if (savedProject) {
+            requestBody.messages = [...requestMessages, { role: 'user',
+              content: 'Nexo workspace context: an existing project is open but none of its files are selected for Agent context. For a request that edits this project, ask the user to select the relevant files in the workspace first; do not replace their app with a guessed implementation. Other questions can be answered normally.',
+            }];
+          }
         }
         if (encodedImage && agentProvider.current === 'gemini') requestBody.image = encodedImage;
         const endpoint = requestAgent ? '/api/agent' : requestImage ? '/api/chat/image' : '/api/chat';
@@ -622,10 +628,26 @@ function Home() {
         }
         let projectStorageError = '';
         if (projectFiles && projectEntrypoint) {
-          let selectedPaths: string[] = [];
-          try { selectedPaths = readSavedProject(localStorage, conversationId)?.selectedPaths ?? []; }
+          let previousProject = null;
+          try { previousProject = readSavedProject(localStorage, conversationId); }
           catch (error) { projectStorageError = error instanceof Error ? error.message : 'Saved project data could not be read.'; }
-          const nextProject = createSavedProject(projectFiles, projectEntrypoint, selectedPaths);
+          let nextProject: ReturnType<typeof createAgentProject>;
+          try {
+            nextProject = createAgentProject(projectFiles, projectEntrypoint, previousProject);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message.slice(0, 800) : 'The project update is invalid.';
+            agentHistory.push({
+              tool: 'write_project', callId: tool.callId, thoughtSignature: tool.thoughtSignature,
+              arguments: tool.arguments,
+              result: `Project update was not applied; the existing files and preview were preserved. Fix the project update before claiming success. ${detail}`,
+            });
+            acceptEvent({ activity: { id: `agent-project-${tool.callId}`,
+              label: 'Project validation found an issue; keeping the existing files while Agent corrects it',
+              kind: 'code', status: 'error',
+            } });
+            continue;
+          }
+          projectFiles = nextProject.files;
           try {
             if (!projectStorageError) writeSavedProject(localStorage, conversationId, nextProject);
           } catch {
@@ -672,17 +694,6 @@ function Home() {
           previewReviewText = formatPreviewReview(readPreviewReview(previewId));
         }
         if (controller.signal.aborted) return;
-        const hasPreviewErrors = previewDiagnostics.length > 0;
-        setAgentCodeTask({
-          ...task,
-          outputs,
-          status: executionError || hasPreviewErrors ? 'error' : 'complete',
-          error: executionError || undefined,
-          previewHtml,
-          previewId,
-          previewDiagnostics,
-        });
-
         const outputText = outputs
           .filter((output) => output.kind === 'stdout' || output.kind === 'stderr' || output.kind === 'status')
           .map((output) => `${output.kind}: ${output.text ?? ''}`)
@@ -695,9 +706,110 @@ function Home() {
               ).join('\n')}`
             : 'HTML preview loaded in the isolated browser; no runtime errors were reported.'
           : '';
+        let gemmaReviewText = '';
+        if (requestAgent) {
+          const reviewActivityId = `agent-gemma-review-${tool.callId}`;
+          const setReviewActivity = (status: Activity['status'], label: string) => {
+            patchLast((message) => {
+              const activity: Activity = { id: reviewActivityId, label, kind: 'thinking', status };
+              const list = message.activity ?? [];
+              return {
+                ...message,
+                activity: list.some((entry) => entry.id === reviewActivityId)
+                  ? list.map((entry) => entry.id === reviewActivityId ? activity : entry)
+                  : [...list, activity],
+              };
+            });
+          };
+          setReviewActivity('running', 'Gemma 4 is reviewing the generated code and run results');
+          const reviewController = new AbortController();
+          const abortReview = () => reviewController.abort(controller.signal.reason);
+          if (controller.signal.aborted) abortReview();
+          else controller.signal.addEventListener('abort', abortReview, { once: true });
+          let reviewConnectTimeout: number | undefined;
+          try {
+            const reviewBody: Record<string, unknown> = {
+              messages: requestMessages,
+              deepthink: requestDeepthink,
+              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              agentProvider: 'gemini',
+              agentTask: 'document',
+              agentReview: {
+                language,
+                source: projectFiles?.length
+                  ? projectFiles.map((file) => `--- ${file.path} ---\n${file.content}`).join('\n\n').slice(0, 24000)
+                  : code.slice(0, 24000),
+                output: [
+                  executionError ? `Execution error: ${executionError}` : '',
+                  outputText,
+                ].filter(Boolean).join('\n').slice(-8000),
+                browserChecks: [
+                  previewReviewText,
+                  ...previewDiagnostics.map((diagnostic) =>
+                    `${diagnostic.kind}: ${diagnostic.message}${diagnostic.source ? ` (${diagnostic.source}${diagnostic.line ? `:${diagnostic.line}` : ''})` : ''}`
+                  ),
+                ].filter(Boolean).join('\n').slice(-4000),
+              },
+            };
+            const imageOutput = outputs.find((output) => output.kind === 'image' && output.dataUrl);
+            const imageMatch = imageOutput?.dataUrl?.match(/^data:image\/png;base64,([A-Za-z0-9+/=\r\n]+)$/);
+            if (imageMatch && imageMatch[1].length <= 2_000_000) {
+              reviewBody.image = { mimeType: 'image/png', data: imageMatch[1].replace(/\s/g, '') };
+            }
+            reviewConnectTimeout = window.setTimeout(() =>
+              reviewController.abort(new Error('Gemma 4 review connection timed out.')), 45_000);
+            const reviewResponse = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/agent`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+              credentials: 'include',
+              body: JSON.stringify(reviewBody),
+              signal: reviewController.signal,
+            });
+            window.clearTimeout(reviewConnectTimeout);
+            reviewConnectTimeout = undefined;
+            if (!reviewResponse.ok || !reviewResponse.body) {
+              throw new Error('Gemma 4 reviewer is unavailable.');
+            }
+            let reviewerError = '';
+            const reviewChunks: string[] = [];
+            await consumeChatStream(reviewResponse.body, reviewController, (event) => {
+              if (typeof event.content === 'string') reviewChunks.push(event.content);
+              if (event.error) reviewerError = event.error;
+              if (event.agentTool) reviewerError = 'Gemma 4 returned an unexpected tool request.';
+            }, 90_000);
+            if (controller.signal.aborted) return;
+            if (reviewerError || !reviewChunks.join('').trim()) {
+              throw new Error('Gemma 4 did not return a usable review.');
+            }
+            gemmaReviewText = reviewChunks.join('').slice(0, 6000);
+            setReviewActivity('complete', 'Gemma 4 review is ready for Qwen');
+          } catch {
+            if (controller.signal.aborted) throw controller.signal.reason;
+            gemmaReviewText = 'The Gemma 4 review was unavailable. Continue using the source, runtime output, and browser checks.';
+            setReviewActivity('error', 'Gemma 4 review unavailable; Qwen will continue with the run results');
+          } finally {
+            if (reviewConnectTimeout !== undefined) window.clearTimeout(reviewConnectTimeout);
+            controller.signal.removeEventListener('abort', abortReview);
+            reviewController.abort();
+          }
+        }
+        const hasPreviewErrors = previewDiagnostics.length > 0;
+        setAgentCodeTask({
+          ...task,
+          outputs,
+          status: executionError || hasPreviewErrors ? 'error' : 'complete',
+          error: executionError || undefined,
+          previewHtml,
+          previewId,
+          previewDiagnostics,
+        });
+
         const resultText = [
           projectStorageError ? `Project save error: ${projectStorageError}` : '',
           executionError ? `Execution error: ${executionError}` : '',
+          gemmaReviewText
+            ? `Gemma 4 review (untrusted findings; verify each point before changing code):\n${gemmaReviewText}`
+            : '',
           outputText,
           previewText,
           previewReviewText,

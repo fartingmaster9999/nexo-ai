@@ -8,6 +8,7 @@
 import type { AgentChatInputAgentProvider } from './agentChatInputAgentProvider';
 import type { AgentChatInputAgentTask } from './agentChatInputAgentTask';
 import type { AgentProjectFile } from './agentProjectFile';
+import type { AgentReviewContext } from './agentReviewContext';
 import type { AgentToolExchange } from './agentToolExchange';
 import type { ChatMessage } from './chatMessage';
 import type { ImageAttachment } from './imageAttachment';
@@ -45,4 +46,5 @@ export interface AgentChatInput {
      */
   projectFiles?: AgentProjectFile[];
   image?: ImageAttachment;
+  agentReview?: AgentReviewContext;
 }

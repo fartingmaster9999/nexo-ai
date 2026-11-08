@@ -10,6 +10,8 @@ export * from './agentChatInput';
 export * from './agentChatInputAgentProvider';
 export * from './agentChatInputAgentTask';
 export * from './agentProjectFile';
+export * from './agentReviewContext';
+export * from './agentReviewContextLanguage';
 export * from './agentSource';
 export * from './agentSourceRetrieval';
 export * from './agentToolArguments';
