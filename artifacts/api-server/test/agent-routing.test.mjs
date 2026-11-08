@@ -157,6 +157,72 @@ test("coding quota failure never substitutes GPT-OSS or claims a fallback succee
   } finally { clearRateLimit(CODING_FALLBACK); }
 });
 
+test("Qwen 413 compacts context once without replaying tools, cutting latest code, or switching providers", async () => {
+  for (const recover of [true, false]) {
+    const requests = [];
+    const code = "<h1>Existing website</h1><button onclick=\"this.textContent='Done'\">Try</button>";
+    const input = {
+      messages: [
+        { role: "user", content: "Previous coding discussion ".repeat(200) },
+        { role: "assistant", content: "Previous answer" },
+        { role: "user", content: "Finish the existing website without removing its working button." },
+      ],
+      agentHistory: [{
+        tool: "run_code", callId: "existing-website", thoughtSignature: "groq-agent-v1",
+        arguments: { language: "html", code }, result: "The existing page loaded. No runtime errors.",
+      }],
+    };
+    const original = JSON.stringify(input);
+    const client = {
+      models: { list: async () => ({ data: catalog }) },
+      chat: { completions: { create: async (request) => {
+        if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+        requests.push(request);
+        assert.equal(request.model, CODING_FALLBACK);
+        if (requests.length === 1 || !recover) {
+          throw new Groq.APIError(413, { message: "PRIVATE oversized request" }, undefined, new Headers());
+        }
+        return textStream("The existing website is kept.");
+      } } },
+    };
+    await withServer(createApp(client), async (url) => {
+      const events = await eventsFrom(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: original,
+      }));
+      assert.equal(requests.length, 2);
+      assert.ok(JSON.stringify(requests[1]).length < JSON.stringify(requests[0]).length);
+      assert.equal(requests[1].messages.findLast((message) => message.role === "user").content, input.messages.at(-1).content);
+      const call = requests[1].messages.find((message) => message.tool_calls)?.tool_calls[0];
+      assert.equal(JSON.parse(call.function.arguments).code, code);
+      assert.equal(events.some((event) => event.agentTool || event.notice || event.activity?.id === "agent-provider-wait"), false);
+      assert.equal(JSON.stringify(events).includes("PRIVATE"), false);
+      if (recover) assert.ok(events.some((event) => event.content === "The existing website is kept."));
+      else assert.match(events.find((event) => event.error)?.error, /too large \(HTTP 413\)/);
+    });
+    assert.equal(JSON.stringify(input), original);
+  }
+});
+
+test("Qwen 413 does not retry when compaction cannot make the request smaller", async () => {
+  let attempts = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      attempts++;
+      throw new Groq.APIError(413, { message: "PRIVATE" }, undefined, new Headers());
+    } } },
+  };
+  await withServer(createApp(client), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a small website" }] }),
+    }));
+    assert.equal(attempts, 1);
+    assert.match(events.find((event) => event.error)?.error, /saved project is kept/);
+  });
+});
+
 test("coding waits repeatedly for explicit provider windows without replaying saved tools", async () => {
   clearRateLimit(CODING_FALLBACK);
   let attempts = 0;

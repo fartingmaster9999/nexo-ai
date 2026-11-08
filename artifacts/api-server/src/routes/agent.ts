@@ -24,6 +24,7 @@ import { agentProviderRetryDelay, MAX_AGENT_PROVIDER_WAITS } from "../lib/agent-
 
 // Leave cleanup headroom below the API service's 180-second hosting limit.
 const AGENT_DEADLINE_MS = 170_000;
+const TOOL_REPAIR_INSTRUCTION = "The previous generation did not produce a valid tool call. Use only the declared tools with arguments matching their JSON schemas. Request one tool at a time. If no tool is needed, answer directly.";
 
 type AgentRouterOptions = {
   getApiKey?: () => string | undefined;
@@ -609,6 +610,7 @@ export function createAgentRouter({
       let groqFailureRetries = 0;
       let repairToolRequest = false;
       let outputBudgetRetried = false;
+      let compactRequest = false;
       const providerWait = { count: 0, totalMs: 0 };
       while (true) {
         controller.signal.throwIfAborted();
@@ -630,17 +632,19 @@ export function createAgentRouter({
           }, providerIdleMs);
         };
         let modelResponse: ReturnType<typeof collectAgentResponse> | null = null;
+        let requestBytes = 0;
         try {
           resetIdle();
           if (activeProvider === "groq") {
-            const request = buildGroqAgentRequest(agentInput, now(), allowTools, activeModel, securityNote(), codingPlan);
+            const request = buildGroqAgentRequest(agentInput, now(), allowTools, activeModel, securityNote(), codingPlan, compactRequest);
             if (repairToolRequest) {
               request.temperature = 0.2;
               request.messages.push({
                 role: "system",
-                content: "The previous generation did not produce a valid tool call. Use only the declared tools with arguments matching their JSON schemas. Request one tool at a time. If no tool is needed, answer directly.",
+                content: TOOL_REPAIR_INSTRUCTION,
               });
             }
+            requestBytes = Buffer.byteLength(JSON.stringify(request), "utf8");
             const stream = await groqClient!.chat.completions.create(
               request,
               { signal: attemptController.signal },
@@ -725,6 +729,28 @@ export function createAgentRouter({
             status: failure?.status ?? (error as { status?: number }).status,
             headers: (error as { headers?: Headers }).headers,
           };
+          if (activeProvider === "groq" && candidate.status === 413 && !compactRequest) {
+            const compacted = buildGroqAgentRequest(agentInput, now(), allowTools, activeModel, securityNote(), codingPlan, true);
+            if (repairToolRequest) {
+              compacted.temperature = 0.2;
+              compacted.messages.push({ role: "system", content: TOOL_REPAIR_INSTRUCTION });
+            }
+            const compactedBytes = Buffer.byteLength(JSON.stringify(compacted), "utf8");
+            // Retry only if the request actually shrinks. Do not resend an
+            // oversized prompt unchanged, wait on it, or rerun completed tools.
+            if (compactedBytes < requestBytes) {
+              compactRequest = true;
+              req.log.warn({
+                event: "agent.context.compacted", provider: "groq", model: activeModel,
+                status: 413, requestBytes, compactedBytes,
+              }, "Retrying a smaller Qwen context after a request-size rejection");
+              await emit({ activity: { id: "agent-context-recovery",
+                label: "Reducing older context for Qwen. Current files and saved progress are kept.",
+                kind: "info", status: "running",
+              } });
+              continue;
+            }
+          }
           if (activeProvider === "groq" && candidate.status === 429) {
             const diagnostics = recordRateLimit(activeModel, error);
             req.log.warn({
@@ -817,6 +843,11 @@ export function createAgentRouter({
 
         if (!modelResponse) throw new AgentPublicError("The Agent returned no response. Please try again.");
         clearRateLimit(activeModel);
+        if (compactRequest) {
+          await emit({ activity: { id: "agent-context-recovery",
+            label: "Qwen accepted the smaller request context", kind: "info", status: "complete",
+          } });
+        }
         if (pendingRateNotice && (modelResponse.text.trim() || modelResponse.calls.length)) {
           await emit({ notice: pendingRateNotice });
           pendingRateNotice = undefined;
@@ -1042,6 +1073,8 @@ export function createAgentRouter({
         ? "Nexo Agent timed out. Your partial answer is kept; please try again."
         : error instanceof AgentPublicError || error instanceof AgentOutputLimitError
           ? error.message
+          : activeProvider === "groq" && status === 413
+            ? "Groq rejected Qwen's request as too large (HTTP 413). Nexo could not safely fit the current context within its request allowance. Your saved project is kept. Ask for a smaller change to the existing files; this is not a timeout or exhausted daily messages."
           : activeProvider === "groq" && status === 429
             ? activeTask === "coding"
               ? codingRateLimitMessage(error)

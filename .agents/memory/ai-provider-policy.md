@@ -45,6 +45,12 @@ Do not interpret every Groq 429 as exhausted daily requests. Token and request l
 
 **How to apply:** Prefer models outside provider retry windows, but treat cooldowns as routing hints rather than proof of current exhaustion. When every compatible candidate is cached, permit one bounded live check of the earliest-expiring candidate and clear its cooldown on success. Do not cache request-size rejections as model-wide outages. Retain only allowlisted quota diagnostics (metric, numeric counters, reset/retry headers), never raw upstream bodies or prompts. Distinguish observed limits from an unproven historical cause, especially across Replit and Vercel accounts.
 
+Treat Groq HTTP 413 as request-size rejection, separately from HTTP 429 and timeouts.
+
+**Why:** A live Agent build saved a partial website but its continuation failed with HTTP 413. Increasing retry waits could not resolve an oversized continuation; the generic error hid the distinction.
+
+**How to apply:** Permit only a bounded recovery that actually reduces the outgoing request. Preserve the newest prompt and complete current source, mark omitted context, and never alter saved history or rerun completed tools. Do not classify 413 as exhausted quota or switch coding to GPT-OSS. If safe compaction cannot fit, report the size limitation rather than silently cutting code.
+
 Explicit output allowances may justify one smaller-budget retry on the same model, not a change of coding provider or an incomplete project.
 
 **Why:** Large code generations were being described as exhausted model quotas and sent to GPT-OSS. Fitting a small complete implementation can recover from a size rejection, but truncating tool JSON or replacing an existing project with a stub would lose correctness.
