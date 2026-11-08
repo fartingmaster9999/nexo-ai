@@ -1161,6 +1161,16 @@ function Home() {
             <div className="context-title" title={activeConversation?.title ?? (activeId ? 'New conversation' : 'Home')}>
               {activeConversation?.title ?? (activeId ? 'New conversation' : 'Home')}
             </div>
+            {!activeId && (
+              <button className="nx-history nx-header-history" type="button"
+                onClick={(event) => toggleHomeHistory(event.currentTarget)}
+                aria-label={homeHistoryOpen ? 'Close conversation history' : 'Open conversation history'}
+                aria-expanded={homeHistoryOpen} aria-controls="history-sidebar"
+                data-testid="button-home-history">
+                <PanelLeft size={15} aria-hidden="true" />
+                <span>Past conversations</span>
+              </button>
+            )}
           </div>
           {canReopenWorkspace && !workspaceOpen && (
             <button type="button" className="ws-btn" onClick={reopenWorkspace}
@@ -1217,6 +1227,16 @@ function Home() {
                   prompts={suggestions}
                   onStart={createConversation}
                   onPrompt={(text) => void sendMessage(undefined, text)}
+                  onDraftPrompt={(text) => {
+                    setDraft((current) => current.trim() ? `${current.trimEnd()}\n\n${text}` : text);
+                    window.requestAnimationFrame(() => {
+                      const textarea = textareaRef.current;
+                      if (!textarea) return;
+                      textarea.style.height = 'auto';
+                      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
+                      textarea.focus({ preventScroll: true });
+                    });
+                  }}
                   onOpenHistory={toggleHomeHistory}
                   historyOpen={homeHistoryOpen}
                 />
