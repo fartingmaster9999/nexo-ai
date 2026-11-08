@@ -9,6 +9,7 @@ import './refine.css';
 import './landing.css';
 import './ux-polish.css';
 import './answer-format.css';
+import './motion.css';
 
 createRoot(document.getElementById('root')!, {
   // Keeps caught errors off reportError(), which would raise the dev overlay.
