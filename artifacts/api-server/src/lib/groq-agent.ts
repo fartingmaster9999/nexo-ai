@@ -11,6 +11,7 @@ import {
 } from "./gemini-agent";
 import { CODING_FALLBACK, outputTokenBudget, outputBudgetInstruction } from "./model-routing";
 import { compactAgentContext, isAppliedProject } from "./agent-request-context";
+import { agentBuildPolicy } from "./agent-build-policy";
 
 export const GROQ_AGENT_MODEL = CODING_FALLBACK;
 export class AgentOutputLimitError extends Error {
@@ -159,6 +160,8 @@ export function buildGroqAgentRequest(
   planningNote?: string,
   compact = false,
 ): ChatCompletionCreateParamsStreaming {
+  // Evaluate against the complete history before request-size compaction.
+  const buildPolicy = agentBuildPolicy(input);
   if (compact) input = compactAgentContext(input);
   const timeZone = input.timeZone ?? "UTC";
   const history = boundedHistory(input.messages, 16_000);
@@ -193,6 +196,12 @@ export function buildGroqAgentRequest(
       content: message.content + (index === history.length - 1 && message.role === "user" ? selectedProjectContext : ""),
     } as ChatCompletionMessageParam)),
     ...groqHistory(input.agentHistory ?? []),
+    ...(allowTools && buildPolicy.requireTool ? [{
+      role: "system" as const,
+      content: buildPolicy.failed
+        ? "The last browser execution or project validation failed. Repair the observed defect with write_project or run_code. Preserve unrelated files and requested features. Do not describe a fix as completed without applying it. If the sandbox cannot support the requirement, explain the limitation rather than inventing a working backend."
+        : "The user requested an implementation. Use write_project for a browser app or website, or run_code for a standalone program. Produce and run a complete small first version now; do not stop at instructions, a promise, or a Markdown code listing. Use reasonable defaults for nonessential choices.",
+    }] : []),
   ];
   return {
     model,
@@ -202,7 +211,7 @@ export function buildGroqAgentRequest(
     max_completion_tokens: outputTokenBudget(model, input.deepthink === true ? 8192 : 4096),
     reasoning_effort: input.deepthink === true ? "high" : "medium",
     reasoning_format: "parsed",
-    tool_choice: allowTools ? "auto" : "none",
+    tool_choice: allowTools ? buildPolicy.requireTool ? "required" : "auto" : "none",
     parallel_tool_calls: false,
     ...(allowTools ? { tools: agentTools } : {}),
   };

@@ -389,7 +389,9 @@ test("Unavailable Gemini planning does not block Qwen or claim a rate limit", as
   const qwenRequests = [];
   let geminiCalls = 0;
   await withServer(createSseApp({
-    getGroqClient: () => planningQwenClient(qwenRequests),
+    getGroqClient: () => planningQwenClient(qwenRequests, {
+      entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Tasks</h1>" }],
+    }),
     fetchImpl: async () => {
       geminiCalls += 1;
       return new Response("", { status: 403 });
@@ -410,7 +412,9 @@ test("Coding without a Gemini key stays on Qwen and explains the skipped plan", 
   const qwenRequests = [];
   await withServer(createSseApp({
     getApiKey: () => undefined,
-    getGroqClient: () => planningQwenClient(qwenRequests),
+    getGroqClient: () => planningQwenClient(qwenRequests, {
+      entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Tasks</h1>" }],
+    }),
     fetchImpl: async () => { throw new Error("Gemini must not be called without a key"); },
   }), async (url) => {
     const events = await readEvents(await fetch(url, {
@@ -615,7 +619,8 @@ test("Agent caps project previews across snippet and project revisions", async (
             },
           }] } }] };
         })();
-        assert.match(request.messages.at(-1).content, /revision limit/);
+        assert.match(JSON.stringify(request.messages), /revision limit/);
+        assert.equal(request.tool_choice, "required");
         return (async function* () {
           yield { choices: [{ delta: { content: "The project is ready; further refinements need a new request." } }] };
         })();
@@ -627,7 +632,8 @@ test("Agent caps project previews across snippet and project revisions", async (
       body: JSON.stringify({ ...input, agentHistory: history }),
     }));
     assert.equal(events.some((event) => event.agentTool), false);
-    assert.ok(events.some((event) => event.content));
+    assert.ok(events.some((event) => event.error?.includes("last build still has errors")));
+    assert.equal(events.some((event) => event.content?.includes("project is ready")), false);
   });
   assert.equal(calls, 2);
 });

@@ -4,7 +4,15 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { copyRawCode, rawCodeFromSource } from '../src/lib/code-clipboard.ts';
 import { makePreviewHtml, sanitizePreviewDiagnostic, reportPreviewReview, reportPreviewDiagnostics, readPreviewReview } from '../src/lib/code-runner.ts';
-import { sanitizePreviewReview, formatPreviewReview, previewReviewInstrumentation } from '../src/lib/preview-review.ts';
+import { sanitizePreviewReview, formatPreviewReview, previewReviewInstrumentation, previewReviewHasIssues } from '../src/lib/preview-review.ts';
+test('Agent treats browser structural defects as repairable failures, not successful builds', () => {
+  const healthy = { emptyPage: false, horizontalOverflow: false, brokenImages: 0, unlabeledControls: 0 };
+  assert.equal(previewReviewHasIssues(undefined), false);
+  assert.equal(previewReviewHasIssues(healthy), false);
+  for (const defect of [{ emptyPage: true }, { horizontalOverflow: true }, { brokenImages: 1 }, { unlabeledControls: 2 }]) {
+    assert.equal(previewReviewHasIssues({ ...healthy, ...defect }), true);
+  }
+});
 import { savedWorkspaceState, WORKSPACE_DRAFT_KEY } from '../src/lib/workspace-recovery.ts';
 import { previewFormInstrumentation } from '../src/lib/preview-forms.ts';
 import { workspaceBounds, clampWorkspaceWidth } from '../src/lib/workspace-size.ts';

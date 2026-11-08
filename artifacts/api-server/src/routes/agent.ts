@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { agentBuildPolicy } from "../lib/agent-build-policy";
 import Groq from "groq-sdk";
 import { StreamAgentChatBody, type AgentRateLimitRetry, type AgentToolExchange } from "@workspace/api-zod";
 import { isValidTimeZone } from "../lib/chat-request";
@@ -611,6 +612,7 @@ export function createAgentRouter({
       let groqFailureRetries = 0;
       let repairToolRequest = false;
       let outputBudgetRetried = false;
+      let projectValidationFailed = false;
       let compactRequest = (parsed.data.agentRetryCount ?? 0) > 0;
       const providerWait = { count: 0, totalMs: 0 };
       while (true) {
@@ -638,6 +640,13 @@ export function createAgentRouter({
           resetIdle();
           if (activeProvider === "groq") {
             const request = buildGroqAgentRequest(agentInput, now(), allowTools, activeModel, securityNote(), codingPlan, compactRequest);
+            if (projectValidationFailed && allowTools) {
+              request.tool_choice = "required";
+              request.messages.push({
+                role: "system",
+                content: "Your previous project payload was rejected without changing any saved files. Return a corrected write_project call. Include the HTML entrypoint in files, use safe relative paths, and keep the complete combined project within 8 files and 12000 characters. Do not repeat a malformed or oversized payload.",
+              });
+            }
             if (repairToolRequest) {
               request.temperature = 0.2;
               request.messages.push({
@@ -936,6 +945,13 @@ export function createAgentRouter({
         }
         const call = modelResponse.calls[0];
         if (!call) {
+          const buildState = activeTask === "coding" ? agentBuildPolicy(agentInput) : undefined;
+          if (buildState?.failed || projectValidationFailed) {
+            throw new AgentPublicError("The last build still has errors. Your saved project is kept, but Nexo could not verify a working repair. Ask it to continue from the current project.");
+          }
+          if (buildState?.requireTool) {
+            throw new AgentPublicError("The coding model returned an explanation instead of building the requested project. No new app was run. Your existing project is kept; please retry.");
+          }
           answer = modelResponse.text.trim();
           if (!answer) throw new AgentPublicError("Nexo Agent returned no answer. Please try again.");
           break;
@@ -988,7 +1004,12 @@ export function createAgentRouter({
           const files = validateAgentProjectFiles(call.arguments.files);
           const entrypoint = call.arguments.entrypoint;
           if (!files || typeof entrypoint !== "string" || !files.some((file) => file.path === entrypoint)) {
-            throw new AgentPublicError("Nexo Agent returned an invalid or oversized project. Please try a smaller request.");
+            projectValidationFailed = true;
+            await emit({ activity: {
+              id: `agent-project-${call.callId}`, label: "Correcting the generated project before running it",
+              kind: "code", status: "error",
+            } });
+            continue;
           }
           const arguments_ = { files, entrypoint };
           const previous = history.find((exchange) => sameToolArguments(exchange, { tool: call.tool, arguments: arguments_ }));
@@ -1009,7 +1030,7 @@ export function createAgentRouter({
               callId: call.callId,
               thoughtSignature: call.thoughtSignature,
               arguments: arguments_,
-              result: safeResultText("The HTML preview revision limit was reached after three runs. Do not request another preview; provide the best final response using the existing project and checks. Explain any remaining limitations."),
+              result: safeResultText("Project update was not applied; the HTML preview revision limit was reached after three runs. Do not request another preview. Explain the unresolved issues; the existing project and preview are preserved."),
             });
             await emit({ activity: { id: `agent-project-${call.callId}`, label: "Project preview revision limit reached", kind: "code", status: "complete" } });
             continue;
@@ -1055,7 +1076,7 @@ export function createAgentRouter({
             callId: call.callId,
             thoughtSignature: call.thoughtSignature,
             arguments: arguments_,
-            result: safeResultText("The HTML preview revision limit was reached after three runs. Do not request another HTML preview; provide the best final response using the existing preview and diagnostics."),
+            result: safeResultText("Execution error: HTML preview revision limit was reached after three runs. This code was not run. Do not request another HTML preview; explain any unresolved issues using the existing preview and diagnostics."),
           });
           await emit({
             activity: {

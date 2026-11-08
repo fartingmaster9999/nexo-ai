@@ -21,6 +21,7 @@ import NotFound from '@/pages/not-found';
 import { NoticeBanner, ThinkingPanel, ReplyStatus, isSearching, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
 import { executeCode, formatPreviewReview, readPreviewReview, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
+import { previewReviewHasIssues } from '@/lib/preview-review';
 import { startRequestDeadline, RESPONSE_DEADLINE_MS, AGENT_BUILD_DEADLINE_MS, AGENT_REVIEW_DEADLINE_MS } from '@/lib/request-deadlines';
 import { MAX_AGENT_DEFERRED_RETRIES, waitForAgentRetry } from '@/lib/agent-retry';
 import type { AgentWorkspaceTask } from '@/components/code-workspace';
@@ -711,6 +712,7 @@ function Home() {
         let previewId: string | undefined;
         let previewDiagnostics: PreviewDiagnostic[] = [];
         let previewReviewText = '';
+        let previewLayoutErrors = false;
         try {
           const executionCode = projectFiles && projectEntrypoint && language === 'html'
             ? bundleHtmlProject(projectFiles, projectEntrypoint)
@@ -732,7 +734,9 @@ function Home() {
         if (previewHtml && previewId) {
           setAgentCodeTask({ ...task, outputs, status: 'running', previewHtml, previewId });
           previewDiagnostics = await waitForPreviewDiagnostics(previewId, controller.signal);
-          previewReviewText = formatPreviewReview(readPreviewReview(previewId));
+          const review = readPreviewReview(previewId);
+          previewReviewText = formatPreviewReview(review);
+          previewLayoutErrors = previewReviewHasIssues(review);
         }
         if (controller.signal.aborted) return;
         const outputText = outputs
@@ -831,7 +835,7 @@ function Home() {
             reviewController.abort();
           }
         }
-        const hasPreviewErrors = previewDiagnostics.length > 0;
+        const hasPreviewErrors = previewDiagnostics.length > 0 || previewLayoutErrors;
         setAgentCodeTask({
           ...task,
           outputs,
@@ -842,7 +846,9 @@ function Home() {
           previewDiagnostics,
         });
 
+        const codeHasErrors = Boolean(projectStorageError || executionError || hasPreviewErrors);
         const resultText = [
+          `Nexo execution status: ${codeHasErrors ? 'failed' : 'completed'}.`,
           projectStorageError ? `Project save error: ${projectStorageError}` : '',
           executionError ? `Execution error: ${executionError}` : '',
           gemmaReviewText
@@ -852,7 +858,6 @@ function Home() {
           previewText,
           previewReviewText,
         ].filter(Boolean).join('\n').slice(0, 8000) || 'Execution completed with no text output.';
-        const codeHasErrors = Boolean(projectStorageError || executionError || hasPreviewErrors);
         const activityId = `${isProject ? 'agent-project' : 'agent-code'}-${tool.callId}`;
         patchLast((message) => {
           const list = message.activity ?? [];
@@ -860,6 +865,7 @@ function Home() {
             id: activityId,
             label: codeHasErrors
               ? projectStorageError ? 'Project could not be saved in this browser'
+                : previewLayoutErrors ? 'Browser checks found page issues; Agent will review them'
                 : previewDiagnostics.length ? 'HTML preview reported runtime errors' : 'Browser code run returned an error'
               : isProject ? 'Project saved and run in the isolated browser' : 'Code finished in the isolated browser',
             kind: 'code',

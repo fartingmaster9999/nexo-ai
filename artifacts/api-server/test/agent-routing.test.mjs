@@ -81,6 +81,82 @@ function textStream(content) {
   })();
 }
 
+function projectStream(id, project) {
+  return (async function* () {
+    yield { choices: [{ delta: { tool_calls: [{
+      index: 0, id, type: "function",
+      function: { name: "write_project", arguments: JSON.stringify(project) },
+    }] } }] };
+  })();
+}
+
+test("Agent corrects rejected project payloads, runs the build, and consumes its result before finishing", async () => {
+  let calls = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      calls += 1;
+      if (calls === 1) return projectStream("invalid-project", {
+        entrypoint: "index.html", files: [{ path: "../index.html", content: "invalid" }],
+      });
+      if (calls === 2) {
+        assert.equal(request.tool_choice, "required");
+        assert.match(request.messages.at(-1).content, /previous project payload was rejected/);
+        return projectStream("corrected-project", {
+          entrypoint: "index.html", files: [{ path: "index.html",
+            content: '<!doctype html><button onclick="this.textContent=Number(this.textContent)+1">0</button>' }],
+        });
+      }
+      assert.match(request.messages.at(-1).content, /Nexo execution status: completed/);
+      return textStream("Created the counter. The browser reported no runtime errors; button interactions remain unverified.");
+    } } },
+  };
+  await withServer(createApp(client), async (url) => {
+    const body = { messages: [{ role: "user", content: "Build a counter app" }] };
+    const post = async (data) => eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+    }));
+    const initial = await post(body);
+    const tool = initial.find((event) => event.agentTool)?.agentTool;
+    assert.ok(tool);
+    assert.equal(tool.callId, "corrected-project");
+    assert.deepEqual(tool.history, [], "invalid payloads must never enter reusable project history");
+    const finished = await post({ ...body, agentHistory: [{
+      tool: tool.tool, callId: tool.callId, thoughtSignature: tool.thoughtSignature,
+      arguments: tool.arguments, result: "Nexo execution status: completed.\nNo runtime errors reported.",
+    }] });
+    assert.ok(finished.some((event) => event.content?.includes("Created the counter")));
+    assert.equal(finished.some((event) => event.error), false);
+  });
+  assert.equal(calls, 3);
+});
+
+test("Agent cannot report successful completion without a build or after a failed run", async () => {
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      assert.equal(request.tool_choice, "required");
+      return textStream("Everything works perfectly.");
+    } } },
+  };
+  await withServer(createApp(client), async (url) => {
+    for (const agentHistory of [[], [{
+      tool: "run_code", callId: "broken", thoughtSignature: "groq-agent-v1",
+      arguments: { language: "html", code: "<h1>Broken app</h1>" },
+      result: "Nexo execution status: failed.\nExecution error: ReferenceError",
+    }]]) {
+      const events = await eventsFrom(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Build an app" }], agentHistory }),
+      }));
+      assert.ok(events.some((event) => event.error));
+      assert.equal(events.some((event) => event.content?.includes("Everything works")), false);
+    }
+  });
+});
+
 test("coding pins Qwen through an output-budget retry and tool continuation, ignoring old GPT/Gemini routes", async () => {
   clearRateLimit(CODING_FALLBACK);
   const requests = [];
@@ -368,7 +444,8 @@ test("an empty deferred coding run does not repeat the Gemini planning pass", as
     chat: { completions: { create: async (request) => {
       if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
       assert.equal(request.model, CODING_FALLBACK);
-      return textStream("Qwen continued the request.");
+      assert.equal(request.tool_choice, "required");
+      return toolStream();
     } } },
   };
   const app = express();
@@ -388,7 +465,7 @@ test("an empty deferred coding run does not repeat the Gemini planning pass", as
         agentProvider: "groq", agentRetryCount: 1,
       }),
     }));
-    assert.ok(events.some((event) => event.content === "Qwen continued the request."));
+    assert.ok(events.some((event) => event.agentTool?.tool === "run_code"));
   });
 });
 

@@ -49,6 +49,11 @@ export function formatPreviewReview(review?: PreviewReview): string {
   ].join('\n');
 }
 
+export function previewReviewHasIssues(review?: PreviewReview): boolean {
+  return Boolean(review && (review.emptyPage || review.horizontalOverflow ||
+    review.brokenImages > 0 || review.unlabeledControls > 0));
+}
+
 /** Executed inside the opaque-origin preview, not in the trusted application DOM. */
 export function previewReviewInstrumentation(previewId: string): string {
   return `(function(){
