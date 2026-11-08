@@ -8,7 +8,7 @@ import { searchWeb, type SearchResult } from "../lib/web-search";
 import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry";
 import {
   agentGenerationModelIds, agentSecurityModelIds, availableModelCatalog, classifyAgentTask,
-  isAgentTask, isCoolingDown, clearRateLimit, modelsForRequest, recordRateLimit, rateLimitDiagnostics, reduceOutputBudget, shortProviderRetryDelay, modelLabel, routeAgentTask,
+  isAgentTask, isCoolingDown, clearRateLimit, codingRateLimitMessage, modelsForRequest, recordRateLimit, rateLimitDiagnostics, reduceOutputBudget, shortProviderRetryDelay, modelLabel, routeAgentTask,
   routeGeminiAgentTask, type AgentTask,
 } from "../lib/model-routing";
 import { reviewAgentTool, screenPromptInjection } from "../lib/agent-security";
@@ -744,6 +744,8 @@ export function createAgentRouter({
               ? shortProviderRetryDelay(diagnostics.retryAfter) : undefined;
             if (retryDelay !== undefined) {
               providerWindowRetried = true;
+              // A completed rejected attempt is not a stalled provider stream.
+              clearTimeout(idle);
               req.log.warn({ event: "agent.provider.wait", provider: "groq", model: activeModel,
                 delayMs: retryDelay, metric: diagnostics.metric,
               }, "Waiting for Qwen's explicit short retry window");
@@ -1038,7 +1040,7 @@ export function createAgentRouter({
           ? error.message
           : activeProvider === "groq" && status === 429
             ? activeTask === "coding"
-              ? "Qwen rejected this coding request with HTTP 429. Its token allowance may be smaller than its daily request allowance. Nexo has not switched your code to GPT-OSS. Try a smaller change or retry after the provider window."
+              ? codingRateLimitMessage(error)
               : rateLimitDiagnostics(error).requestTooLarge
               ? "The provider rejected this Agent request because it is too large for its token allowance. Try a smaller project change or a new conversation. This does not mean every model is out of quota."
               : `Groq rejected this request on ${modelLabel(activeModel)} with HTTP 429. This may be a token or request limit, not exhausted daily messages. Please try again later.`

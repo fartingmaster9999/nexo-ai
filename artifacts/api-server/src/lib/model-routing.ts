@@ -304,18 +304,58 @@ export function rateLimitDiagnostics(error: unknown) {
   const requestTooLarge = /request too large/i.test(message) ||
     (metric !== undefined && /^(?:TPM|TPD|ITPM|OTPM)$/.test(metric) &&
       quotaLimit !== null && quotaRequested !== null && quotaRequested > quotaLimit);
+  // Some streamed Groq errors have no Retry-After header. Parse only the
+  // provider's explicit duration, never forward its raw error text.
+  const durationSeconds = (value: string | null): number | undefined => {
+    if (!value || !/^(?:\d+(?:\.\d+)?(?:ms|s|m|h))+$/.test(value)) return undefined;
+    let seconds = 0;
+    for (const part of value.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/g)) {
+      seconds += Number(part[1]) * ({ ms: 0.001, s: 1, m: 60, h: 3600 }[part[2]!] ?? 0);
+    }
+    return Number.isFinite(seconds) && seconds <= 86400 ? seconds : undefined;
+  };
+  const bodyDelay = durationSeconds(/\btry again in\s+((?:\d+(?:\.\d+)?(?:ms|s|m|h))+)/i.exec(message)?.[1]?.toLowerCase() ?? null);
+  const resetTokens = candidate?.headers?.get?.("x-ratelimit-reset-tokens") ?? null;
+  const tokenDelay = metric && /^(?:TPM|ITPM|OTPM)$/.test(metric)
+    ? durationSeconds(resetTokens) : undefined;
+  const headerDelay = candidate?.headers?.get?.("retry-after") ?? null;
+  const retryAfter = headerDelay ?? (bodyDelay !== undefined ? String(bodyDelay)
+    : tokenDelay !== undefined ? String(tokenDelay) : null);
   return {
     metric: metric ?? "unknown",
     quotaLimit,
     quotaUsed,
     quotaRequested,
     requestTooLarge,
-    retryAfter: candidate?.headers?.get?.("retry-after") ?? null,
+    retryAfter,
     remainingRequests: candidate?.headers?.get?.("x-ratelimit-remaining-requests") ?? null,
     remainingTokens: candidate?.headers?.get?.("x-ratelimit-remaining-tokens") ?? null,
     tokenLimit: candidate?.headers?.get?.("x-ratelimit-limit-tokens") ?? null,
-    resetTokens: candidate?.headers?.get?.("x-ratelimit-reset-tokens") ?? null,
+    resetTokens,
   };
+}
+
+export function codingRateLimitMessage(error: unknown): string {
+  const quota = rateLimitDiagnostics(error);
+  const labels: Record<string, string> = {
+    TPM: "tokens per minute", TPD: "tokens per day", ITPM: "input tokens per minute",
+    OTPM: "output tokens per minute", RPM: "requests per minute", RPD: "requests per day",
+  };
+  const metric = labels[quota.metric];
+  const counters = [
+    quota.quotaLimit !== null ? `limit ${quota.quotaLimit}` : "",
+    quota.quotaUsed !== null ? `used ${quota.quotaUsed}` : "",
+    quota.quotaRequested !== null ? `requested ${quota.quotaRequested}` : "",
+  ].filter(Boolean).join(", ");
+  const detail = metric ? `Groq reported ${metric}${counters ? ` (${counters})` : ""}.`
+    : "Groq did not identify the quota in its response; this does not prove your daily requests are exhausted.";
+  const delay = quota.retryAfter !== null ? Number(quota.retryAfter) : NaN;
+  const nextStep = quota.requestTooLarge
+    ? "This request exceeds the reported allowance; waiting alone may not help. Try a smaller project change."
+    : Number.isFinite(delay) && delay >= 0 && delay <= 86400
+      ? `Retry after at least ${Math.max(1, Math.ceil(delay))} seconds.`
+      : "Retry after the provider window.";
+  return `Qwen rejected this coding request with HTTP 429. ${detail} ${nextStep} Your saved project is kept, and Nexo has not switched your code to GPT-OSS.`;
 }
 
 export function recordRateLimit(model: string, error: unknown) {

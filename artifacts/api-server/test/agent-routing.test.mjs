@@ -13,6 +13,8 @@ import {
   SMALL_MODEL,
   markRateLimited,
   clearRateLimit,
+  rateLimitDiagnostics,
+  codingRateLimitMessage,
   isCoolingDown,
 } from "../src/lib/model-routing.ts";
 import { createAgentRouter } from "../src/routes/agent.ts";
@@ -165,8 +167,8 @@ test("coding waits once for an explicit short provider window without replaying 
       assert.equal(request.model, CODING_FALLBACK);
       assert.match(request.messages.at(-1).content, /already checked/);
       if (++attempts === 1) throw new Groq.APIError(429, {
-        message: "Output tokens per minute (OTPM): Limit 1000, Used 985, Requested 241.",
-      }, undefined, new Headers({ "retry-after": "0" }));
+        message: "Output tokens per minute (OTPM): Limit 1000, Used 985, Requested 241. Please try again in 0s.",
+      }, undefined, new Headers());
       return textStream("The checked project is ready.");
     } } },
   };
@@ -186,6 +188,22 @@ test("coding waits once for an explicit short provider window without replaying 
     assert.equal(events.some((event) => event.agentTool || event.error), false);
   });
   assert.equal(attempts, 2);
+});
+
+test("quota diagnostics recover explicit delays without leaking provider text or confusing daily quotas", () => {
+  const error = (message, headers = {}) => new Groq.APIError(429, { message }, undefined, new Headers(headers));
+  const body = error("PRIVATE tokens per minute (TPM): Limit 6000, Used 5900, Requested 200. Please try again in 1m2.5s. PRIVATE");
+  assert.equal(rateLimitDiagnostics(body).retryAfter, "62.5");
+  assert.match(codingRateLimitMessage(body), /tokens per minute \(limit 6000, used 5900, requested 200\)/);
+  assert.match(codingRateLimitMessage(body), /at least 63 seconds/);
+  assert.equal(codingRateLimitMessage(body).includes("PRIVATE"), false);
+  assert.equal(rateLimitDiagnostics(error("tokens per minute (TPM)", { "x-ratelimit-reset-tokens": "500ms" })).retryAfter, "0.5");
+  assert.equal(rateLimitDiagnostics(error("tokens per day (TPD)", { "x-ratelimit-reset-tokens": "2s" })).retryAfter, null);
+  assert.equal(rateLimitDiagnostics(error("requests per minute (RPM)", { "x-ratelimit-reset-tokens": "2s" })).retryAfter, null);
+  assert.equal(rateLimitDiagnostics(error("Please try again in 2s.", { "retry-after": "10" })).retryAfter, "10");
+  assert.equal(rateLimitDiagnostics(error("Please try again in never. PRIVATE")).retryAfter, null);
+  assert.match(codingRateLimitMessage(error("PRIVATE")), /did not identify the quota/);
+  assert.match(codingRateLimitMessage(error("tokens per minute (TPM): Limit 100, Used 0, Requested 200")), /waiting alone may not help/);
 });
 
 test("truncated Qwen tool output is rejected before incomplete code can run", async () => {
