@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, MessageSquare, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, MessageSquare, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SettingsDialog } from '@/components/settings-dialog';
+import { ProviderSettingsDialog, type PublicProviderKeys } from '@/components/provider-settings-dialog';
 import { HomeLanding } from '@/components/home-landing';
 import NotFound from '@/pages/not-found';
 import { LiveReplyIndicator, NoticeBanner, ThinkingPanel, type Activity, type ChatMessage } from '@/components/answer-details';
@@ -44,6 +45,7 @@ import { prepareRequestMessages } from '@/lib/request-context';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
 import { useFocusTrap } from '@/hooks/use-focus-trap';
+import { toast } from '@/hooks/use-toast';
 import { extractSnippets, type Snippet } from '@/lib/code-extract';
 import { imageFileToBase64, prepareImageFile, type PendingImage } from '@/lib/image-attachment';
 import type { QuizProgress } from '@/lib/interactive-widgets';
@@ -55,9 +57,38 @@ const prefersReducedMotion = () => typeof window !== 'undefined' && window.match
 const CodeWorkspace = lazy(() => import('@/components/code-workspace').then(module => ({ default: module.CodeWorkspace })));
 const DEEPTHINK_KEY = 'nexo-deepthink';
 const AGENT_KEY = 'nexo-agent';
+const PUBLIC_GROQ_KEY = 'nexo-public-groq-key';
+const PUBLIC_GEMINI_KEY = 'nexo-public-gemini-key';
+const PUBLIC_KEY_MODE = import.meta.env.VITE_PUBLIC_KEY_MODE === 'true';
 const queryClient = new QueryClient();
 const snippetCache = new WeakMap<ChatMessage, Snippet[]>();
 const noSnippets: Snippet[] = [];
+
+function readPublicProviderKeys(): PublicProviderKeys {
+  try {
+    return {
+      groq: window.localStorage.getItem(PUBLIC_GROQ_KEY) ?? '',
+      gemini: window.localStorage.getItem(PUBLIC_GEMINI_KEY) ?? '',
+    };
+  } catch {
+    return { groq: '', gemini: '' };
+  }
+}
+
+function apiEndpoint(path: string) {
+  const endpoint = PUBLIC_KEY_MODE ? path.replace(/^\/api(?=\/)/, '/api/public') : path;
+  return PUBLIC_KEY_MODE ? endpoint : `${import.meta.env.BASE_URL.replace(/\/$/, '')}${endpoint}`;
+}
+
+function apiRequestHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
+  if (!PUBLIC_KEY_MODE) return headers;
+  const keys = readPublicProviderKeys();
+  if (!keys.groq.trim()) throw new Error('Add a Groq API key in Settings to start chatting.');
+  headers['X-Nexo-Groq-Key'] = keys.groq.trim();
+  if (keys.gemini.trim()) headers['X-Nexo-Gemini-Key'] = keys.gemini.trim();
+  return headers;
+}
 
 const suggestions = [
   { label: 'Make a plan', text: 'Help me make a realistic plan for a calmer, more focused week.' },
@@ -104,12 +135,14 @@ function Home() {
   const closeIfMobile = () => { if (isMobile()) setSidebarOpen(false); };
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
+  const [providerKeys, setProviderKeys] = useState<PublicProviderKeys>(readPublicProviderKeys);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceVisited, setWorkspaceVisited] = useState(false);
   const [agentFull, setAgentFull] = useState(false);
   const keepWorkspaceFor = useRef<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
-  const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean((activeId || homeHistoryOpen) && sidebarOpen && !workspaceOpen && !settingsOpen && !deleteTarget));
+  const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean((activeId || homeHistoryOpen) && sidebarOpen && !workspaceOpen && !settingsOpen && !providerSettingsOpen && !deleteTarget));
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   const [agentMode, setAgentMode] = useState<boolean>(() => { try { return window.localStorage.getItem(AGENT_KEY) === '1'; } catch { return false; } });
@@ -118,9 +151,11 @@ function Home() {
     const syncModePreferences = (event: StorageEvent) => {
       try {
         if (event.storageArea !== window.localStorage) return;
-        if (event.key !== null && event.key !== DEEPTHINK_KEY && event.key !== AGENT_KEY) return;
+        if (event.key !== null && event.key !== DEEPTHINK_KEY && event.key !== AGENT_KEY &&
+            event.key !== PUBLIC_GROQ_KEY && event.key !== PUBLIC_GEMINI_KEY) return;
         setDeepthink(window.localStorage.getItem(DEEPTHINK_KEY) === '1');
         setAgentMode(window.localStorage.getItem(AGENT_KEY) === '1');
+        setProviderKeys(readPublicProviderKeys());
       } catch {
         return;
       }
@@ -138,6 +173,24 @@ function Home() {
     setAgentMode(next);
     setDeepthinkSuggestionDismissed(false);
     try { window.localStorage.setItem(AGENT_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+    if (PUBLIC_KEY_MODE && next && !readPublicProviderKeys().gemini.trim()) {
+      toast({
+        title: 'Agent can run with limited features',
+        description: 'Add a Gemini API key in Settings to unlock image understanding and expanded Agent capabilities.',
+      });
+    }
+  };
+  const saveProviderKeys = (keys: PublicProviderKeys) => {
+    try {
+      if (keys.groq.trim()) window.localStorage.setItem(PUBLIC_GROQ_KEY, keys.groq.trim());
+      else window.localStorage.removeItem(PUBLIC_GROQ_KEY);
+      if (keys.gemini.trim()) window.localStorage.setItem(PUBLIC_GEMINI_KEY, keys.gemini.trim());
+      else window.localStorage.removeItem(PUBLIC_GEMINI_KEY);
+      setProviderKeys({ groq: keys.groq.trim(), gemini: keys.gemini.trim() });
+      setError('');
+    } catch {
+      setError('Browser storage is unavailable. Your provider keys could not be saved on this device.');
+    }
   };
   const [agentCodeTask, setAgentCodeTask] = useState<AgentWorkspaceTask | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -458,6 +511,19 @@ function Home() {
       return;
     }
     if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); return; }
+    if (PUBLIC_KEY_MODE) {
+      const keys = readPublicProviderKeys();
+      if (!keys.groq.trim()) {
+        setProviderSettingsOpen(true);
+        setError('Add a Groq API key in Settings to start chatting.');
+        return;
+      }
+      if (requestImage && !keys.gemini.trim()) {
+        setProviderSettingsOpen(true);
+        setError('Add a Gemini API key in Settings to analyze images.');
+        return;
+      }
+    }
     const requestAgent = resume ? true : agentMode;
     shouldAutoFollowMessages.current = true;
     const requestDeepthink = resume?.deepthink ?? deepthink;
@@ -590,6 +656,7 @@ function Home() {
       let agentHistory: AgentToolExchange[] = resume?.history ?? [];
       let agentToolCalls = resume?.toolCalls ?? 0;
       let deferredRetries = resume?.retries ?? 0;
+      let agentFinalize = resume?.agentFinalize ?? false;
       const startedAt = resume?.startedAt ?? Date.now();
       const agentProvider: { current: 'gemini' | 'groq' | null } = { current: resume?.provider ?? (requestImage ? 'gemini' : null) };
       const agentModel: { current: string | null } = { current: resume?.model ?? null };
@@ -602,7 +669,7 @@ function Home() {
           version: 1, conversationId, assistantId: assistantMessage.id!, messages: requestMessages,
           deepthink: requestDeepthink, imageRequired: Boolean(requestImage), provider: agentProvider.current, model: agentModel.current,
           task: agentTask.current, history: privateAgentHistory(agentHistory, project),
-          toolCalls: agentToolCalls, retries: deferredRetries, startedAt, waitUntil, phase,
+          toolCalls: agentToolCalls, retries: deferredRetries, startedAt, waitUntil, phase, agentFinalize,
         };
         writeAgentCheckpoint(localStorage, checkpoint);
         checkpointRef.current = checkpoint;
@@ -696,6 +763,7 @@ function Home() {
         if (requestAgent && agentModel.current) requestBody.agentModel = agentModel.current;
         if (requestAgent && agentTask.current) requestBody.agentTask = agentTask.current;
         if (requestAgent) requestBody.agentRetryCount = deferredRetries;
+        if (requestAgent && agentFinalize) requestBody.agentFinalize = true;
         if (requestAgent) {
           let savedProject = null;
           try {
@@ -715,13 +783,13 @@ function Home() {
         }
         if (encodedImage && agentProvider.current === 'gemini') requestBody.image = encodedImage;
         saveContinuation();
-        const endpoint = requestAgent ? '/api/agent' : requestImage ? '/api/chat/image' : '/api/chat';
+        const endpoint = apiEndpoint(requestAgent ? '/api/agent' : requestImage ? '/api/chat/image' : '/api/chat');
         clearResponseDeadline = startRequestDeadline(controller, RESPONSE_DEADLINE_MS,
           'This response timed out. Your saved project and partial answer are kept; ask Nexo to continue from the existing files.');
         connectTimeout = window.setTimeout(() => controller.abort(new Error('The server did not respond in time. Please try again.')), 30000);
-        const response = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}${endpoint}`, {
+        const response = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          headers: apiRequestHeaders(),
           credentials: 'include',
           body: JSON.stringify(requestBody),
           signal: controller.signal,
@@ -774,7 +842,25 @@ function Home() {
         if (agentHistory.some(entry => entry.callId === tool.callId)) {
           throw new Error('Agent repeated an already handled tool call. Saved files are unchanged; send a new request to continue.');
         }
-        if (agentHistory.length >= 6 || agentToolCalls >= 6) throw new Error('Nexo Agent reached its tool limit. Try a more focused request.');
+        if (agentHistory.length >= 6 || agentToolCalls >= 6) {
+          if (agentFinalize) {
+            const handoff = 'I reached the safe build-action limit before finishing. Any completed workspace changes are kept, and the next action was not run. Ask Nexo Agent to continue from the current project with the remaining change.';
+            received += `${received ? '\n\n' : ''}${handoff}`;
+            patchLast((message) => ({ ...message, content: received }));
+            pump();
+            saveContinuation();
+            break;
+          }
+          agentFinalize = true;
+          acceptEvent({ activity: {
+            id: 'agent-action-budget',
+            label: 'Safe action budget reached; preparing a clear handoff',
+            kind: 'info',
+            status: 'complete',
+          } });
+          saveContinuation();
+          continue;
+        }
         agentToolCalls += 1;
         const completedHistory = extendAgentHistory(agentHistory, tool.history);
         agentHistory = [...completedHistory, {
@@ -924,14 +1010,17 @@ function Home() {
               };
             });
           };
-          setReviewActivity('running', 'Gemma 4 is reviewing the generated code and run results');
-          const reviewController = new AbortController();
-          const abortReview = () => reviewController.abort(controller.signal.reason);
-          if (controller.signal.aborted) abortReview();
-          else controller.signal.addEventListener('abort', abortReview, { once: true });
-          const clearReviewDeadline = startRequestDeadline(reviewController, AGENT_REVIEW_DEADLINE_MS,
-            'Gemma 4 review took too long; continuing with the run results.');
-          try {
+          if (PUBLIC_KEY_MODE && !readPublicProviderKeys().gemini.trim()) {
+            setReviewActivity('complete', 'Gemma 4 review skipped; add a Gemini key in Settings to enable review');
+          } else {
+            setReviewActivity('running', 'Gemma 4 is reviewing the generated code and run results');
+            const reviewController = new AbortController();
+            const abortReview = () => reviewController.abort(controller.signal.reason);
+            if (controller.signal.aborted) abortReview();
+            else controller.signal.addEventListener('abort', abortReview, { once: true });
+            const clearReviewDeadline = startRequestDeadline(reviewController, AGENT_REVIEW_DEADLINE_MS,
+              'Gemma 4 review took too long; continuing with the run results.');
+            try {
             const reviewFiles = projectFiles ? selectedProjectFiles(readSavedProject(localStorage, conversationId)) : null;
             const reviewBody: Record<string, unknown> = {
               messages: requestMessages,
@@ -962,9 +1051,9 @@ function Home() {
             if (imageMatch && imageMatch[1].length <= 2_000_000) {
               reviewBody.image = { mimeType: 'image/png', data: imageMatch[1].replace(/\s/g, '') };
             }
-            const reviewResponse = await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/agent`, {
+            const reviewResponse = await fetch(apiEndpoint('/api/agent'), {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+              headers: apiRequestHeaders(),
               credentials: 'include',
               body: JSON.stringify(reviewBody),
               signal: reviewController.signal,
@@ -985,14 +1074,15 @@ function Home() {
             }
             gemmaReviewText = reviewChunks.join('').slice(0, 6000);
             setReviewActivity('complete', 'Gemma 4 review is ready for Qwen');
-          } catch {
-            if (controller.signal.aborted) throw controller.signal.reason;
-            gemmaReviewText = 'The Gemma 4 review was unavailable. Continue using the source, runtime output, and browser checks.';
-            setReviewActivity('error', 'Gemma 4 review unavailable; Qwen will continue with the run results');
-          } finally {
-            clearReviewDeadline();
-            controller.signal.removeEventListener('abort', abortReview);
-            reviewController.abort();
+            } catch {
+              if (controller.signal.aborted) throw controller.signal.reason;
+              gemmaReviewText = 'The Gemma 4 review was unavailable. Continue using the source, runtime output, and browser checks.';
+              setReviewActivity('error', 'Gemma 4 review unavailable; Qwen will continue with the run results');
+            } finally {
+              clearReviewDeadline();
+              controller.signal.removeEventListener('abort', abortReview);
+              reviewController.abort();
+            }
           }
         }
         const hasPreviewErrors = previewDiagnostics.length > 0 || previewLayoutErrors || previewInteractionErrors;
@@ -1214,6 +1304,16 @@ function Home() {
             <Settings2 size={16} aria-hidden="true" />
             <span>Appearance</span>
           </button>
+          {PUBLIC_KEY_MODE && (
+            <button className="sidebar-settings public-api-settings" type="button" onClick={() => setProviderSettingsOpen(true)}
+              aria-label="Provider settings" title="Configure your Groq and Gemini API keys" data-testid="button-open-provider-settings">
+              <KeyRound size={16} aria-hidden="true" />
+              <span>Settings</span>
+              <span className={`provider-key-status ${providerKeys.groq.trim() ? 'is-ready' : ''}`}>
+                {providerKeys.groq.trim() ? 'Ready' : 'Add key'}
+              </span>
+            </button>
+          )}
         </aside>
       )}
       {(activeId || homeHistoryOpen) && sidebarOpen && (
@@ -1274,6 +1374,12 @@ function Home() {
           {!activeId && (
             <button className="icon-btn home-settings" type="button" onClick={() => setSettingsOpen(true)} aria-label="Appearance" title="Appearance" data-testid="button-home-settings">
               <Settings2 size={17} aria-hidden="true" />
+            </button>
+          )}
+          {PUBLIC_KEY_MODE && (
+            <button className="icon-btn home-settings public-home-settings" type="button" onClick={() => setProviderSettingsOpen(true)}
+              aria-label="Provider settings" title="Configure API keys" data-testid="button-home-provider-settings">
+              <KeyRound size={17} aria-hidden="true" />
             </button>
           )}
         </header>
@@ -1544,6 +1650,9 @@ function Home() {
       </AlertDialog>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId={theme.themeId} accentId={theme.accentId}
         setTheme={theme.setTheme} setAccent={theme.setAccent} />
+      {PUBLIC_KEY_MODE && (
+        <ProviderSettingsDialog open={providerSettingsOpen} onOpenChange={setProviderSettingsOpen} keys={providerKeys} onSave={saveProviderKeys} />
+      )}
     </div>
   );
 }

@@ -4,7 +4,8 @@ import { StreamChatBody } from "@workspace/api-zod";
 import { buildChatRequest, isValidTimeZone } from "../lib/chat-request";
 import { buildSearchQuery, isCodingRequest, needsWebSearch } from "../lib/chat-policy";
 import { searchWeb } from "../lib/web-search";
-import { getChatClient, writeChatEvent, CHAT_DEADLINE_MS, PROVIDER_IDLE_MS } from "../lib/chat-runtime";
+import { createUserChatClient, getChatClient, writeChatEvent, CHAT_DEADLINE_MS, PROVIDER_IDLE_MS } from "../lib/chat-runtime";
+import { getPublicProviderKey, isPublicApiRequest } from "../lib/public-api-keys";
 import {
   availableModels, chooseModels, openModelStream, PRIMARY_MODEL, SMALL_MODEL,
   UsageLimitError, USAGE_LIMIT_MESSAGE, DOWNGRADE_MESSAGE, markRateLimited, rateLimitDiagnostics,
@@ -12,13 +13,19 @@ import {
 
 const router: IRouter = Router();
 
-router.post("/chat", async (req, res): Promise<void> => {
+router.post(["/chat", "/public/chat"], async (req, res): Promise<void> => {
   const parsed = StreamChatBody.safeParse(req.body);
   if (!parsed.success || parsed.data.messages.at(-1)?.role !== "user") {
     res.status(400).json({ error: "Please provide a valid conversation ending with your message." });
     return;
   }
-  if (!process.env.GROQ_API_KEY) {
+  const publicApi = isPublicApiRequest(req);
+  const groqKey = publicApi ? getPublicProviderKey(req, "groq") : process.env.GROQ_API_KEY;
+  if (!groqKey) {
+    if (publicApi) {
+      res.status(401).json({ error: "Add your Groq API key in Settings to use Nexo AI." });
+      return;
+    }
     res.status(503).json({ error: "Nexo AI is not configured. Please contact the site owner." });
     return;
   }
@@ -26,7 +33,7 @@ router.post("/chat", async (req, res): Promise<void> => {
     res.status(400).json({ error: "The provided timezone is invalid." });
     return;
   }
-  const client = getChatClient();
+  const client = publicApi ? createUserChatClient(groqKey) : getChatClient();
   const controller = new AbortController();
   const startedAt = Date.now();
   let timedOut = false;

@@ -399,3 +399,270 @@ export const useStreamAgentChat = <TError = ErrorType<ApiError>,
       return useMutation(getStreamAgentChatMutationOptions(options));
     }
 
+export const getStreamPublicChatUrl = () => {
+
+
+
+
+  return `/api/public/chat`
+}
+
+/**
+ * Public Nexo route. The required user key is forwarded only for this request and is never stored by the service.
+ * @summary Stream chat using the visitor's Groq key
+ */
+export const streamPublicChat = async (chatInput: ChatInput, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<unknown>(getStreamPublicChatUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(chatInput)
+  }
+);}
+
+
+
+
+
+export const getStreamPublicChatMutationKey = () => ['streamPublicChat'] as const;
+
+export const getStreamPublicChatMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamPublicChat>>, TError,StreamPublicChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof streamPublicChat>>, TError,StreamPublicChatMutationVariables, TContext> => {
+
+const mutationKey = getStreamPublicChatMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof streamPublicChat>>, StreamPublicChatMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  streamPublicChat(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StreamPublicChatMutationResult = NonNullable<Awaited<ReturnType<typeof streamPublicChat>>>
+    export type StreamPublicChatMutationBody = BodyType<ChatInput>
+    export type StreamPublicChatMutationError = ErrorType<ApiError>
+    export type StreamPublicChatMutationVariables = {data: BodyType<ChatInput>}
+
+    /**
+ * @summary Stream chat using the visitor's Groq key
+ */
+export const useStreamPublicChat = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamPublicChat>>, TError,StreamPublicChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof streamPublicChat>>,
+        TError,
+        StreamPublicChatMutationVariables,
+        TContext
+      > => {
+      return useMutation(getStreamPublicChatMutationOptions(options));
+    }
+
+export const getStreamPublicImageChatUrl = () => {
+
+
+
+
+  return `/api/public/chat/image`
+}
+
+/**
+ * Public Nexo route. Gemini handles the image request; the visitor still supplies a Groq key for text chat.
+ * @summary Stream image chat using the visitor's Gemini key
+ */
+export const streamPublicImageChat = async (imageChatInput: ImageChatInput, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<unknown>(getStreamPublicImageChatUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(imageChatInput)
+  }
+);}
+
+
+
+
+
+export const getStreamPublicImageChatMutationKey = () => ['streamPublicImageChat'] as const;
+
+export const getStreamPublicImageChatMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamPublicImageChat>>, TError,StreamPublicImageChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof streamPublicImageChat>>, TError,StreamPublicImageChatMutationVariables, TContext> => {
+
+const mutationKey = getStreamPublicImageChatMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof streamPublicImageChat>>, StreamPublicImageChatMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  streamPublicImageChat(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StreamPublicImageChatMutationResult = NonNullable<Awaited<ReturnType<typeof streamPublicImageChat>>>
+    export type StreamPublicImageChatMutationBody = BodyType<ImageChatInput>
+    export type StreamPublicImageChatMutationError = ErrorType<ApiError>
+    export type StreamPublicImageChatMutationVariables = {data: BodyType<ImageChatInput>}
+
+    /**
+ * @summary Stream image chat using the visitor's Gemini key
+ */
+export const useStreamPublicImageChat = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamPublicImageChat>>, TError,StreamPublicImageChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof streamPublicImageChat>>,
+        TError,
+        StreamPublicImageChatMutationVariables,
+        TContext
+      > => {
+      return useMutation(getStreamPublicImageChatMutationOptions(options));
+    }
+
+export const getStreamPublicAgentChatUrl = () => {
+
+
+
+
+  return `/api/public/agent`
+}
+
+/**
+ * Public Nexo route. Groq is required; Gemini is optional and unlocks additional Agent capabilities.
+ * @summary Stream Agent mode using visitor-provided provider keys
+ */
+export const streamPublicAgentChat = async (agentChatInput: AgentChatInput, options?: Parameters<typeof customFetch>[1]): Promise<AgentStreamEventEnvelope> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<AgentStreamEventEnvelope>(getStreamPublicAgentChatUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(agentChatInput)
+  }
+);}
+
+
+
+
+
+export const getStreamPublicAgentChatMutationKey = () => ['streamPublicAgentChat'] as const;
+
+export const getStreamPublicAgentChatMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamPublicAgentChat>>, TError,StreamPublicAgentChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof streamPublicAgentChat>>, TError,StreamPublicAgentChatMutationVariables, TContext> => {
+
+const mutationKey = getStreamPublicAgentChatMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof streamPublicAgentChat>>, StreamPublicAgentChatMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  streamPublicAgentChat(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StreamPublicAgentChatMutationResult = NonNullable<Awaited<ReturnType<typeof streamPublicAgentChat>>>
+    export type StreamPublicAgentChatMutationBody = BodyType<AgentChatInput>
+    export type StreamPublicAgentChatMutationError = ErrorType<ApiError>
+    export type StreamPublicAgentChatMutationVariables = {data: BodyType<AgentChatInput>}
+
+    /**
+ * @summary Stream Agent mode using visitor-provided provider keys
+ */
+export const useStreamPublicAgentChat = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamPublicAgentChat>>, TError,StreamPublicAgentChatMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof streamPublicAgentChat>>,
+        TError,
+        StreamPublicAgentChatMutationVariables,
+        TContext
+      > => {
+      return useMutation(getStreamPublicAgentChatMutationOptions(options));
+    }
+

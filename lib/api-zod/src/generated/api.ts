@@ -143,6 +143,7 @@ export const StreamAgentChatBody = zod.object({
   "agentModel": zod.string().max(streamAgentChatBodyAgentModelMax).optional().describe('Continue an Agent run on its selected provider model'),
   "agentTask": zod.enum(['coding', 'planning', 'reasoning', 'fast_worker', 'document', 'synthesis', 'classification', 'multimodal']).optional().describe('Preserve the server-selected capability route through tool continuations'),
   "agentRetryCount": zod.number().int().min(streamAgentChatBodyAgentRetryCountMin).max(streamAgentChatBodyAgentRetryCountMax).optional().describe('Number of browser-side rate-limit deferrals already consumed in this build; never reset after a tool continuation. Presence also advertises that this client supports agentRetry SSE handoffs. Omit for legacy clients.'),
+  "agentFinalize": zod.boolean().optional().describe('Disable Agent tools and return a truthful handoff after the bounded build budget is reached.'),
   "timeZone": zod.string().max(streamAgentChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
   "messages": zod.array(zod.object({
   "role": zod.enum(['user', 'assistant']),
@@ -187,5 +188,212 @@ export const StreamAgentChatBody = zod.object({
 })
 
 export const StreamAgentChatResponse = zod.unknown()
+
+
+/**
+ * Public Nexo route. The required user key is forwarded only for this request and is never stored by the service.
+ * @summary Stream chat using the visitor's Groq key
+ */
+export const streamPublicChatHeaderXNexoGroqKeyMax = 512;
+
+export const streamPublicChatHeaderXNexoGeminiKeyMax = 512;
+
+
+
+export const StreamPublicChatHeader = zod.object({
+  "X-Nexo-Groq-Key": zod.string().min(1).max(streamPublicChatHeaderXNexoGroqKeyMax),
+  "X-Nexo-Gemini-Key": zod.string().min(1).max(streamPublicChatHeaderXNexoGeminiKeyMax).optional()
+})
+
+export const streamPublicChatBodyDeepthinkDefault = false;
+export const streamPublicChatBodyTimeZoneMax = 100;
+
+export const streamPublicChatBodyMessagesItemContentMax = 12000;
+
+export const streamPublicChatBodyMessagesMax = 40;
+
+
+
+export const StreamPublicChatBody = zod.object({
+  "deepthink": zod.boolean().default(streamPublicChatBodyDeepthinkDefault).describe('Use high reasoning effort instead of medium'),
+  "timeZone": zod.string().max(streamPublicChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
+  "messages": zod.array(zod.object({
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string().min(1).max(streamPublicChatBodyMessagesItemContentMax)
+})).min(1).max(streamPublicChatBodyMessagesMax)
+})
+
+export const StreamPublicChatResponse = zod.unknown()
+
+
+/**
+ * Public Nexo route. Gemini handles the image request; the visitor still supplies a Groq key for text chat.
+ * @summary Stream image chat using the visitor's Gemini key
+ */
+export const streamPublicImageChatHeaderXNexoGroqKeyMax = 512;
+
+export const streamPublicImageChatHeaderXNexoGeminiKeyMax = 512;
+
+
+
+export const StreamPublicImageChatHeader = zod.object({
+  "X-Nexo-Groq-Key": zod.string().min(1).max(streamPublicImageChatHeaderXNexoGroqKeyMax),
+  "X-Nexo-Gemini-Key": zod.string().min(1).max(streamPublicImageChatHeaderXNexoGeminiKeyMax)
+})
+
+export const streamPublicImageChatBodyDeepthinkDefault = false;
+export const streamPublicImageChatBodyTimeZoneMax = 100;
+
+export const streamPublicImageChatBodyMessagesItemContentMax = 12000;
+
+export const streamPublicImageChatBodyMessagesMax = 40;
+
+export const streamPublicImageChatBodyImageDataMin = 4;
+export const streamPublicImageChatBodyImageDataMax = 4194304;
+
+
+export const streamPublicImageChatBodyImageDataRegExp = new RegExp('^[A-Za-z0-9+/]+={0,2}$');
+
+
+export const StreamPublicImageChatBody = zod.object({
+  "deepthink": zod.boolean().default(streamPublicImageChatBodyDeepthinkDefault).describe('Use high thinking level instead of medium'),
+  "timeZone": zod.string().max(streamPublicImageChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
+  "messages": zod.array(zod.object({
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string().min(1).max(streamPublicImageChatBodyMessagesItemContentMax)
+})).min(1).max(streamPublicImageChatBodyMessagesMax),
+  "image": zod.object({
+  "mimeType": zod.enum(['image/jpeg', 'image/png', 'image/webp']),
+  "data": zod.string().min(streamPublicImageChatBodyImageDataMin).max(streamPublicImageChatBodyImageDataMax).regex(streamPublicImageChatBodyImageDataRegExp).describe('Base64-encoded image bytes without a data URL prefix')
+})
+})
+
+export const StreamPublicImageChatResponse = zod.unknown()
+
+
+/**
+ * Public Nexo route. Groq is required; Gemini is optional and unlocks additional Agent capabilities.
+ * @summary Stream Agent mode using visitor-provided provider keys
+ */
+export const streamPublicAgentChatHeaderXNexoGroqKeyMax = 512;
+
+export const streamPublicAgentChatHeaderXNexoGeminiKeyMax = 512;
+
+
+
+export const StreamPublicAgentChatHeader = zod.object({
+  "X-Nexo-Groq-Key": zod.string().min(1).max(streamPublicAgentChatHeaderXNexoGroqKeyMax),
+  "X-Nexo-Gemini-Key": zod.string().min(1).max(streamPublicAgentChatHeaderXNexoGeminiKeyMax).optional()
+})
+
+export const streamPublicAgentChatBodyDeepthinkDefault = false;
+export const streamPublicAgentChatBodyAgentModelMax = 100;
+
+export const streamPublicAgentChatBodyAgentRetryCountMin = 0;
+export const streamPublicAgentChatBodyAgentRetryCountMax = 3;
+
+export const streamPublicAgentChatBodyTimeZoneMax = 100;
+
+export const streamPublicAgentChatBodyMessagesItemContentMax = 12000;
+
+export const streamPublicAgentChatBodyMessagesMax = 40;
+
+export const streamPublicAgentChatBodyAgentHistoryItemCallIdMax = 128;
+
+export const streamPublicAgentChatBodyAgentHistoryItemThoughtSignatureMax = 4096;
+
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsQueryMin = 2;
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsQueryMax = 300;
+
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsCodeMax = 20000;
+
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsEntrypointMax = 160;
+
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsFilesItemPathMax = 160;
+
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsFilesItemContentMax = 12000;
+
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsFilesMax = 8;
+
+export const streamPublicAgentChatBodyAgentHistoryItemResultMax = 8000;
+
+export const streamPublicAgentChatBodyAgentHistoryItemSourcesItemTitleMax = 300;
+
+export const streamPublicAgentChatBodyAgentHistoryItemSourcesItemUrlMax = 2048;
+
+export const streamPublicAgentChatBodyAgentHistoryItemSourcesMax = 5;
+
+export const streamPublicAgentChatBodyAgentHistoryMax = 6;
+
+export const streamPublicAgentChatBodyProjectFilesItemPathMax = 160;
+
+export const streamPublicAgentChatBodyProjectFilesItemContentMax = 12000;
+
+export const streamPublicAgentChatBodyProjectFilesMax = 8;
+
+export const streamPublicAgentChatBodyImageDataMin = 4;
+export const streamPublicAgentChatBodyImageDataMax = 4194304;
+
+
+export const streamPublicAgentChatBodyImageDataRegExp = new RegExp('^[A-Za-z0-9+/]+={0,2}$');
+export const streamPublicAgentChatBodyAgentReviewSourceMax = 24000;
+
+export const streamPublicAgentChatBodyAgentReviewOutputMax = 8000;
+
+export const streamPublicAgentChatBodyAgentReviewBrowserChecksMax = 4000;
+
+
+
+export const StreamPublicAgentChatBody = zod.object({
+  "deepthink": zod.boolean().default(streamPublicAgentChatBodyDeepthinkDefault).describe('Use high thinking level instead of medium'),
+  "agentProvider": zod.enum(['gemini', 'groq']).optional().describe('Continue an Agent run on its selected provider after a rate-limit fallback'),
+  "agentModel": zod.string().max(streamPublicAgentChatBodyAgentModelMax).optional().describe('Continue an Agent run on its selected provider model'),
+  "agentTask": zod.enum(['coding', 'planning', 'reasoning', 'fast_worker', 'document', 'synthesis', 'classification', 'multimodal']).optional().describe('Preserve the server-selected capability route through tool continuations'),
+  "agentRetryCount": zod.number().int().min(streamPublicAgentChatBodyAgentRetryCountMin).max(streamPublicAgentChatBodyAgentRetryCountMax).optional().describe('Number of browser-side rate-limit deferrals already consumed in this build; never reset after a tool continuation. Presence also advertises that this client supports agentRetry SSE handoffs. Omit for legacy clients.'),
+  "agentFinalize": zod.boolean().optional().describe('Disable Agent tools and return a truthful handoff after the bounded build budget is reached.'),
+  "timeZone": zod.string().max(streamPublicAgentChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
+  "messages": zod.array(zod.object({
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string().min(1).max(streamPublicAgentChatBodyMessagesItemContentMax)
+})).min(1).max(streamPublicAgentChatBodyMessagesMax),
+  "agentHistory": zod.array(zod.object({
+  "tool": zod.enum(['web_search', 'run_code', 'write_project']),
+  "callId": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemCallIdMax),
+  "thoughtSignature": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemThoughtSignatureMax),
+  "arguments": zod.object({
+  "query": zod.string().min(streamPublicAgentChatBodyAgentHistoryItemArgumentsQueryMin).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsQueryMax).optional(),
+  "language": zod.enum(['python', 'javascript', 'html']).optional(),
+  "code": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsCodeMax).optional(),
+  "entrypoint": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsEntrypointMax).optional().describe('Project file to run in the isolated browser.'),
+  "files": zod.array(zod.object({
+  "path": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsFilesItemPathMax),
+  "content": zod.string().max(streamPublicAgentChatBodyAgentHistoryItemArgumentsFilesItemContentMax)
+})).min(1).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsFilesMax).optional()
+}),
+  "result": zod.string().max(streamPublicAgentChatBodyAgentHistoryItemResultMax),
+  "sources": zod.array(zod.object({
+  "title": zod.string().max(streamPublicAgentChatBodyAgentHistoryItemSourcesItemTitleMax),
+  "url": zod.string().url().max(streamPublicAgentChatBodyAgentHistoryItemSourcesItemUrlMax),
+  "retrieval": zod.enum(['page', 'search_excerpt']).optional(),
+  "retrievedAt": zod.coerce.date().optional().describe('When the search result was retrieved, not when the page was published')
+})).max(streamPublicAgentChatBodyAgentHistoryItemSourcesMax).optional()
+})).max(streamPublicAgentChatBodyAgentHistoryMax).optional().describe('Bounded prior tool call and result pairs for the current Agent run.'),
+  "projectFiles": zod.array(zod.object({
+  "path": zod.string().min(1).max(streamPublicAgentChatBodyProjectFilesItemPathMax),
+  "content": zod.string().max(streamPublicAgentChatBodyProjectFilesItemContentMax)
+})).max(streamPublicAgentChatBodyProjectFilesMax).optional().describe('Only project files the user explicitly selected to share with Agent.'),
+  "image": zod.object({
+  "mimeType": zod.enum(['image/jpeg', 'image/png', 'image/webp']),
+  "data": zod.string().min(streamPublicAgentChatBodyImageDataMin).max(streamPublicAgentChatBodyImageDataMax).regex(streamPublicAgentChatBodyImageDataRegExp).describe('Base64-encoded image bytes without a data URL prefix')
+}).optional(),
+  "agentReview": zod.object({
+  "language": zod.enum(['python', 'javascript', 'html']),
+  "source": zod.string().max(streamPublicAgentChatBodyAgentReviewSourceMax),
+  "output": zod.string().max(streamPublicAgentChatBodyAgentReviewOutputMax).optional(),
+  "browserChecks": zod.string().max(streamPublicAgentChatBodyAgentReviewBrowserChecksMax).optional()
+}).optional().describe('Bounded source and isolated-run results for a tool-free Gemma 4 code review.')
+})
+
+export const StreamPublicAgentChatResponse = zod.unknown()
 
 

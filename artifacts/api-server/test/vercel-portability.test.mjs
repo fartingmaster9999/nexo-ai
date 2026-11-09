@@ -63,18 +63,24 @@ test("Vercel transport keeps upstream failure statuses and rejects network failu
 
 test("Vercel services route browser API calls before the static frontend", async () => {
   const config = JSON.parse(await readFile(new URL("../../../vercel.json", import.meta.url), "utf8"));
-  assert.deepEqual(Object.keys(config.services), ["ai-chat", "api-server", "mockup-sandbox"]);
+  assert.deepEqual(Object.keys(config.services), ["ai-chat", "nexo-public", "api-server", "mockup-sandbox"]);
   assert.deepEqual(config.rewrites, [
     { source: "/api", destination: { service: "api-server" } },
     { source: "/api/:path*", destination: { service: "api-server" } },
+    { source: "/nexo-public", destination: { service: "nexo-public" } },
+    { source: "/nexo-public/:path*", destination: { service: "nexo-public" } },
     { source: "/(.*)", destination: { service: "ai-chat" } },
   ]);
   const frontend = config.services["ai-chat"];
+  const publicFrontend = config.services["nexo-public"];
   const backend = config.services["api-server"];
   assert.equal(frontend.root, "artifacts/ai-chat");
   assert.equal(frontend.outputDirectory, "dist/public");
   assert.equal(frontend.rewrites, undefined);
   assert.equal(frontend.routes, undefined);
+  assert.equal(publicFrontend.root, "artifacts/nexo-public");
+  assert.equal(publicFrontend.outputDirectory, "dist/public");
+  assert.match(publicFrontend.buildCommand, /BASE_PATH=\/nexo-public\//);
   assert.equal(backend.entrypoint, "src/index.ts");
   assert.ok(backend.buildCommand.length > 0);
   assert.equal(backend.functions["src/index.ts"].supportsCancellation, true);

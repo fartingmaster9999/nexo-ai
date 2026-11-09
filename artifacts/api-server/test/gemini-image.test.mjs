@@ -107,6 +107,24 @@ test("image route explains a missing Gemini key without contacting Google", asyn
   assert.equal(calls, 0);
 });
 
+test("public image route never falls back to a server Gemini key", async () => {
+  let calls = 0;
+  const app = createSseApp({
+    getApiKey: () => "server-only-gemini-key",
+    fetchImpl: async () => { calls++; return new Response(""); },
+  });
+  await withServer(app, async (url) => {
+    const response = await fetch(url.replace("/api/chat/image", "/api/public/chat/image"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    assert.equal(response.status, 401);
+    assert.match((await response.json()).error, /Gemini API key/);
+  });
+  assert.equal(calls, 0);
+});
+
 test("image route streams visible Gemini text and excludes hidden thought parts", async () => {
   let captured;
   const upstream = [

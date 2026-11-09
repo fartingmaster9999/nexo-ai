@@ -14,6 +14,14 @@ export function getChatClient(): Groq {
   });
 }
 
+/** Creates an isolated per-request client; user keys are never cached across requests. */
+export function createUserChatClient(apiKey: string): Groq {
+  return new Groq({
+    apiKey, baseURL: 'https://api.groq.com',
+    timeout: 60000, maxRetries: 0,
+  });
+}
+
 /** Backpressure is awaited, never buffered indefinitely for a slow/disconnected browser. */
 export async function writeChatEvent(res: Response, event: object, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();

@@ -32,13 +32,18 @@ const catalog = [
   max_completion_tokens: id === PROMPT_GUARD_MODEL ? 512 : id === CODING_FALLBACK ? 16384 : 65536,
 }));
 
-function createApp(client, search = async () => ({ context: "", sources: [] }), logger = pino({ level: "silent" })) {
+function createApp(
+  client,
+  search = async () => ({ context: "", sources: [] }),
+  logger = pino({ level: "silent" }),
+  agentOptions = {},
+) {
   const app = express();
   app.use(pinoHttp({ logger }));
   app.use(express.json({ limit: "5mb" }));
   app.use("/api", createAgentRouter({
-    getApiKey: () => undefined,
-    getGroqClient: () => client,
+    getApiKey: agentOptions.getApiKey ?? (() => undefined),
+    getGroqClient: agentOptions.getGroqClient ?? (() => client),
     search,
   }));
   return app;
@@ -874,4 +879,130 @@ test("Agent rejects image work when no catalog-verified vision provider is confi
     assert.match((await response.json()).error, /no Gemini vision credential/);
   });
   assert.equal(generationCalls, 0);
+});
+
+test("public Agent requires the visitor's Groq key and does not use server Gemini config", async () => {
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      return textStream("Public-key Agent response.");
+    } } },
+  };
+  let suppliedKey;
+  const app = createApp(client, undefined, undefined, {
+    getApiKey: () => { throw new Error("public route must not read the server Gemini key"); },
+    getGroqClient: (key) => { suppliedKey = key; return client; },
+  });
+  await withServer(app, async (url) => {
+    const endpoint = url.replace("/api/agent", "/api/public/agent");
+    const missingKey = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Explain a simple idea." }] }),
+    });
+    assert.equal(missingKey.status, 401);
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Nexo-Groq-Key": "visitor-groq-key" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Explain a simple idea." }],
+        agentProvider: "groq",
+        agentTask: "reasoning",
+      }),
+    });
+    const events = await eventsFrom(response);
+    assert.equal(response.status, 200);
+    assert.equal(suppliedKey, "visitor-groq-key");
+    assert.ok(events.some((event) => event.content === "Public-key Agent response."));
+    assert.equal(events.some((event) => event.error), false);
+  });
+});
+
+test("Agent safely finalizes after the code-tool budget without running the next action", async () => {
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      assert.equal(request.model, CODING_FALLBACK);
+      assert.equal(request.tool_choice, "none");
+      assert.equal(request.tools, undefined);
+      assert.ok(request.messages.some((message) => message.role === "system" && message.content.includes("Tool actions are disabled for this final handoff")));
+      return toolStream();
+    } } },
+  };
+  const agentHistory = Array.from({ length: 6 }, (_, index) => ({
+    tool: "run_code",
+    callId: `completed-${index}`,
+    thoughtSignature: "groq-agent-v1",
+    arguments: { language: "javascript", code: `console.log(${index})` },
+    result: "Nexo execution status: completed.",
+  }));
+  await withServer(createApp(client), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Build a small website." }],
+        agentProvider: "groq",
+        agentTask: "coding",
+        agentHistory,
+      }),
+    }));
+    assert.equal(events.some((event) => event.agentTool), false);
+    assert.equal(events.some((event) => event.error), false);
+    assert.match(events.filter((event) => event.content).map((event) => event.content).join(""), /next code run was not executed/);
+    assert.ok(events.some((event) => event.activity?.id === "agent-action-budget"));
+  });
+});
+
+test("Agent turns exhausted HTML preview revisions into a truthful final handoff", async () => {
+  let generations = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      generations++;
+      if (generations === 1) {
+        assert.notEqual(request.tool_choice, "none");
+        return (async function* () {
+          yield { choices: [{ delta: { tool_calls: [{
+            index: 0,
+            id: "over-budget-preview",
+            type: "function",
+            function: { name: "run_code", arguments: JSON.stringify({ language: "html", code: "<!doctype html><title>New preview</title>" }) },
+          }] } }] };
+        })();
+      }
+      assert.equal(request.tool_choice, "none");
+      assert.equal(request.tools, undefined);
+      assert.ok(request.messages.some((message) => message.role === "system" && message.content.includes("Tool actions are disabled for this final handoff")));
+      return textStream("The current preview is preserved; I could not apply another revision.");
+    } } },
+  };
+  const agentHistory = Array.from({ length: 3 }, (_, index) => ({
+    tool: "run_code",
+    callId: `html-preview-${index}`,
+    thoughtSignature: "groq-agent-v1",
+    arguments: { language: "html", code: `<!doctype html><p>Version ${index}</p>` },
+    result: "Nexo execution status: completed.",
+  }));
+  await withServer(createApp(client), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Update this website with a navigation bar." }],
+        agentProvider: "groq",
+        agentTask: "coding",
+        agentHistory,
+      }),
+    }));
+    assert.equal(generations, 2);
+    assert.equal(events.some((event) => event.agentTool), false);
+    assert.equal(events.some((event) => event.error), false);
+    assert.ok(events.some((event) => /preview revision limit reached/i.test(event.activity?.label ?? "")));
+    assert.ok(events.some((event) => event.content?.includes("The current preview is preserved")));
+  });
 });

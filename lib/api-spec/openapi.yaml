@@ -164,6 +164,140 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /public/chat:
+    post:
+      operationId: streamPublicChat
+      tags: [chat]
+      summary: Stream chat using the visitor's Groq key
+      description: Public Nexo route. The required user key is forwarded only for this request and is never stored by the service.
+      parameters:
+        - name: X-Nexo-Groq-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+        - name: X-Nexo-Gemini-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatInput"
+      responses:
+        "200":
+          description: Groq chat events as a server-sent stream.
+          content:
+            text/event-stream: {}
+        "400":
+          description: Invalid conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: A valid user Groq key is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /public/chat/image:
+    post:
+      operationId: streamPublicImageChat
+      tags: [chat]
+      summary: Stream image chat using the visitor's Gemini key
+      description: Public Nexo route. Gemini handles the image request; the visitor still supplies a Groq key for text chat.
+      parameters:
+        - name: X-Nexo-Groq-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+        - name: X-Nexo-Gemini-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImageChatInput"
+      responses:
+        "200":
+          description: Gemini image-chat events as a server-sent stream.
+          content:
+            text/event-stream: {}
+        "400":
+          description: Invalid conversation or image payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: A valid user Gemini key is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /public/agent:
+    post:
+      operationId: streamPublicAgentChat
+      tags: [agent]
+      summary: Stream Agent mode using visitor-provided provider keys
+      description: Public Nexo route. Groq is required; Gemini is optional and unlocks additional Agent capabilities.
+      parameters:
+        - name: X-Nexo-Groq-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+        - name: X-Nexo-Gemini-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentChatInput"
+      responses:
+        "200":
+          description: Agent stream events, bounded tools, and a final handoff.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/AgentStreamEventEnvelope"
+        "400":
+          description: Invalid conversation or tool history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: A valid user Groq key is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   schemas:
     HealthStatus:
@@ -266,6 +400,9 @@ components:
           minimum: 0
           maximum: 3
           description: Number of browser-side rate-limit deferrals already consumed in this build; never reset after a tool continuation. Presence also advertises that this client supports agentRetry SSE handoffs. Omit for legacy clients.
+        agentFinalize:
+          type: boolean
+          description: Disable Agent tools and return a truthful handoff after the bounded build budget is reached.
         timeZone:
           type: string
           maxLength: 100

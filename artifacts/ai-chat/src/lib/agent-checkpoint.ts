@@ -19,6 +19,7 @@ export type AgentCheckpoint = {
   history: AgentToolExchange[];
   toolCalls: number;
   retries: number;
+  agentFinalize?: boolean;
   startedAt: number;
   waitUntil: number;
   phase: 'ready' | 'waiting' | 'executing' | 'cancelled';
@@ -61,6 +62,7 @@ function validate(value: unknown, id: string): AgentCheckpoint {
       !isAgentHistory(c.history) || new Set(c.history.map(h => h.callId)).size !== c.history.length ||
       !Number.isInteger(c.toolCalls) || c.toolCalls < 0 || c.toolCalls > 6 ||
       !Number.isInteger(c.retries) || c.retries < 0 || c.retries > MAX_AGENT_DEFERRED_RETRIES ||
+      (c.agentFinalize !== undefined && typeof c.agentFinalize !== 'boolean') ||
       !Number.isFinite(c.startedAt) || c.startedAt <= 0 || c.startedAt > Date.now() + 5_000 ||
       !Number.isFinite(c.waitUntil) || c.waitUntil < 0 || c.waitUntil > c.startedAt + AGENT_BUILD_DEADLINE_MS + 60_250 ||
       !['ready', 'waiting', 'executing', 'cancelled'].includes(c.phase)) throw new Error('invalid');

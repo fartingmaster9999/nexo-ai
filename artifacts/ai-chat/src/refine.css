@@ -253,6 +253,27 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 .accent-dot { width: 38px; height: 38px; }
 .nx-dialog { overscroll-behavior: contain; }
 
+.public-settings-dialog form { display: grid; gap: 16px; }
+.public-key-field { display: grid; gap: 7px; color: hsl(var(--foreground)); font-size: 12px; }
+.public-key-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-weight: 600; }
+.public-key-label span { color: hsl(var(--muted-foreground)); font-size: 10px; font-weight: 500; }
+.public-key-input-wrap { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 0 10px; border: 1px solid hsl(var(--border)); border-radius: 9px; background: hsl(var(--background)); color: hsl(var(--muted-foreground)); }
+.public-key-input-wrap:focus-within { border-color: hsl(var(--primary) / .7); box-shadow: 0 0 0 2px hsl(var(--primary) / .12); }
+.public-key-input-wrap input { flex: 1; min-width: 0; height: 40px; border: 0; outline: 0; background: transparent; color: hsl(var(--foreground)); font: inherit; }
+.public-key-input-wrap input::placeholder { color: hsl(var(--muted-foreground) / .7); }
+.public-key-input-wrap button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: hsl(var(--muted-foreground)); cursor: pointer; }
+.public-key-input-wrap button:hover { background: hsl(var(--foreground) / .06); color: hsl(var(--foreground)); }
+.public-key-field a { width: fit-content; color: hsl(var(--primary)); font-size: 11px; text-decoration: none; }
+.public-key-field a:hover { text-decoration: underline; }
+.public-key-privacy { margin: 0; padding: 10px 11px; border: 1px solid hsl(var(--border) / .75); border-radius: 9px; color: hsl(var(--muted-foreground)); font-size: 11px; line-height: 1.5; }
+.public-key-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.public-key-actions button { min-height: 36px; padding: 0 12px; border-radius: 8px; font: inherit; font-size: 12px; cursor: pointer; }
+.public-key-cancel { border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--foreground)); }
+.public-key-save { border: 1px solid hsl(var(--primary)); background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); font-weight: 600; }
+.public-key-actions button:focus-visible, .public-key-input-wrap button:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
+.provider-key-status { margin-left: auto; color: hsl(var(--muted-foreground)); font-size: 10px; }
+.provider-key-status.is-ready { color: hsl(145 55% 58%); }
+
 @media (max-width: 1100px) {
   .workspace { border: 1px solid var(--surface-line); }
 }

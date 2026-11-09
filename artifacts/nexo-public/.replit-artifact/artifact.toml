@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/nexo-public/"
+title = "Nexo AI Public"
+description = "A public-facing Nexo AI app where each visitor connects their own Groq key and can optionally add a Gemini key for expanded Agent and image features."
+version = "1.0.0"
+id = "artifacts/nexo-public"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/nexo-public/" ]
+localPort = 25931
+
+[services.development]
+run = "pnpm --filter @workspace/nexo-public run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/nexo-public", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/nexo-public/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25931"
+BASE_PATH = "/nexo-public/"

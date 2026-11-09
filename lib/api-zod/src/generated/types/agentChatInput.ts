@@ -31,6 +31,8 @@ export interface AgentChatInput {
      * @maximum 3
      */
   agentRetryCount?: number;
+  /** Disable Agent tools and return a truthful handoff after the bounded build budget is reached. */
+  agentFinalize?: boolean;
   /**
      * Browser IANA timezone, validated by the server for current-time context
      * @maxLength 100

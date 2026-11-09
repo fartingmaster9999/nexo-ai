@@ -622,7 +622,9 @@ test("Agent caps project previews across snippet and project revisions", async (
           }] } }] };
         })();
         assert.match(JSON.stringify(request.messages), /revision limit/);
-        assert.equal(request.tool_choice, "required");
+        assert.equal(request.tool_choice, "none");
+        assert.equal(request.tools, undefined);
+        assert.ok(request.messages.some((message) => message.role === "system" && message.content.includes("Tool actions are disabled for this final handoff")));
         return (async function* () {
           yield { choices: [{ delta: { content: "The project is ready; further refinements need a new request." } }] };
         })();
@@ -634,8 +636,8 @@ test("Agent caps project previews across snippet and project revisions", async (
       body: JSON.stringify({ ...input, agentHistory: history }),
     }));
     assert.equal(events.some((event) => event.agentTool), false);
-    assert.ok(events.some((event) => event.error?.includes("last build still has errors")));
-    assert.equal(events.some((event) => event.content?.includes("project is ready")), false);
+    assert.equal(events.some((event) => event.error), false);
+    assert.ok(events.some((event) => event.content?.includes("project is ready")));
   });
   assert.equal(calls, 2);
 });

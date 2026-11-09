@@ -331,7 +331,7 @@ export function buildGeminiAgentRequest(
           ? instructions
           : purpose === "review"
             ? instructions
-          : allowTools ? instructions : `${instructions} The Agent tool limit has been reached. Do not request more tools; give the best answer supported by the available conversation and tool results.`,
+          : allowTools ? instructions : `${instructions} Tool actions are disabled for this final handoff. State what the recorded results confirm, what remains unfinished or unverified, and one focused next request. Never claim that an unexecuted action was applied; preserve completed work and do not expose hidden chain-of-thought.`,
       }],
     },
     contents,

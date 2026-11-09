@@ -7,6 +7,7 @@ import {
   geminiImageErrorMessage, requestGeminiImageStream, visibleGeminiText,
 } from "../lib/gemini-image";
 import { CHAT_DEADLINE_MS, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
+import { getPublicProviderKey, isPublicApiRequest } from "../lib/public-api-keys";
 
 type ImageChatRouterOptions = {
   getApiKey?: () => string | undefined;
@@ -21,14 +22,19 @@ export function createImageChatRouter({
 }: ImageChatRouterOptions = {}): IRouter {
   const router: IRouter = Router();
 
-  router.post("/chat/image", async (req, res): Promise<void> => {
+  router.post(["/chat/image", "/public/chat/image"], async (req, res): Promise<void> => {
   const parsed = StreamImageChatBody.safeParse(req.body);
   if (!parsed.success || parsed.data.messages.at(-1)?.role !== "user") {
     res.status(400).json({ error: "Please provide a valid prompt and supported image." });
     return;
   }
-  const apiKey = getApiKey();
+  const publicApi = isPublicApiRequest(req);
+  const apiKey = publicApi ? getPublicProviderKey(req, "gemini") : getApiKey();
   if (!apiKey) {
+    if (publicApi) {
+      res.status(401).json({ error: "Add a Gemini API key in Settings to analyze images." });
+      return;
+    }
     res.status(503).json({ error: "Image understanding is not configured. Please ask the site owner to add a Gemini API key." });
     return;
   }

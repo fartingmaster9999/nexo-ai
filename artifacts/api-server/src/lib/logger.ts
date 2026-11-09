@@ -7,6 +7,8 @@ export const logger = pino({
   redact: [
     "req.headers.authorization",
     "req.headers.cookie",
+    "req.headers.x-nexo-groq-key",
+    "req.headers.x-nexo-gemini-key",
     "res.headers['set-cookie']",
   ],
   ...(isProduction

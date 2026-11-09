@@ -23,6 +23,6 @@ export function agentBuildPolicy(input: AgentChatInput) {
     requiresBuild,
     failed,
     hasRun: runs.length > 0,
-    requireTool: failed || (requiresBuild && runs.length === 0),
+    requireTool: !input.agentFinalize && (failed || (requiresBuild && runs.length === 0)),
   };
 }

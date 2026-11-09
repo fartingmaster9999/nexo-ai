@@ -8,6 +8,13 @@
       "buildCommand": "PORT=5000 BASE_PATH=/ npx --yes pnpm@10.26.1 run build",
       "outputDirectory": "dist/public"
     },
+    "nexo-public": {
+      "root": "artifacts/nexo-public",
+      "framework": "vite",
+      "installCommand": "cd ../.. && npx --yes pnpm@10.26.1 install --frozen-lockfile --prod=false",
+      "buildCommand": "PORT=5000 BASE_PATH=/nexo-public/ npx --yes pnpm@10.26.1 run build",
+      "outputDirectory": "dist/public"
+    },
     "api-server": {
       "root": "artifacts/api-server",
       "framework": "express",
@@ -32,6 +39,8 @@
   "rewrites": [
     { "source": "/api", "destination": { "service": "api-server" } },
     { "source": "/api/:path*", "destination": { "service": "api-server" } },
+    { "source": "/nexo-public", "destination": { "service": "nexo-public" } },
+    { "source": "/nexo-public/:path*", "destination": { "service": "nexo-public" } },
     { "source": "/(.*)", "destination": { "service": "ai-chat" } }
   ]
 }
