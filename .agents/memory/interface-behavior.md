@@ -27,11 +27,11 @@ Thinking menus must start collapsed, even during streaming, without step counts 
 
 **How to apply:** Never auto-expand on live updates. Use a globe with an orbiting magnifier for actual web search, a brain only for Deepthink, and a distinct abstract animation for normal replies. Each status should cycle between flat and dimensional views, respect reduced-motion settings, and avoid showing competing status indicators.
 
-Deepthink may be changed while a reply is streaming, but the selection applies only to the next request. Each reply retains the mode captured when it was sent.
+Deepthink and Agent may be changed while a reply is streaming, but each selection applies only to the next request. Keep visible labels stable and communicate selection through active styling, `aria-pressed`, and state-specific descriptions.
 
-**Why:** The user reported Deepthink not working even though a live high-effort Groq request succeeded; the control had been disabled throughout streaming and its selected state was easy to miss.
+**Why:** The user reported Deepthink not working even though a live high-effort Groq request succeeded; the control had been disabled throughout streaming and its selected state was easy to miss. The user later asked to remove visible “on” suffixes because they cluttered the composer.
 
-**How to apply:** Keep the toggle usable, make its on state visibly blue and clearly labeled, explain next-message behavior in its tooltip, and never relabel an in-progress reply based on a later preference change.
+**How to apply:** Keep both toggles usable during streaming, preserve their active visual state and pressed-state accessibility, explain mode selection and next-message behavior in their descriptions/tooltips, and never relabel an in-progress reply based on a later preference change.
 
 The visual direction is a premium, modern SaaS chat interface inspired by DeepSeek, v0, and Bolt, while retaining Nexo's own logo and black-and-blue identity.
 

@@ -1415,11 +1415,29 @@ function Home() {
                   <button type="button" className="image-attach-button" aria-label="Attach image" title="Attach an image" onClick={() => imageInputRef.current?.click()} disabled={streaming || preparingImage} data-testid="button-attach-image">
                     <ImagePlus size={15} aria-hidden="true" />
                   </button>
-                  <button type="button" aria-pressed={deepthink} aria-label={`Deepthink ${deepthink ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle deep-toggle ${deepthink ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original mode' : deepthink ? 'Deepthink is on: use deeper reasoning' : 'Turn on Deepthink for deeper reasoning'} onClick={() => setDeepthink((v) => !v)} data-testid="toggle-deepthink">
-                    <span className="mode-toggle-icon deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink{deepthink ? ' on' : ''}</span>
+                  <button
+                    type="button"
+                    aria-pressed={deepthink}
+                    aria-label="Deepthink"
+                    aria-description={`${deepthink ? 'Deepthink is selected for deeper reasoning.' : 'Deepthink is off. Select it for deeper reasoning.'}${streaming ? ' Changes apply to your next message; this reply keeps its original mode.' : ''}`}
+                    className={`mode-toggle deep-toggle ${deepthink ? 'is-on' : ''}`}
+                    title={`${deepthink ? 'Deepthink is selected for deeper reasoning.' : 'Deepthink is off. Select it for deeper reasoning.'}${streaming ? ' Changes apply to your next message; this reply keeps its original mode.' : ''}`}
+                    onClick={() => setDeepthink((v) => !v)}
+                    data-testid="toggle-deepthink"
+                  >
+                    <span className="mode-toggle-icon deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink</span>
                   </button>
-                  <button type="button" aria-pressed={agentMode} aria-label={`Agent mode ${agentMode ? 'on' : 'off'}${streaming ? ' for the next message' : ''}`} className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`} title={streaming ? 'Changes apply to your next message; this reply keeps its original route' : agentMode ? 'Agent is on: available specialist models can search and run bounded tasks in the browser sandbox' : 'Turn on Agent mode for model-routed research and sandboxed build-and-test tasks'} onClick={() => setAgentMode((value) => !value)} data-testid="toggle-agent">
-                    <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent{agentMode ? ' on' : ''}</span>
+                  <button
+                    type="button"
+                    aria-pressed={agentMode}
+                    aria-label="Agent"
+                    aria-description={`${agentMode ? 'Agent is selected for model-routed research and sandboxed build-and-test tasks.' : 'Agent is off. Select it for model-routed research and sandboxed build-and-test tasks.'}${streaming ? ' Changes apply to your next message; this reply keeps its original route.' : ''}`}
+                    className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`}
+                    title={`${agentMode ? 'Agent is selected for model-routed research and sandboxed build-and-test tasks.' : 'Agent is off. Select it for model-routed research and sandboxed build-and-test tasks.'}${streaming ? ' Changes apply to your next message; this reply keeps its original route.' : ''}`}
+                    onClick={() => setAgentMode((value) => !value)}
+                    data-testid="toggle-agent"
+                  >
+                    <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent</span>
                   </button>
                 </div>
                 <span className="hint-keys">Enter to send · Shift + Enter for new line</span>

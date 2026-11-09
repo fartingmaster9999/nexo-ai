@@ -7,6 +7,15 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
     const original = window.fetch.bind(window);
     window.fetch = async (input, init = {}) => {
       const url = typeof input === 'string' ? input : input.url;
+      if (url.endsWith('/api/chat')) {
+        const requests = JSON.parse(localStorage.getItem('test-chat-requests') || '[]');
+        requests.push(JSON.parse(init.body));
+        localStorage.setItem('test-chat-requests', JSON.stringify(requests));
+        return new Response([
+          { content: 'The next message uses the updated mode settings.' },
+          { done: true },
+        ].map(event => 'data: ' + JSON.stringify(event) + '\\n\\n').join(''), { headers: { 'Content-Type': 'text/event-stream' } });
+      }
       if (!url.endsWith('/api/agent')) return original(input, init);
       const body = JSON.parse(init.body);
       const requests = JSON.parse(localStorage.getItem('test-requests') || '[]');
@@ -56,8 +65,41 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   await evaluate(`localStorage.setItem('test-scenario', 'wait'); document.querySelector('[data-testid="button-start-from-home"]').click()`);
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="toggle-agent"]'))`), 'composer');
   await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').textContent.trim()`), 'Agent');
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').textContent.trim()`), 'Deepthink');
   await send('Build with a provider wait');
   await waitFor(() => evaluate(`(${findCheckpoint})?.phase === 'waiting'`), 'checkpoint before provider wait');
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-stop-response"]'))`), 'streaming provider wait');
+  const pressKey = async (selector, key, code, keyCode) => {
+    await evaluate(`document.querySelector('${selector}').focus()`);
+    await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: keyCode, text: key === 'Enter' ? '\r' : key === ' ' ? ' ' : undefined });
+    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: keyCode });
+  };
+  await pressKey('[data-testid="toggle-deepthink"]', 'Enter', 'Enter', 13);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed')`), 'true');
+  await pressKey('[data-testid="toggle-deepthink"]', ' ', 'Space', 32);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed')`), 'false');
+  await pressKey('[data-testid="toggle-deepthink"]', 'Enter', 'Enter', 13);
+  await pressKey('[data-testid="toggle-agent"]', ' ', 'Space', 32);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed')`), 'false');
+  await pressKey('[data-testid="toggle-agent"]', 'Enter', 'Enter', 13);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed')`), 'true');
+  await pressKey('[data-testid="toggle-agent"]', ' ', 'Space', 32);
+  const streamingModes = await evaluate(`(() => {
+    const deepthink = document.querySelector('[data-testid="toggle-deepthink"]');
+    const agent = document.querySelector('[data-testid="toggle-agent"]');
+    return {
+      deepthink: { text: deepthink.textContent.trim(), name: deepthink.getAttribute('aria-label'), pressed: deepthink.getAttribute('aria-pressed'), description: deepthink.getAttribute('aria-description'), title: deepthink.title, active: deepthink.classList.contains('is-on') },
+      agent: { text: agent.textContent.trim(), name: agent.getAttribute('aria-label'), pressed: agent.getAttribute('aria-pressed'), description: agent.getAttribute('aria-description'), title: agent.title, active: agent.classList.contains('is-on') }
+    };
+  })()`);
+  assert.deepEqual([streamingModes.deepthink.text, streamingModes.deepthink.name, streamingModes.deepthink.pressed, streamingModes.deepthink.active], ['Deepthink', 'Deepthink', 'true', true]);
+  assert.match(streamingModes.deepthink.description, /next message; this reply keeps its original mode/);
+  assert.match(streamingModes.deepthink.title, /selected for deeper reasoning/);
+  assert.deepEqual([streamingModes.agent.text, streamingModes.agent.name, streamingModes.agent.pressed, streamingModes.agent.active], ['Agent', 'Agent', 'false', false]);
+  assert.match(streamingModes.agent.description, /Agent is off/);
+  assert.match(streamingModes.agent.description, /next message; this reply keeps its original route/);
+  assert.match(streamingModes.agent.title, /Agent is off/);
   const waiting = await evaluate(findCheckpoint);
   assert.equal(waiting.retries, 1);
   await cdp('Page.reload');
@@ -77,7 +119,18 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   await waitFor(async () => (await requests()).length === 2, 'resumed provider request');
   await waitFor(() => evaluate(`document.body.textContent.includes('Recovered build complete.')`), 'completed resumed response');
   assert.equal((await requests())[1].agentRetryCount, 1);
+  assert.equal((await requests())[1].deepthink, false, 'resuming keeps the original request mode');
   await waitFor(() => evaluate(`!(${findCheckpoint})`), 'completed checkpoint cleanup');
+  await send('Use the updated next-message modes');
+  await waitFor(() => evaluate(`JSON.parse(localStorage.getItem('test-chat-requests') || '[]').length === 1`), 'next message with updated modes');
+  const nextMessage = await evaluate(`JSON.parse(localStorage.getItem('test-chat-requests'))[0]`);
+  assert.equal(nextMessage.deepthink, true);
+  await waitFor(() => evaluate(`document.body.textContent.includes('The next message uses the updated mode settings.')`), 'updated mode response');
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-send-message"]'))`), 'next message completion');
+  await pressKey('[data-testid="toggle-deepthink"]', 'Enter', 'Enter', 13);
+  await pressKey('[data-testid="toggle-agent"]', ' ', 'Space', 32);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed')`), 'false');
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed')`), 'true');
 
   // Start a separate request, complete the real browser runner, reload during its optional review.
   await evaluate(`document.querySelector('[data-testid="button-close-workspace"]')?.click()`);

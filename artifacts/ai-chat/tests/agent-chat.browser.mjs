@@ -223,6 +223,12 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="toggle-agent"]'))`), "Agent toggle");
   await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute("aria-pressed")`), "true");
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').textContent.trim()`), "Agent");
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute("aria-label")`), "Agent");
+  assert.match(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute("aria-description")`), /Agent is selected/);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').textContent.trim()`), "Deepthink");
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute("aria-label")`), "Deepthink");
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute("aria-pressed")`), "false");
   const root = (await cdp("DOM.getDocument")).root.nodeId;
   const imageInput = (await cdp("DOM.querySelector", { nodeId: root, selector: '[data-testid="input-image-file"]' })).nodeId;
   assert.ok(imageInput);
