@@ -144,7 +144,7 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   assert.match(firstTabAfterSecondChange.agent.title, /Off\. Select to route/);
   await evaluate(`(() => {
     const record = event => {
-      if (['nexo-deepthink', 'nexo-agent'].includes(event.key)) {
+      if (event.key === null || ['nexo-deepthink', 'nexo-agent'].includes(event.key)) {
         event.currentTarget.modeStorageEvents.push({ key: event.key, value: event.newValue, trusted: event.isTrusted });
       }
     };
@@ -320,5 +320,81 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   const savedProject = await evaluate(`JSON.parse(localStorage.getItem('nexo-project-v1:' + encodeURIComponent(${JSON.stringify(written.conversationId)})))`);
   assert.equal(savedProject.files[0].content, '<h1>Manual edit after the write</h1>');
   assert.deepEqual(savedProject.selectedPaths, []);
-  console.log('PASS: provider wait and completed tool reload; explicit resume; no automatic execution or write replay; source privacy; cancellation; corrupt/versioned records.');
+
+  await evaluate(`document.querySelector('[data-testid="button-close-workspace"]')?.click()`);
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="toggle-agent"]'))`), 'mode controls after closing the final workspace');
+  await evaluate(`window.open('about:blank', 'nexo-mode-sync')?.close(); window.modeSyncTab = window.open(location.href, 'nexo-mode-sync-final'); Boolean(window.modeSyncTab)`);
+  await waitFor(() => evaluate(`(() => {
+    try {
+      return ['toggle-deepthink', 'toggle-agent'].every(id =>
+        document.querySelector('[data-testid="' + id + '"]') &&
+        window.modeSyncTab.document.querySelector('[data-testid="' + id + '"]'));
+    } catch { return false; }
+  })()`), 'both mode controls visible in both tabs');
+  await evaluate(`(() => {
+    const record = event => {
+      if (event.key === null || ['nexo-deepthink', 'nexo-agent'].includes(event.key)) {
+        event.currentTarget.modeStorageEvents.push({ key: event.key, value: event.newValue, trusted: event.isTrusted });
+      }
+    };
+    window.modeStorageEvents = [];
+    window.addEventListener('storage', record);
+    window.modeSyncTab.modeStorageEvents = [];
+    window.modeSyncTab.addEventListener('storage', record);
+  })()`);
+  const setMode = async (tab, mode, enabled) => {
+    await evaluate(`(() => {
+      const button = ${tab}.document.querySelector('[data-testid="toggle-${mode}"]');
+      if ((button.getAttribute('aria-pressed') === 'true') !== ${enabled}) button.click();
+    })()`);
+  };
+  const modeEvents = () => evaluate(`({
+    first: [...window.modeStorageEvents],
+    second: [...window.modeSyncTab.modeStorageEvents]
+  })`);
+  const bothModesPressed = (pressed) => `(() => {
+    const first = ${readTabModes('window')};
+    const second = ${readTabModes('window.modeSyncTab')};
+    return first.deepthink.pressed === '${pressed}' &&
+      first.agent.pressed === '${pressed}' &&
+      second.deepthink.pressed === '${pressed}' &&
+      second.agent.pressed === '${pressed}';
+  })()`;
+
+  // Removing either preference clears that control in both already-open app tabs.
+  await setMode('window', 'deepthink', true);
+  await setMode('window', 'agent', true);
+  await waitFor(() => evaluate(bothModesPressed('true')), 'both mode preferences enabled in both tabs');
+  await delay(100);
+  await evaluate(`window.modeSyncTab.localStorage.removeItem('nexo-deepthink')`);
+  await waitFor(() => evaluate(`${readTabModes('window')}.deepthink.pressed === 'false' && ${readTabModes('window.modeSyncTab')}.deepthink.pressed === 'true' && window.modeStorageEvents.some(event => event.key === 'nexo-deepthink' && event.value === null)`), 'removing Deepthink preference resets the other tab');
+  const deepthinkRemovalEvents = await modeEvents();
+  assert.equal(deepthinkRemovalEvents.first.filter(event => event.key === 'nexo-deepthink' && event.value === null).length, 1, 'the receiving tab must observe the Deepthink removal once');
+  await delay(100);
+  assert.equal(await evaluate(`localStorage.getItem('nexo-deepthink')`), null, 'receiving tabs must not restore a removed Deepthink preference');
+  await evaluate(`localStorage.removeItem('nexo-agent')`);
+  await waitFor(() => evaluate(`${readTabModes('window')}.agent.pressed === 'true' && ${readTabModes('window.modeSyncTab')}.agent.pressed === 'false' && window.modeSyncTab.modeStorageEvents.some(event => event.key === 'nexo-agent' && event.value === null)`), 'removing Agent preference resets the other tab');
+  const agentRemovalEvents = await modeEvents();
+  assert.equal(agentRemovalEvents.second.filter(event => event.key === 'nexo-agent' && event.value === null).length, 1, 'the receiving tab must observe the Agent removal once');
+  await delay(100);
+  assert.equal(await evaluate(`localStorage.getItem('nexo-agent')`), null, 'receiving tabs must not restore a removed Agent preference');
+
+  // Clear storage from a same-origin non-app tab so both app tabs receive the clear event.
+  await setMode('window', 'deepthink', true);
+  await setMode('window', 'agent', false);
+  await setMode('window', 'agent', true);
+  await waitFor(() => evaluate(bothModesPressed('true')), 'both mode preferences restored in both tabs');
+  await delay(100);
+  const openedStorageClearTab = await evaluate(`window.modeClearTab = window.open('about:blank', 'nexo-mode-clear'); Boolean(window.modeClearTab)`);
+  assert.equal(openedStorageClearTab, true, 'a same-origin storage-clearing tab must open');
+  await evaluate(`window.modeClearTab.localStorage.clear()`);
+  await waitFor(() => evaluate(`(${bothModesPressed('false')}) && window.modeStorageEvents.some(event => event.key === null) && window.modeSyncTab.modeStorageEvents.some(event => event.key === null)`), 'clearing browser storage resets both modes in both app tabs');
+  await delay(100);
+  assert.equal(await evaluate(`localStorage.getItem('nexo-deepthink')`), null, 'storage clear must not write back the default Deepthink value');
+  assert.equal(await evaluate(`localStorage.getItem('nexo-agent')`), null, 'storage clear must not write back the default Agent value');
+  const clearEvents = await modeEvents();
+  assert.equal(clearEvents.first.filter(event => event.key === null && event.trusted).length, 1, 'the first app tab must receive the real storage-clear event');
+  assert.equal(clearEvents.second.filter(event => event.key === null && event.trusted).length, 1, 'the second app tab must receive the real storage-clear event');
+  await evaluate(`window.modeClearTab.close(); window.modeClearTab = null`);
+  console.log('PASS: provider wait and completed tool reload; explicit resume; no automatic execution or write replay; source privacy; cancellation; corrupt/versioned records; cross-tab mode removal and storage clear.');
 });
