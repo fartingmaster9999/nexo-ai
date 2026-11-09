@@ -1383,7 +1383,7 @@ function Home() {
                 </div>
               </div>
               <div className="composer-hint">
-                <div className="composer-mode-buttons">
+                <div className="composer-mode-buttons" role="group" aria-label="Message modes">
                   <input
                     ref={imageInputRef}
                     type="file"

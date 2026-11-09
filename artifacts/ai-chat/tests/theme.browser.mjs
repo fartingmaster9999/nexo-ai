@@ -93,14 +93,17 @@ await withFixture('tests/theme.html', async ({ cdp, evaluate, navigate }) => {
     const composerFocusContrast = await readContrast('.composer-wrap', 'borderTopColor', '.composer-wrap');
     assert.ok(composerFocusContrast >= 3, `${theme}: focused composer border contrast ${composerFocusContrast}:1 is below 3:1`);
 
-    await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
-    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    for (const selector of ['.image-attach-button', '[data-testid="toggle-deepthink"]', '[data-testid="toggle-agent"]', '.send-button']) {
+      await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+      await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+      assert.equal(await evaluate(`document.activeElement.matches(${JSON.stringify(selector)})`), true,
+        `${theme}: keyboard Tab reaches ${selector} in composer order`);
+    }
     const outline = await evaluate(`(() => {
       const button = document.activeElement;
       const style = getComputedStyle(button);
       return { width: style.outlineWidth, style: style.outlineStyle, color: style.outlineColor };
     })()`);
-    assert.equal(await evaluate(`document.activeElement?.classList.contains('send-button')`), true, `${theme}: Tab should move focus to the send control`);
     assert.ok(Number.parseFloat(outline.width) >= 2, `${theme}: keyboard focus outline should be at least 2px`);
     assert.equal(outline.style, 'solid', `${theme}: keyboard focus outline style`);
     const focusContrast = await readContrast('.send-button', 'outlineColor', '.composer-wrap');
@@ -184,6 +187,10 @@ await withFixture('tests/theme.html', async ({ cdp, evaluate, navigate }) => {
   }
 
   // A narrower CSS viewport reproduces the reflow users see at 200% desktop zoom.
+  if (await evaluate(`!!document.querySelector('[data-testid="dialog-settings"]')`)) {
+    await evaluate(`document.querySelector('[data-testid="button-close-settings"]').click()`);
+    await waitFor(() => evaluate(`!document.querySelector('[data-testid="dialog-settings"]')`), 'close appearance dialog before zoomed composer checks');
+  }
   await cdp('Emulation.setDeviceMetricsOverride', { width: 720, height: 640, deviceScaleFactor: 1, mobile: false });
   await waitFor(() => evaluate(`document.querySelector('.ws-btn.run')?.getBoundingClientRect().width > 0`), 'workspace controls at zoomed viewport');
   await evaluate(`document.querySelector('.ws-select').focus()`);
@@ -212,4 +219,118 @@ await withFixture('tests/theme.html', async ({ cdp, evaluate, navigate }) => {
   assert.equal(zoomedFocus.outlineStyle, 'solid', 'Zoomed keyboard focus outline remains solid');
   const forcedFocusContrast = await readContrast('.ws-btn.run', 'outlineColor', '.ws-btn.run');
   assert.ok(forcedFocusContrast >= 3, `Forced colors: zoomed focus outline contrast ${forcedFocusContrast}:1 is below 3:1`);
+  await evaluate(`document.querySelector('[data-testid="button-close-workspace"]').click()`);
+  await waitFor(() => evaluate(`!document.querySelector('.workspace')`), 'close workspace before zoomed composer checks');
+
+  const zoomedModes = await evaluate(`(() => {
+    const group = document.querySelector('.composer-mode-buttons');
+    const buttons = [...group.querySelectorAll('.mode-toggle')];
+    const rect = (element) => {
+      const { top, right, bottom, left, width, height } = element.getBoundingClientRect();
+      return { top, right, bottom, left, width, height };
+    };
+    return {
+      groupName: group.getAttribute('aria-label'),
+      labels: buttons.map((button) => button.innerText.trim()),
+      visible: buttons.map((button) => {
+        const bounds = rect(button);
+        return bounds.width > 0 && bounds.height > 0 && bounds.top >= 0 && bounds.bottom <= innerHeight &&
+          bounds.left >= 0 && bounds.right <= innerWidth && getComputedStyle(button).visibility === 'visible';
+      }),
+      overlap: buttons.length === 2 && (() => {
+        const [first, second] = buttons.map(rect);
+        return first.left < second.right && first.right > second.left && first.top < second.bottom && first.bottom > second.top;
+      })(),
+      states: buttons.map((button) => ({
+        pressed: button.getAttribute('aria-pressed'),
+        label: button.getAttribute('aria-label'),
+        description: button.getAttribute('aria-description'),
+        tooltip: button.getAttribute('title'),
+        color: getComputedStyle(button).color,
+        background: getComputedStyle(button).backgroundColor,
+        border: getComputedStyle(button).borderColor,
+      })),
+    };
+  })()`);
+  assert.equal(zoomedModes.groupName, 'Message modes', 'Mode controls have an accessible group name at 200% zoom');
+  assert.deepEqual(zoomedModes.labels, ['Deepthink', 'Agent'], 'Both mode labels remain distinct at 200% zoom');
+  assert.deepEqual(zoomedModes.visible, [true, true], 'Both mode controls remain within the viewport at 200% zoom');
+  assert.equal(zoomedModes.overlap, false, 'Mode controls do not overlap at 200% zoom');
+  assert.deepEqual(zoomedModes.states.map(({ pressed }) => pressed), ['false', 'false'], 'Both controls start unselected');
+  for (const state of zoomedModes.states) {
+    assert.ok(state.label, 'Each mode control keeps its accessible name');
+    assert.ok(state.description, `${state.label}: accessible mode description remains available`);
+    assert.ok(state.tooltip, `${state.label}: tooltip text remains available`);
+  }
+  await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed') === 'true'`), 'Deepthink selected state at zoomed viewport');
+  const selectedDeepthink = await evaluate(`(() => {
+    const button = document.querySelector('[data-testid="toggle-deepthink"]');
+    const style = getComputedStyle(button);
+    return { color: style.color, background: style.backgroundColor, border: style.borderColor };
+  })()`);
+  assert.notDeepEqual(selectedDeepthink, {
+    color: zoomedModes.states[0].color,
+    background: zoomedModes.states[0].background,
+    border: zoomedModes.states[0].border,
+  }, 'Selected Deepthink styling differs from its unselected style');
+  await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed') === 'true'`), 'Agent selected state at zoomed viewport');
+  const selectedAgent = await evaluate(`(() => {
+    const button = document.querySelector('[data-testid="toggle-agent"]');
+    const style = getComputedStyle(button);
+    return { color: style.color, background: style.backgroundColor, border: style.borderColor };
+  })()`);
+  assert.notDeepEqual(selectedAgent, {
+    color: zoomedModes.states[1].color,
+    background: zoomedModes.states[1].background,
+    border: zoomedModes.states[1].border,
+  }, 'Selected Agent styling differs from its unselected style');
+
+  await evaluate(`document.querySelector('.composer textarea').focus()`);
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  const firstComposerTab = await evaluate(`(() => {
+    const active = document.activeElement;
+    return { tag: active.tagName, label: active.getAttribute('aria-label'), testId: active.getAttribute('data-testid'), className: active.className };
+  })()`);
+  assert.equal(firstComposerTab.className.includes('image-attach-button'), true,
+    `Keyboard Tab reaches the composer image control first (${JSON.stringify(firstComposerTab)})`);
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  const zoomedModeFocus = await evaluate(`(() => {
+    const button = document.activeElement;
+    const style = getComputedStyle(button);
+    const bounds = button.getBoundingClientRect();
+    return {
+      isDeepthink: button.matches('[data-testid="toggle-deepthink"]'),
+      visible: bounds.width > 0 && bounds.height > 0 && bounds.top >= 0 && bounds.bottom <= innerHeight &&
+        bounds.left >= 0 && bounds.right <= innerWidth,
+      focusVisible: button.matches(':focus-visible'),
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+      description: button.getAttribute('aria-description'),
+      tooltip: button.getAttribute('title'),
+    };
+  })()`);
+  assert.equal(zoomedModeFocus.isDeepthink, true, 'Keyboard Tab reaches Deepthink at 200% zoom');
+  assert.equal(zoomedModeFocus.visible, true, 'Focused Deepthink remains fully visible at 200% zoom');
+  assert.equal(zoomedModeFocus.focusVisible, true, 'Deepthink keyboard focus remains visibly indicated at 200% zoom');
+  assert.ok(Number.parseFloat(zoomedModeFocus.outlineWidth) >= 2, 'Mode focus outline remains at least 2 CSS pixels');
+  assert.equal(zoomedModeFocus.outlineStyle, 'solid', 'Mode focus outline remains solid');
+  assert.ok(zoomedModeFocus.description && zoomedModeFocus.tooltip, 'Mode description and tooltip remain available while focused');
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  assert.equal(await evaluate(`document.activeElement.matches('[data-testid="toggle-agent"]')`), true, 'Keyboard Tab reaches Agent after Deepthink at 200% zoom');
+  const agentFocus = await evaluate(`(() => {
+    const button = document.activeElement;
+    const bounds = button.getBoundingClientRect();
+    return { visible: bounds.width > 0 && bounds.height > 0 && bounds.top >= 0 && bounds.bottom <= innerHeight &&
+        bounds.left >= 0 && bounds.right <= innerWidth,
+      focusVisible: button.matches(':focus-visible'), description: button.getAttribute('aria-description'), tooltip: button.getAttribute('title') };
+  })()`);
+  assert.equal(agentFocus.visible, true, 'Focused Agent remains fully visible at 200% zoom');
+  assert.equal(agentFocus.focusVisible, true, 'Agent keyboard focus remains visible at 200% zoom');
+  assert.ok(agentFocus.description && agentFocus.tooltip, 'Agent description and tooltip remain available while focused');
+
 });

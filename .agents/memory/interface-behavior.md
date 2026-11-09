@@ -51,6 +51,12 @@ Scroll regression fixtures must reproduce the production CSS ancestry and place 
 
 **How to apply:** Confirm the element under the gesture point, include the production styles and wrappers, and compare the original behavior against the fix before concluding that a scroll regression is covered.
 
+Composer zoom and focus fixtures must preserve the production DOM order and close overlapping workspace or dialog layers before checking visibility and keyboard navigation.
+
+**Why:** A simplified fixture or still-mounted workspace can make controls appear offscreen or send keyboard focus into an overlay, producing misleading zoom results.
+
+**How to apply:** Mirror the real composer’s tabbable sequence, test within the visible viewport, and remove modal layers through their normal close behavior before asserting reachability.
+
 Render common mathematical notation cleanly without rewriting literal code or ordinary prose.
 
 **Why:** The user specifically wants formulas typeset instead of exposed as raw TeX, while copied/generated code must retain its exact source.

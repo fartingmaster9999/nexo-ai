@@ -86,6 +86,9 @@
   box-shadow: 0 0 0 2px hsl(var(--primary) / 0.18), 0 10px 30px -23px rgba(0, 0, 0, 0.52);
 }
 
+.composer-hint { flex-wrap: wrap; }
+.composer-mode-buttons { min-width: 0; flex-wrap: wrap; }
+
 .composer textarea::placeholder {
   color: hsl(var(--muted-foreground));
   opacity: 1;

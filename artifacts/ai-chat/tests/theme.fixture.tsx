@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Bot, Brain, ImagePlus } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import { CodeWorkspace } from '../src/components/code-workspace';
 import { SettingsDialog } from '../src/components/settings-dialog';
@@ -13,6 +14,9 @@ import '../src/answer-format.css';
 function Fixture() {
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(true);
+  const [workspaceOpen, setWorkspaceOpen] = useState(true);
+  const [deepthink, setDeepthink] = useState(false);
+  const [agentMode, setAgentMode] = useState(false);
   return <div className="app-shell">
     <aside className="sidebar" aria-label="Conversation sidebar">
       <div className="brand"><span className="brand-name">Nexo</span></div>
@@ -33,7 +37,8 @@ function Fixture() {
           <button className="top-btn" type="button" onClick={() => setSettingsOpen(true)}>Appearance</button>
         </div>
       </header>
-      <section className="home-region">
+      <section className="chat-region home-region" aria-label="Nexo AI home">
+        <div className="messages">
         <div className="home-landing">
           <div className="landing-topline"><span className="landing-wordmark">NEXO AI</span><span className="landing-status">READY</span></div>
           <div className="landing-hero">
@@ -57,27 +62,39 @@ function Fixture() {
             <button className="landing-prompt" type="button"><span className="landing-prompt-copy"><em>Explore</em><b>Explain a topic</b><small>Get a clear overview to start from.</small></span></button>
           </div>
         </div>
-        <section className="chat-region" aria-label="Conversation preview">
-          <div className="messages">
-            <div className="message-row assistant">
-              <div className="message-content">
-                <div className="message-role">Nexo</div>
-                <div className="message-text markdown"><p>A clear answer with readable supporting details.</p></div>
-              </div>
-            </div>
+        </div>
+        <div className="composer-wrap">
+          <div className="composer">
+            <div className="composer-body"><textarea aria-label="Message composer" placeholder="Ask anything..." rows={1} /></div>
           </div>
-          <div className="composer-wrap">
-            <div className="composer">
-              <textarea aria-label="Message composer" placeholder="Ask anything..." rows={1} />
-              <button className="send-button" type="button" aria-label="Send message">Send</button>
+          <div className="composer-hint">
+            <div className="composer-mode-buttons" role="group" aria-label="Message modes">
+              <button type="button" className="image-attach-button" aria-label="Attach image" title="Attach an image">
+                <ImagePlus size={15} aria-hidden="true" />
+              </button>
+              <button type="button" className={`mode-toggle deep-toggle ${deepthink ? 'is-on' : ''}`}
+                aria-label="Deepthink" aria-pressed={deepthink}
+                aria-description={`${deepthink ? 'Deepthink is selected for deeper reasoning.' : 'Deepthink is off. Select it for deeper reasoning.'}`}
+                title={`${deepthink ? 'Deepthink is selected for deeper reasoning.' : 'Deepthink is off. Select it for deeper reasoning.'}`}
+                onClick={() => setDeepthink((value) => !value)} data-testid="toggle-deepthink">
+                <span className="mode-toggle-icon deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink</span>
+              </button>
+              <button type="button" className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`}
+                aria-label="Agent" aria-pressed={agentMode}
+                aria-description={`${agentMode ? 'Agent is selected for model-routed research and sandboxed build-and-test tasks.' : 'Agent is off. Select it for model-routed research and sandboxed build-and-test tasks.'}`}
+                title={`${agentMode ? 'Agent is selected for model-routed research and sandboxed build-and-test tasks.' : 'Agent is off. Select it for model-routed research and sandboxed build-and-test tasks.'}`}
+                onClick={() => setAgentMode((value) => !value)} data-testid="toggle-agent">
+                <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent</span>
+              </button>
             </div>
-            <div className="composer-hint"><button className="deep-toggle" type="button">Deepthink</button><span className="hint-keys">Enter to send</span></div>
+            <span className="hint-keys">Enter to send</span>
+            <button className="send-button" type="button" aria-label="Send message">Send</button>
           </div>
-        </section>
+        </div>
       </section>
     </main>
-    <CodeWorkspace conversationId="theme-fixture" snippets={[{ language: 'python', code: 'print("Theme contrast")\n', label: 'Sample', complete: true }]}
-      onClose={() => {}} returnFocus={() => {}} onAskFix={() => {}} canAsk isLight={theme.isLight} />
+    {workspaceOpen && <CodeWorkspace conversationId="theme-fixture" snippets={[{ language: 'python', code: 'print("Theme contrast")\n', label: 'Sample', complete: true }]}
+      onClose={() => setWorkspaceOpen(false)} returnFocus={() => {}} onAskFix={() => {}} canAsk isLight={theme.isLight} />}
     <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId={theme.themeId} accentId={theme.accentId}
       setTheme={theme.setTheme} setAccent={theme.setAccent} />
   </div>;
