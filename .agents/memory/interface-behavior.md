@@ -33,6 +33,12 @@ Deepthink and Agent may be changed while a reply is streaming, but each selectio
 
 **How to apply:** Keep both toggles usable during streaming, preserve their active visual state and pressed-state accessibility, explain mode selection and next-message behavior in their descriptions/tooltips, and never relabel an in-progress reply based on a later preference change.
 
+Sync mode preferences across tabs by applying storage events to UI state without writing those received values back to storage. Persist only user-initiated toggle changes.
+
+**Why:** When both tabs persisted every state update, delayed effects could overwrite newer values and make the preferences ping-pong between tabs.
+
+**How to apply:** Keep storage writes in the local toggle handlers and keep storage-event listeners read-only; preserve the request's captured mode values while the visible preferences change.
+
 The visual direction is a premium, modern SaaS chat interface inspired by DeepSeek, v0, and Bolt, while retaining Nexo's own logo and black-and-blue identity.
 
 **Why:** The user supplied an explicit refinement brief emphasizing restrained rich-black surfaces, balanced spacing, readable hierarchy, subtle card feedback, and tactile composer controls.

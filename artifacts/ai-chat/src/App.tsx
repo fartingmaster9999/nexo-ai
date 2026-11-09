@@ -101,9 +101,36 @@ function Home() {
   const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean((activeId || homeHistoryOpen) && sidebarOpen && !workspaceOpen && !settingsOpen && !deleteTarget));
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
-  useEffect(() => { try { window.localStorage.setItem(DEEPTHINK_KEY, deepthink ? '1' : '0'); } catch { /* ignore */ } }, [deepthink]);
   const [agentMode, setAgentMode] = useState<boolean>(() => { try { return window.localStorage.getItem(AGENT_KEY) === '1'; } catch { return false; } });
-  useEffect(() => { try { window.localStorage.setItem(AGENT_KEY, agentMode ? '1' : '0'); } catch { /* ignore */ } }, [agentMode]);
+  useEffect(() => {
+    const syncModePreferences = (event: StorageEvent) => {
+      try {
+        if (event.storageArea !== window.localStorage) return;
+      } catch {
+        return;
+      }
+      if (event.key === null) {
+        setDeepthink(false);
+        setAgentMode(false);
+      } else if (event.key === DEEPTHINK_KEY) {
+        setDeepthink(event.newValue === '1');
+      } else if (event.key === AGENT_KEY) {
+        setAgentMode(event.newValue === '1');
+      }
+    };
+    window.addEventListener('storage', syncModePreferences);
+    return () => window.removeEventListener('storage', syncModePreferences);
+  }, []);
+  const toggleDeepthink = () => {
+    const next = !deepthink;
+    setDeepthink(next);
+    try { window.localStorage.setItem(DEEPTHINK_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+  };
+  const toggleAgentMode = () => {
+    const next = !agentMode;
+    setAgentMode(next);
+    try { window.localStorage.setItem(AGENT_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+  };
   const [agentCodeTask, setAgentCodeTask] = useState<AgentWorkspaceTask | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -1422,7 +1449,7 @@ function Home() {
                     aria-description={`${deepthink ? 'Deepthink is selected for deeper reasoning.' : 'Deepthink is off. Select it for deeper reasoning.'}${streaming ? ' Changes apply to your next message; this reply keeps its original mode.' : ''}`}
                     className={`mode-toggle deep-toggle ${deepthink ? 'is-on' : ''}`}
                     title={`${deepthink ? 'Deepthink is selected for deeper reasoning.' : 'Deepthink is off. Select it for deeper reasoning.'}${streaming ? ' Changes apply to your next message; this reply keeps its original mode.' : ''}`}
-                    onClick={() => setDeepthink((v) => !v)}
+                    onClick={toggleDeepthink}
                     data-testid="toggle-deepthink"
                   >
                     <span className="mode-toggle-icon deep-icon"><Brain size={15} aria-hidden="true" /></span><span>Deepthink</span>
@@ -1434,7 +1461,7 @@ function Home() {
                     aria-description={`${agentMode ? 'Agent is selected for model-routed research and sandboxed build-and-test tasks.' : 'Agent is off. Select it for model-routed research and sandboxed build-and-test tasks.'}${streaming ? ' Changes apply to your next message; this reply keeps its original route.' : ''}`}
                     className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`}
                     title={`${agentMode ? 'Agent is selected for model-routed research and sandboxed build-and-test tasks.' : 'Agent is off. Select it for model-routed research and sandboxed build-and-test tasks.'}${streaming ? ' Changes apply to your next message; this reply keeps its original route.' : ''}`}
-                    onClick={() => setAgentMode((value) => !value)}
+                    onClick={toggleAgentMode}
                     data-testid="toggle-agent"
                   >
                     <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent</span>

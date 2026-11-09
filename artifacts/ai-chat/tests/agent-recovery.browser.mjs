@@ -65,6 +65,10 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   await evaluate(`localStorage.setItem('test-scenario', 'wait'); document.querySelector('[data-testid="button-start-from-home"]').click()`);
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="toggle-agent"]'))`), 'composer');
   await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
+  await waitFor(() => evaluate(`localStorage.getItem('nexo-agent') === '1'`), 'Agent preference saved before opening second tab');
+  const openedModeSyncTab = await evaluate(`window.modeSyncTab = window.open(location.href, 'nexo-mode-sync'); Boolean(window.modeSyncTab)`);
+  assert.equal(openedModeSyncTab, true, 'a second browser tab must open for cross-tab testing');
+  await waitFor(() => evaluate(`(() => { try { return Boolean(window.modeSyncTab?.document.querySelector('[data-testid="toggle-agent"]')); } catch { return false; } })()`), 'second tab mode controls');
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').textContent.trim()`), 'Agent');
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').textContent.trim()`), 'Deepthink');
   await send('Build with a provider wait');
@@ -100,6 +104,47 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   assert.match(streamingModes.agent.description, /Agent is off/);
   assert.match(streamingModes.agent.description, /next message; this reply keeps its original route/);
   assert.match(streamingModes.agent.title, /Agent is off/);
+  const readTabModes = (tab) => `(() => {
+    const doc = ${tab}.document;
+    const read = id => {
+      const button = doc.querySelector('[data-testid="toggle-' + id + '"]');
+      return {
+        pressed: button.getAttribute('aria-pressed'),
+        active: button.classList.contains('is-on'),
+        description: button.getAttribute('aria-description'),
+        title: button.title,
+      };
+    };
+    return { deepthink: read('deepthink'), agent: read('agent') };
+  })()`;
+  await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').click()`);
+  await waitFor(() => evaluate(`${readTabModes('window.modeSyncTab')}.deepthink.pressed === 'false'`), 'Deepthink change in first tab syncs to second');
+  await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
+  await waitFor(() => evaluate(`${readTabModes('window.modeSyncTab')}.agent.pressed === 'true'`), 'Agent change in first tab syncs to second');
+  const secondTabAfterFirstChange = await evaluate(readTabModes('window.modeSyncTab'));
+  assert.deepEqual([secondTabAfterFirstChange.deepthink.pressed, secondTabAfterFirstChange.deepthink.active], ['false', false]);
+  assert.match(secondTabAfterFirstChange.deepthink.description, /Deepthink is off/);
+  assert.match(secondTabAfterFirstChange.deepthink.title, /Deepthink is off/);
+  assert.deepEqual([secondTabAfterFirstChange.agent.pressed, secondTabAfterFirstChange.agent.active], ['true', true]);
+  assert.match(secondTabAfterFirstChange.agent.description, /Agent is selected/);
+  assert.match(secondTabAfterFirstChange.agent.title, /Agent is selected/);
+  await evaluate(`window.modeStorageEvents = []; window.addEventListener('storage', event => { if (['nexo-deepthink', 'nexo-agent'].includes(event.key)) window.modeStorageEvents.push({ key: event.key, value: event.newValue }); })`);
+  await evaluate(`window.modeSyncTab.document.querySelector('[data-testid="toggle-deepthink"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed') === 'true'`), 'Deepthink change in second tab syncs to first');
+  await evaluate(`window.modeSyncTab.document.querySelector('[data-testid="toggle-agent"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed') === 'false'`), 'Agent change in second tab syncs to first');
+  const firstTabAfterSecondChange = await evaluate(readTabModes('window'));
+  assert.deepEqual([firstTabAfterSecondChange.deepthink.pressed, firstTabAfterSecondChange.deepthink.active], ['true', true]);
+  assert.match(firstTabAfterSecondChange.deepthink.description, /selected for deeper reasoning/);
+  assert.match(firstTabAfterSecondChange.deepthink.description, /next message; this reply keeps its original mode/);
+  assert.match(firstTabAfterSecondChange.deepthink.title, /selected for deeper reasoning/);
+  assert.deepEqual([firstTabAfterSecondChange.agent.pressed, firstTabAfterSecondChange.agent.active], ['false', false]);
+  assert.match(firstTabAfterSecondChange.agent.description, /Agent is off/);
+  assert.match(firstTabAfterSecondChange.agent.description, /next message; this reply keeps its original route/);
+  assert.match(firstTabAfterSecondChange.agent.title, /Agent is off/);
+  assert.equal((await requests())[0].deepthink, false, 'changes in either tab must not alter the in-flight request mode');
+  assert.equal((await requests()).length, 1, 'changes in either tab must not start a second request or change the in-flight Agent route');
+  assert.equal(await evaluate(`window.modeStorageEvents.length`), 2, 'receiving tabs must not echo mode changes back into storage');
   const waiting = await evaluate(findCheckpoint);
   assert.equal(waiting.retries, 1);
   await cdp('Page.reload');

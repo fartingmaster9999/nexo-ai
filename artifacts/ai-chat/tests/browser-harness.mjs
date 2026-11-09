@@ -29,7 +29,7 @@ export async function withFixture(fixture, test) {
   const vite = spawn('pnpm', ['exec', 'vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
     cwd, env: { ...process.env, PORT: String(port), BASE_PATH: '/' }, stdio: 'ignore',
   });
-  const browser = spawn(process.env.CHROMIUM_PATH ?? '/repl/tools/bin/chromium', ['--headless=new', '--no-sandbox',
+  const browser = spawn(process.env.CHROMIUM_PATH ?? '/repl/tools/bin/chromium', ['--headless=new', '--no-sandbox', '--disable-popup-blocking',
     '--disable-dev-shm-usage', '--disable-gpu', `--remote-debugging-port=${debug}`, `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
   let socket, sequence = 0;
   const errors = [];
