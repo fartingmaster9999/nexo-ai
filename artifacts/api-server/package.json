@@ -9,7 +9,8 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test test/*.test.mjs"
+    "test": "tsx --test test/*.test.mjs",
+    "smoke:providers": "tsx scripts/provider-compatibility-smoke.ts"
   },
   "dependencies": {
     "@replit/connectors-sdk": "^0.4.3",
