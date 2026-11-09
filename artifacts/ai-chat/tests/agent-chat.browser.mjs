@@ -226,6 +226,20 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').textContent.trim()`), "Agent");
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute("aria-label")`), "Agent");
   assert.match(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute("aria-description")`), /Routes your next message to Agent/);
+  await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
+  await cdp("Input.insertText", { text: "Build and test a multi-page project with saved settings and responsive layouts." });
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="deepthink-recommendation"]'))`), "Deepthink recommendation for a multi-step Agent request");
+  assert.match(await evaluate(`document.querySelector('[data-testid="deepthink-recommendation"]').textContent`), /plan the changes before editing/);
+  await evaluate(`document.querySelector('[data-testid="button-enable-suggested-deepthink"]').click()`);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute("aria-pressed")`), "true", "the suggestion enables Deepthink for the next request");
+  await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').click()`);
+  await evaluate(`(() => {
+    const input = document.querySelector('[data-testid="input-message"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(input, '');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="input-message"]').value === ""`), "cleared Deepthink test prompt");
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').textContent.trim()`), "Deepthink");
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute("aria-label")`), "Deepthink");
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute("aria-pressed")`), "false");
@@ -268,15 +282,22 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute("aria-pressed")`), "true");
   assert.equal(await evaluate(`Object.keys(localStorage).some(key => key === "nexo-agent" && localStorage.getItem(key) === "1")`), true);
 
-  const activityToggle = await evaluate(`document.querySelector('[data-testid^="toggle-progress-"]')?.getAttribute("aria-label")`);
-  assert.match(activityToggle ?? "", /Agent activity/);
-  await evaluate(`document.querySelector('[data-testid^="toggle-progress-"]').click()`);
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-testid^="toggle-progress-"]'))`), false, "Agent progress is not hidden behind a disclosure");
   await waitFor(() => evaluate(`document.querySelector('[data-testid^="agent-activity-"]')?.textContent.includes("Code finished in the isolated browser")`), "visible tool activity");
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-testid^="button-agent-workspace-"]'))`), true, "the activity offers a direct path to the code and preview");
+  await cdp("Emulation.setDeviceMetricsOverride", { width: 402, height: 874, deviceScaleFactor: 1, mobile: true });
+  await waitFor(() => evaluate(`window.innerWidth === 402`), "phone-sized Agent view");
+  const progressBounds = await evaluate(`(() => {
+    const panel = document.querySelector('[data-testid^="panel-progress-"]')?.getBoundingClientRect();
+    const summary = document.querySelector('[data-testid^="agent-progress-"]')?.getBoundingClientRect();
+    return { width: window.innerWidth, panelLeft: panel?.left, panelRight: panel?.right, summaryRight: summary?.right };
+  })()`);
+  assert.ok(progressBounds.panelLeft >= 0 && progressBounds.panelRight <= progressBounds.width + 1 && progressBounds.summaryRight <= progressBounds.width + 1, "Agent progress fits a phone viewport");
+  await cdp("Emulation.clearDeviceMetricsOverride");
   if (!liveTool) {
-    assert.equal(await evaluate(`document.body.textContent.includes("Page read")`), true);
-    assert.equal(await evaluate(`document.body.textContent.includes("Search excerpt")`), true);
-    assert.equal(await evaluate(`document.body.textContent.includes("Retrieved") && document.body.textContent.includes("2026")`), true);
-    assert.equal(await evaluate(`document.querySelector('.activity-sources a[href="https://example.com/page"]')?.textContent.includes("Page read")`), true);
+    assert.equal(await evaluate(`document.body.textContent.includes("Page read")`), false, "Agent progress does not expose a source list");
+    assert.equal(await evaluate(`document.body.textContent.includes("Search excerpt")`), false, "Agent progress stays focused on actions and results");
+    assert.equal(await evaluate(`Boolean(document.querySelector('.activity-sources'))`), false, "sources remain out of the progress panel");
     await waitFor(() => evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes('"retrievedAt":"2026-11-06T18:30:00.000Z"')`), "saved source retrieval time");
   }
   assert.equal(await evaluate(`document.body.textContent.includes("private reasoning")`), false);
@@ -333,7 +354,9 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await cdp("Input.insertText", { text: "Analyze this image after a provider failure." });
   await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
   await waitFor(() => evaluate(`window.__agentRequests.length === 9`), "failed image-bearing Agent request");
+  assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute("srcdoc")?.includes("Corrected preview")`), "a follow-up request keeps the last working preview visible while Agent starts");
   await waitFor(() => evaluate(`document.body.textContent.includes("Nexo Agent could not complete this request. Please try again.")`), "safe Agent failure message");
+  assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute("srcdoc")?.includes("Corrected preview")`), "a failed follow-up keeps the previous preview");
   const failedImageRequest = await evaluate(`window.__agentRequests[8]`);
   assert.equal(failedImageRequest.body.image.data, imageBase64);
   await waitFor(() => evaluate(`Object.keys(localStorage).map(key => localStorage.getItem(key) || "").join("").includes("Analyze this image after a provider failure.")`), "failed image request saved to chat");
@@ -357,6 +380,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
   await waitFor(() => evaluate(`window.__agentRequests.length === 12`), "multi-file project execution", 30000);
   await waitFor(() => evaluate(`document.body.textContent.includes("Nexo saved and previewed the multi-file project.")`), "project Agent response", 20000);
+  assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute("srcdoc")?.includes("Multi-file project")`), "a valid project update replaces the previous preview");
   if (await evaluate(`Boolean(document.querySelector('[data-testid="button-open-workspace"]'))`)) {
     await evaluate(`document.querySelector('[data-testid="button-open-workspace"]').click()`);
   }

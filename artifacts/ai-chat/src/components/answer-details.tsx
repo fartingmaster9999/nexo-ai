@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { AlertTriangle, Brain, ChevronDown, Info } from 'lucide-react';
+import { AlertTriangle, Bot, Brain, ChevronDown, Info, PanelRightOpen } from 'lucide-react';
 import './thinking-motion.css';
 import { splitReasoning } from '../lib/reasoning-sections';
 import type { QuizProgress } from '../lib/interactive-widgets';
@@ -24,7 +24,7 @@ export type ChatMessage = {
   quizProgress?: Record<string, QuizProgress>;
 };
 
-export type ReplyMode = 'search' | 'deep' | 'normal';
+export type ReplyMode = 'search' | 'deep' | 'agent' | 'normal';
 
 export function isSearching(message: ChatMessage, live: boolean) {
   return live && (message.activity ?? []).some((a) => a.kind === 'search' && a.status === 'running');
@@ -54,6 +54,19 @@ function BrainFigure() {
   );
 }
 
+function AgentFigure() {
+  return (
+    <span className="rs-fig rs-agent" aria-hidden="true">
+      <span className="rs-stage">
+        <span className="rs-halo" />
+        <i className="rs-agent-ring ring-a" />
+        <i className="rs-agent-ring ring-b" />
+        <span className="rs-agent-core"><Bot size={15} /></span>
+      </span>
+    </span>
+  );
+}
+
 function NormalFigure() {
   return (
     <span className="rs-fig rs-normal" aria-hidden="true">
@@ -65,17 +78,12 @@ function NormalFigure() {
   );
 }
 
-function formatRetrievedAt(value: string | undefined) {
-  if (!value || !Number.isFinite(Date.parse(value))) return null;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
-}
-
 /** Single status indicator: search takes precedence, then deepthink, then normal. */
-export const ReplyStatus = memo(function ReplyStatus({ mode, label, compact = false }: { mode: ReplyMode; label?: string; compact?: boolean }) {
-  const text = label ?? (mode === 'search' ? 'Searching the web' : mode === 'deep' ? 'Deepthink is working' : 'Working on it');
+export const ReplyStatus = memo(function ReplyStatus({ mode, label, compact = false, decorative = false }: { mode: ReplyMode; label?: string; compact?: boolean; decorative?: boolean }) {
+  const text = label ?? (mode === 'search' ? 'Searching the web' : mode === 'deep' ? 'Deepthink is working' : mode === 'agent' ? 'Agent is working' : 'Working on it');
   return (
-    <span className={`reply-status rs-${mode}-mode${compact ? ' is-compact' : ''}`} role="status" aria-label={text} data-mode={mode} data-testid={mode === 'search' ? 'status-searching' : 'status-thinking'}>
-      {mode === 'search' ? <SearchFigure /> : mode === 'deep' ? <BrainFigure /> : <NormalFigure />}
+    <span className={`reply-status rs-${mode}-mode${compact ? ' is-compact' : ''}`} role={decorative ? undefined : 'status'} aria-label={decorative ? undefined : text} aria-hidden={decorative || undefined} data-mode={mode} data-testid={mode === 'search' ? 'status-searching' : mode === 'agent' ? 'status-agent' : 'status-thinking'}>
+      {mode === 'search' ? <SearchFigure /> : mode === 'deep' ? <BrainFigure /> : mode === 'agent' ? <AgentFigure /> : <NormalFigure />}
       {!compact && <span className="rs-label">{text}</span>}
     </span>
   );
@@ -83,8 +91,9 @@ export const ReplyStatus = memo(function ReplyStatus({ mode, label, compact = fa
 
 /** Show the reply's thinking mode unless a live search activity owns the status. */
 export function LiveReplyIndicator({ message, live, hasContent = false }: { message: ChatMessage; live: boolean; hasContent?: boolean }) {
-  if (!live || isSearching(message, live) || (hasContent && !message.deepthink)) return null;
-  return <ReplyStatus mode={message.deepthink ? 'deep' : 'normal'} compact={hasContent} />;
+  if (!live || isSearching(message, live) || (hasContent && !message.deepthink && !message.agentMode)) return null;
+  const mode = message.deepthink ? 'deep' : message.agentMode ? 'agent' : 'normal';
+  return <ReplyStatus mode={mode} compact={hasContent} />;
 }
 
 /** Backwards-compatible wrapper. */
@@ -120,36 +129,74 @@ export function NoticeBanner({ notices, index }: { notices?: Notice[]; index: nu
   );
 }
 
-export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index }: { message: ChatMessage; live: boolean; index: number }) {
+export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index, onOpenWorkspace }: { message: ChatMessage; live: boolean; index: number; onOpenWorkspace?: () => void }) {
   const reasoning = message.reasoning ?? '';
   const [open, setOpen] = useState(false);
   const searching = isSearching(message, live);
   const agentMode = message.agentMode === true;
   const hasActivity = (message.activity ?? []).length > 0;
-  const hasSources = (message.sources ?? []).length > 0;
-  if (!live && !reasoning && !hasActivity && !hasSources) return null;
   const activities = message.activity ?? [];
   const runningLabel = searching ? [...activities].reverse().find((a) => a.kind === 'search' && a.status === 'running')?.label : undefined;
-  const currentActivity = [...activities].reverse().find((activity) => activity.status === 'running') ?? activities.at(-1);
-  const agentProgressStatus = currentActivity?.status ?? (live ? 'running' : 'complete');
-  const agentProgressLabel = currentActivity?.label ?? 'Working on your request';
-  const agentProgressState = agentProgressStatus === 'running' ? 'In progress' : agentProgressStatus === 'error' ? 'Needs attention' : 'Done';
+  const currentActivity = (live ? [...activities].reverse().find((activity) => activity.status === 'running') : undefined) ?? activities.at(-1);
+  const agentProgressStatus = currentActivity?.status === 'running' && !live
+    ? 'error'
+    : currentActivity?.status ?? (live ? 'running' : 'complete');
+  const agentProgressLabel = currentActivity?.label ?? (live ? 'Preparing the next step' : 'Agent completed the response');
+  const agentProgressState = agentProgressStatus === 'running'
+    ? 'In progress'
+    : agentProgressStatus === 'error'
+      ? currentActivity?.status === 'running' && !live ? 'Stopped early' : 'Needs attention'
+      : 'Done';
   const bodyId = `progress-body-${index}`;
   const sections = open && !agentMode ? splitReasoning(reasoning) : [];
+  if (!agentMode && !live && !reasoning && !hasActivity) return null;
+  if (agentMode) {
+    const hasWorkspaceActivity = activities.some((activity) => activity.kind === 'code') || message.agentTask === 'coding';
+    return (
+      <section className={`term agent-progress-panel ${live ? 'is-live' : ''}`} aria-label="Agent progress" data-testid={`panel-progress-${index}`}>
+        <div className="agent-progress-heading">
+          <span className="term-prompt" aria-hidden="true">&gt;&gt;&gt;</span>
+          <span>Agent progress</span>
+          {live && <span className="term-ellipsis" aria-hidden="true" />}
+        </div>
+        <div className={`agent-progress-summary status-${agentProgressStatus}`} role="status" aria-live={live ? 'polite' : 'off'} aria-atomic="true" data-testid={`agent-progress-${index}`}>
+          <ReplyStatus mode={searching ? 'search' : message.deepthink ? 'deep' : 'agent'} compact decorative />
+          <span className="agent-progress-label">{searching ? runningLabel : agentProgressLabel}</span>
+          <small>{agentProgressState}</small>
+        </div>
+        <div className="agent-activity-list" role="list" aria-label="Completed and current Agent actions" data-testid={`agent-activity-${index}`}>
+          {activities.length ? activities.map((activity) => {
+            const status = !live && activity.status === 'running' ? 'error' : activity.status ?? 'complete';
+            const state = status === 'running' ? 'In progress' : status === 'error' ? (!live && activity.status === 'running' ? 'Stopped' : 'Needs attention') : 'Done';
+            return (
+              <div className={`agent-activity-item status-${status}`} role="listitem" key={activity.id}>
+                <span className="agent-activity-dot" aria-hidden="true" />
+                <span>{activity.label}</span>
+                <small>{state}</small>
+              </div>
+            );
+          }) : (
+            <p className="term-note">{live ? 'Agent is preparing the first action.' : 'No tool actions were needed for this response.'}</p>
+          )}
+          {message.agentTask && <span className="agent-meta-tag">Task: {message.agentTask.replaceAll('_', ' ')}</span>}
+          {message.model && <span className="agent-meta-tag" data-testid={`agent-model-${index}`}>Model: {message.model}</span>}
+          {hasWorkspaceActivity && onOpenWorkspace && (
+            <button type="button" className="agent-open-workspace" onClick={onOpenWorkspace} aria-controls="code-workspace" data-testid={`button-agent-workspace-${index}`}>
+              <PanelRightOpen size={14} aria-hidden="true" />
+              <span>Open code and preview</span>
+            </button>
+          )}
+        </div>
+      </section>
+    );
+  }
   return (
     <div className={`term ${live ? 'is-live' : ''}`} data-testid={`panel-progress-${index}`}>
       <button type="button" className="term-head" aria-expanded={open} aria-controls={open ? bodyId : undefined} aria-label={`${open ? 'Hide' : 'Show'} ${agentMode ? 'Agent activity' : 'model reasoning'}`} onClick={() => setOpen((v) => !v)} data-testid={`toggle-progress-${index}`}>
         <span className="term-prompt" aria-hidden="true">&gt;&gt;&gt;</span>
-        <span className="term-title">{agentMode ? (live ? 'Agent is working' : 'Agent activity') : !live && hasSources && !reasoning && !hasActivity ? 'Sources' : message.deepthink ? (live ? 'Deepthinking' : 'Deepthink reasoning') : (live ? 'Thinking' : 'Thought process')}{live && <span className="term-ellipsis" aria-hidden="true" />}</span>
+        <span className="term-title">{message.deepthink ? (live ? 'Deepthinking' : 'Deepthink reasoning') : (live ? 'Thinking' : 'Thought process')}{live && <span className="term-ellipsis" aria-hidden="true" />}</span>
         <ChevronDown size={13} className={`term-chev ${open ? 'is-open' : ''}`} aria-hidden="true" />
       </button>
-      {agentMode && !searching && (
-        <div className={`agent-progress-summary status-${agentProgressStatus}`} role="status" aria-live={live ? 'polite' : 'off'} aria-atomic="true" data-testid={`agent-progress-${index}`}>
-          <span className="agent-progress-mark" aria-hidden="true" />
-          <span className="agent-progress-label">{agentProgressLabel}</span>
-          <small>{agentProgressState}</small>
-        </div>
-      )}
       {searching && (
         <div className="term-search" data-testid={`status-searching-${index}`}>
           <ReplyStatus mode="search" label={runningLabel ?? 'Searching the web'} />
@@ -157,22 +204,7 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
       )}
       {open && (
         <div className="term-body" id={bodyId}>
-          {agentMode ? (
-            <div className="agent-activity-list" role="list" data-testid={`agent-activity-${index}`}>
-              {(message.activity ?? []).length ? message.activity!.map((activity) => (
-                <div className={`agent-activity-item status-${activity.status ?? 'complete'}`} role="listitem" key={activity.id}>
-                  <span className="agent-activity-dot" aria-hidden="true" />
-                  <span>{activity.label}</span>
-                  <small>{activity.status === 'running' ? 'In progress' : activity.status === 'error' ? 'Unavailable' : 'Done'}</small>
-                </div>
-              )) : (
-                <p className="term-note">{live ? 'Agent is deciding whether a tool is needed…' : 'No tools were needed for this response.'}</p>
-              )}
-              {message.agentTask && <p className="term-note">Task: {message.agentTask.replaceAll('_', ' ')}</p>}
-              {message.model && <p className="term-note" data-testid={`agent-model-${index}`}>Active model: {message.model}</p>}
-              <p className="term-note">Private model reasoning is not shown; this panel lists tool activity and outcomes.</p>
-            </div>
-          ) : reasoning ? (
+          {reasoning ? (
             <div className="reason-flow" data-testid={`reasoning-${index}`}>
               {sections.map((sec, i) => (
                 <p key={i} className="reason-sec"><span className="reason-idx" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span><span className="reason-txt">{sec}</span></p>
@@ -180,32 +212,6 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
             </div>
           ) : (
             <p className="term-note">{live ? 'Waiting for model reasoning…' : 'No reasoning trace was returned for this response.'}</p>
-          )}
-          {hasSources && (
-            <section className="activity-source-section" aria-label="Sources used">
-              <h3 className="activity-head">Sources</h3>
-              <ul className="activity-sources">
-                {message.sources!.map((source) => {
-                  const retrievalLabel = source.retrieval === 'page'
-                    ? 'Page read'
-                    : source.retrieval === 'search_excerpt'
-                      ? 'Search excerpt'
-                      : 'Retrieval level unavailable';
-                  const retrievedAt = formatRetrievedAt(source.retrievedAt);
-                  return (
-                    <li key={source.url}>
-                      <a href={source.url} target="_blank" rel="noopener noreferrer">
-                        <span className="source-title">{source.title}</span>
-                        <span className="source-meta">
-                          <small className={`source-retrieval${source.retrieval ? ` is-${source.retrieval.replace('_', '-')}` : ' is-unknown'}`}>{retrievalLabel}</small>
-                          {retrievedAt && <small className="source-retrieved-at" data-testid={`source-retrieved-at-${encodeURIComponent(source.url)}`}>Retrieved {retrievedAt}</small>}
-                        </span>
-                      </a>
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
           )}
         </div>
       )}

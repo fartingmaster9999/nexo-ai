@@ -39,6 +39,17 @@
 .reply-status[data-mode="deep"] .rs-node.n3 { left: 50%; top: 70%; animation-delay: -1.2s; }
 @keyframes rsTmNode { 0%,100% { opacity: .15; transform: translateZ(10px) scale(.6); } 30% { opacity: .95; transform: translateZ(10px) scale(1); } 60% { opacity: .15; transform: translateZ(10px) scale(.6); } }
 
+/* Agent: a small dimensional core with two fluid, counter-rotating work orbits. */
+.reply-status[data-mode="agent"] .rs-agent-ring { position: absolute; inset: 4px 7px; border: 1px solid hsl(var(--primary) / .68); border-radius: 50%; transform-style: preserve-3d; }
+.reply-status[data-mode="agent"] .rs-agent-ring.ring-a { animation: rsTmAgentA 4.4s cubic-bezier(.45,0,.55,1) infinite; }
+.reply-status[data-mode="agent"] .rs-agent-ring.ring-b { inset: 7px 4px; border-color: hsl(var(--primary) / .42); animation: rsTmAgentB 4.4s cubic-bezier(.45,0,.55,1) infinite; }
+@keyframes rsTmAgentA { 0%,100% { transform: translateZ(3px) rotateY(0) rotateZ(0); opacity: .5; } 50% { transform: translateZ(3px) rotateY(62deg) rotateZ(180deg); opacity: 1; } }
+@keyframes rsTmAgentB { 0%,100% { transform: translateZ(-3px) rotateX(0) rotateZ(0); opacity: .35; } 50% { transform: translateZ(-3px) rotateX(62deg) rotateZ(-180deg); opacity: .82; } }
+.reply-status[data-mode="agent"] .rs-agent-core { position: absolute; inset: 0; display: grid; place-items: center; transform: translateZ(9px); animation: rsTmAgentCore 2.8s ease-in-out infinite; }
+.reply-status[data-mode="agent"] .rs-agent-core svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.reply-status[data-mode="agent"].is-compact .rs-agent-core svg { width: 12px; height: 12px; }
+@keyframes rsTmAgentCore { 0%,100% { transform: translateZ(8px) scale(.94); opacity: .78; } 50% { transform: translateZ(12px) scale(1.04); opacity: 1; } }
+
 /* search: globe with magnifier clearly orbiting at a compact radius */
 .reply-status[data-mode="search"] .rs-globe { inset: 6px; }
 .reply-status[data-mode="search"] .g-mer { animation: rsTmMer 4.8s var(--rs-ease) infinite; }
@@ -65,7 +76,7 @@
 @media (prefers-reduced-motion: reduce) {
   .reply-status[data-mode], .reply-status[data-mode] .rs-label, .reply-status[data-mode] .rs-stage, .reply-status[data-mode] .rs-halo,
   .reply-status[data-mode] .rs-plane, .reply-status[data-mode] .rs-core, .reply-status[data-mode] .rs-brain-icon, .reply-status[data-mode] .rs-layer,
-  .reply-status[data-mode] .rs-spark, .reply-status[data-mode] .rs-node, .reply-status[data-mode] .g-mer, .reply-status[data-mode] .rs-orbit,
+  .reply-status[data-mode] .rs-spark, .reply-status[data-mode] .rs-node, .reply-status[data-mode] .rs-agent-ring, .reply-status[data-mode] .rs-agent-core, .reply-status[data-mode] .g-mer, .reply-status[data-mode] .rs-orbit,
   .reply-status[data-mode] .rs-glass, .term.is-live .term-ellipsis::after,
   .agent-activity-list .agent-activity-item .agent-activity-dot, .agent-activity-list .agent-activity-item .agent-activity-dot::after { animation: none !important; transition: none !important; }
   .reply-status[data-mode] .rs-label { opacity: 1; }
@@ -75,6 +86,8 @@
   .reply-status[data-mode="normal"] .rs-plane.p2 { transform: rotate(45deg) scale(.78); }
   .reply-status[data-mode="normal"] .rs-plane.p3 { transform: scale(1.08); opacity: .28; }
   .reply-status[data-mode="normal"] .rs-core, .reply-status[data-mode="deep"] .rs-brain-icon { transform: none; opacity: 1; }
+  .reply-status[data-mode="agent"] .rs-agent-ring { transform: none; opacity: .65; }
+  .reply-status[data-mode="agent"] .rs-agent-core { transform: none; opacity: 1; }
   .reply-status[data-mode="deep"] .rs-layer.l1 { transform: none; opacity: .5; }
   .reply-status[data-mode="deep"] .rs-spark { transform: rotate(45deg); }
   .reply-status[data-mode="deep"] .rs-node { opacity: .6; transform: none; }

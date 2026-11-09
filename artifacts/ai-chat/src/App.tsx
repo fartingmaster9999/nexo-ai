@@ -75,6 +75,17 @@ function titleFromPrompt(prompt: string) {
   return title.length > 42 ? `${title.slice(0, 39).trimEnd()}…` : title;
 }
 
+function getDeepthinkSuggestion(prompt: string) {
+  const text = prompt.trim();
+  if (!text) return null;
+  const actions = text.match(/\b(?:build|create|implement|integrate|debug|test|review|refactor|compare|connect|add|update|design|deploy)\b/gi)?.length ?? 0;
+  const connectedRequirements = /\b(?:and|then|also|plus|while|including)\b/i.test(text);
+  if ((actions >= 2 && connectedRequirements) || actions >= 3 || text.length >= 260) {
+    return 'This request has several connected steps. Deepthink may help Agent plan the changes before editing.';
+  }
+  return null;
+}
+
 function Home() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [homeHistoryOpen, setHomeHistoryOpen] = useState(false);
@@ -102,6 +113,7 @@ function Home() {
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   const [agentMode, setAgentMode] = useState<boolean>(() => { try { return window.localStorage.getItem(AGENT_KEY) === '1'; } catch { return false; } });
+  const [deepthinkSuggestionDismissed, setDeepthinkSuggestionDismissed] = useState(false);
   useEffect(() => {
     const syncModePreferences = (event: StorageEvent) => {
       try {
@@ -124,6 +136,7 @@ function Home() {
   const toggleAgentMode = () => {
     const next = !agentMode;
     setAgentMode(next);
+    setDeepthinkSuggestionDismissed(false);
     try { window.localStorage.setItem(AGENT_KEY, next ? '1' : '0'); } catch { /* ignore */ }
   };
   const [agentCodeTask, setAgentCodeTask] = useState<AgentWorkspaceTask | null>(null);
@@ -318,6 +331,7 @@ function Home() {
     setStreaming(false);
     setError('');
     setDraft('');
+    setDeepthinkSuggestionDismissed(false);
     setPendingImage(null);
     setAgentCodeTask(null);
     const conversation: Conversation = {
@@ -488,6 +502,7 @@ function Home() {
       return [updated, ...items.filter((item) => item.id !== conversationId)];
     });
     setDraft('');
+    setDeepthinkSuggestionDismissed(false);
     setError('');
     setRecovery({ checkpoint: null, error: '' });
     setAgentCodeTask(null);
@@ -1329,7 +1344,7 @@ function Home() {
                     <article className={`message-row ${message.role}`} key={`${activeConversation?.id}-${index}`} data-testid={`message-${message.role}-${index}`}>
                       <div className="message-content">
                         {message.role === 'assistant' && <NoticeBanner notices={message.notices} index={index} />}
-                        {message.role === 'assistant' && <ThinkingPanel message={message} live={isLive} index={index} />}
+                        {message.role === 'assistant' && <ThinkingPanel message={message} live={isLive} index={index} onOpenWorkspace={reopenWorkspace} />}
                         <div className={`message-text ${message.role === 'assistant' ? 'markdown' : ''}`} data-testid={`message-content-${index}`}>
                           {isPending ? <LiveReplyIndicator message={{ ...message, deepthink: replyDeepthink }} live={isLive} /> : message.role === 'assistant' ? (
                             <MessageMarkdown content={displayContent} live={isLive} conversationId={activeConversation!.id}
@@ -1377,6 +1392,15 @@ function Home() {
             </div>
           )}
 
+          {!streaming && agentMode && !deepthink && !deepthinkSuggestionDismissed && getDeepthinkSuggestion(draft) && (
+            <div className="deepthink-recommendation" data-testid="deepthink-recommendation">
+              <span>{getDeepthinkSuggestion(draft)}</span>
+              <div className="deepthink-recommendation-actions">
+                <button type="button" onClick={() => { toggleDeepthink(); setDeepthinkSuggestionDismissed(true); }} data-testid="button-enable-suggested-deepthink">Use Deepthink</button>
+                <button type="button" className="deepthink-dismiss" onClick={() => setDeepthinkSuggestionDismissed(true)}>Not now</button>
+              </div>
+            </div>
+          )}
           <div>
             <form className={`composer-wrap ${deepthink ? 'is-deep' : ''}`} onSubmit={(event) => void sendMessage(event)} aria-label="Send a message">
               <div className="composer">

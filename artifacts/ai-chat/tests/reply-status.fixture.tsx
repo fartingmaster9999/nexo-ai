@@ -12,6 +12,8 @@ const cases: Array<{ mode: ReplyMode; compact: boolean }> = [
   { mode: 'normal', compact: true },
   { mode: 'deep', compact: false },
   { mode: 'deep', compact: true },
+  { mode: 'agent', compact: false },
+  { mode: 'agent', compact: true },
   { mode: 'search', compact: false },
   { mode: 'search', compact: true },
 ];
@@ -39,11 +41,12 @@ function LiveTransitionFixture() {
               ? [{ id: 'web-search', label: 'Searching the web for sources', kind: 'search' as const, status: 'complete' as const }]
               : []),
         ];
+  const isAgentStage = stage.startsWith('agent-');
   const message: ChatMessage = {
     role: 'assistant',
     content: hasContent ? 'This streamed reply stays mounted while its status changes.' : '',
-    deepthink: stage !== 'normal',
-    agentMode: true,
+    deepthink: ['deep', 'search', 'search-complete'].includes(stage),
+    agentMode: isAgentStage,
     activity,
   };
 
@@ -112,7 +115,7 @@ Object.assign(window, {
   __runReplyStatusTransitions() {
     const errors: string[] = [];
     const transition = document.querySelector<HTMLElement>('[data-testid="transition-case"]')!;
-    const readStatuses = () => [...transition.querySelectorAll<HTMLElement>('.reply-status')];
+    const readStatuses = () => [...transition.querySelectorAll<HTMLElement>('.reply-status')].filter((status) => status.getAttribute('role') === 'status');
     const verifyStatus = (mode: ReplyMode | null, label?: string, compact?: boolean) => {
       const statuses = readStatuses();
       if (statuses.length !== (mode ? 1 : 0)) {
@@ -147,15 +150,10 @@ Object.assign(window, {
       }
     };
 
-    const toggle = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
-    if (!toggle) errors.push('transition: Agent activity toggle is missing');
-    verifyAgentSummary('Agent is checking sources', 'In progress');
-    if (transition.querySelector('.term-body')) errors.push('transition: detailed activity should stay collapsed by default');
-    else if (toggle) flushSync(() => toggle.click());
-    const button = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
-    if (button?.getAttribute('aria-label') !== 'Hide Agent activity') errors.push(`transition: Agent activity accessible label is incorrect (${button?.getAttribute('aria-label') ?? 'missing'})`);
     verifyStatus('normal', 'Working on it', false);
-    verifyAgentRunning();
+    const thinkingToggle = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
+    if (!thinkingToggle) errors.push('transition: non-Agent thinking disclosure is missing');
+    else if (thinkingToggle.getAttribute('aria-label') !== 'Show model reasoning') errors.push('transition: non-Agent thinking disclosure has an incorrect accessible label');
 
     setStage('deep');
     verifyStatus('deep', 'Deepthink is working', true);
@@ -175,23 +173,18 @@ Object.assign(window, {
 
     setStage('complete');
     verifyStatus(null);
-    verifyAgentSummary('Agent is checking sources', 'Done');
     if (transition.querySelector('.term-ellipsis')) errors.push('complete: live header ellipsis remained after completion');
     if (transition.querySelector('.term.is-live')) errors.push('complete: activity panel remained marked live');
     if (transition.querySelector('.message-text p') !== streamedParagraph) errors.push('complete: streamed reply content was remounted');
-    const activityButton = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
-    if (activityButton?.getAttribute('aria-label') !== 'Hide Agent activity') errors.push('complete: Agent activity accessible label changed incorrectly');
-    for (const dot of transition.querySelectorAll<HTMLElement>('.agent-activity-dot')) {
-      if (getComputedStyle(dot).animationName !== 'none' || getComputedStyle(dot, '::after').animationName !== 'none') {
-        errors.push('complete: finished Agent marker is still animated');
-      }
-    }
-    flushSync(() => activityButton?.click());
     setStage('agent-code');
     verifyAgentSummary('Running Python code in the isolated browser', 'In progress');
-    if (transition.querySelector('.term-body')) errors.push('agent-code: the current action is hidden when the activity panel is collapsed');
+    verifyStatus('agent', 'Agent is working', true);
+    if (transition.querySelector('[data-testid="toggle-progress-999"]')) errors.push('agent-code: Agent activity should not require a disclosure toggle');
+    if (!transition.querySelector('[data-testid="agent-activity-999"]')) errors.push('agent-code: action history is not visible');
+    verifyAgentRunning();
     setStage('agent-complete');
     verifyAgentSummary('Code finished in the isolated browser', 'Done');
+    verifyStatus(null);
     setStage('agent-error');
     verifyAgentSummary('Web search was unavailable', 'Needs attention');
     return { errors };
@@ -222,7 +215,9 @@ Object.assign(window, {
           ? 'Searching the web'
           : mode === 'deep'
             ? 'Deepthink is working'
-            : 'Working on it';
+            : mode === 'agent'
+              ? 'Agent is working'
+              : 'Working on it';
 
       if (status.getAttribute('role') !== 'status') errors.push(`${fixtureCase.dataset.case}: missing status role`);
       if (status.getAttribute('aria-label') !== expectedName) errors.push(`${fixtureCase.dataset.case}: incorrect accessible name`);
@@ -263,7 +258,7 @@ Object.assign(window, {
       }
     });
 
-    const loopNames = new Set(['rsTmDepth', 'rsTmP1', 'rsTmP2', 'rsTmP3', 'rsTmBrain', 'rsTmSpin', 'rsTmNode', 'rsTmOrbit', 'rsTmCounter', 'rsTmMer']);
+    const loopNames = new Set(['rsTmDepth', 'rsTmP1', 'rsTmP2', 'rsTmP3', 'rsTmBrain', 'rsTmSpin', 'rsTmNode', 'rsTmAgentA', 'rsTmAgentB', 'rsTmAgentCore', 'rsTmOrbit', 'rsTmCounter', 'rsTmMer']);
     const loopSamples: Array<{ name: string; animation: string; delta: number }> = [];
     for (const item of geometries) {
       const animations = item.figure.getAnimations({ subtree: true }) as CSSAnimation[];
@@ -289,6 +284,7 @@ Object.assign(window, {
     for (const [mode, required] of [
       ['normal', ['rsTmDepth', 'rsTmP1', 'rsTmP2', 'rsTmP3']],
       ['deep', ['rsTmBrain', 'rsTmSpin', 'rsTmNode']],
+      ['agent', ['rsTmAgentA', 'rsTmAgentB', 'rsTmAgentCore']],
       ['search', ['rsTmOrbit', 'rsTmCounter', 'rsTmMer']],
     ] as const) {
       for (const animation of required) {
@@ -336,7 +332,7 @@ Object.assign(window, {
   __verifyMotionRestored() {
     const errors: string[] = [];
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) errors.push('reduced-motion preference was not cleared');
-    const expected = ['rsTmDepth', 'rsTmOrbit', 'rsTmCounter', 'rsTmSpin', 'rsTmP2', 'rsTmBrain', 'rsTmNode', 'rsTmDot'];
+    const expected = ['rsTmDepth', 'rsTmOrbit', 'rsTmCounter', 'rsTmSpin', 'rsTmP2', 'rsTmBrain', 'rsTmNode', 'rsTmAgentA', 'rsTmAgentB', 'rsTmAgentCore', 'rsTmDot'];
     for (const animationName of expected) {
       if (!document.getAnimations().some((animation) => (animation as CSSAnimation).animationName === animationName)) {
         errors.push(`${animationName} did not resume after reduced motion was disabled`);

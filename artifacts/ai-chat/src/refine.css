@@ -99,21 +99,40 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 .term-head:hover { color: hsl(var(--foreground)); background: hsl(var(--foreground) / .025); }
 .term-head:focus-visible { outline-offset: -2px; }
 .term-body { border-top-style: solid; border-top-color: var(--hair); }
+.agent-progress-panel { padding: 0 0 8px; }
+.agent-progress-heading { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 7px 12px 4px; color: hsl(var(--foreground) / .62); font: 500 10px/1.3 var(--app-font-mono); letter-spacing: .06em; text-transform: uppercase; }
+.agent-progress-heading .term-prompt { color: hsl(var(--primary) / .75); }
+.agent-progress-summary { display: flex; align-items: center; gap: 9px; min-height: 32px; margin: 0 12px 8px; padding: 6px 10px; border: 1px solid hsl(var(--border) / .6); border-radius: 8px; color: hsl(var(--foreground) / .76); background: hsl(var(--muted) / .24); font-size: 11px; line-height: 1.35; }
+.agent-progress-summary .reply-status { flex: 0 0 22px; margin: 0; }
+.agent-progress-summary.status-error .reply-status { color: hsl(var(--destructive)); }
+.agent-progress-label { min-width: 0; display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.agent-progress-summary small { flex: 0 0 auto; margin-left: auto; color: hsl(var(--foreground) / .48); font-size: 10px; white-space: nowrap; }
+.agent-progress-summary.status-running small { color: hsl(var(--primary) / .9); }
+.agent-progress-summary.status-error small { color: hsl(var(--destructive)); }
 .agent-activity-list { display: grid; gap: 8px; padding: 12px 14px; }
-.agent-activity-item { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 9px; color: hsl(var(--foreground) / .72); font-size: 12px; line-height: 1.45; }
+.agent-activity-item { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: start; gap: 9px; color: hsl(var(--foreground) / .72); font-size: 12px; line-height: 1.45; }
 .agent-activity-dot { width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--primary)); }
 .agent-activity-item.status-running .agent-activity-dot { animation: agentPulse 1.1s ease-in-out infinite; }
 .agent-activity-item.status-error .agent-activity-dot { background: hsl(var(--destructive)); }
 .agent-activity-item small { color: hsl(var(--foreground) / .4); font-size: 10px; white-space: nowrap; }
+.agent-activity-item.status-running small { color: hsl(var(--primary) / .85); }
+.agent-activity-item.status-error small { color: hsl(var(--destructive)); }
 .agent-activity-list .term-note { margin: 4px 0 0; color: hsl(var(--foreground) / .42); font-size: 11px; }
-.agent-progress-summary { display: flex; align-items: center; gap: 9px; min-height: 32px; margin: 0 12px 8px; padding: 6px 10px; border: 1px solid hsl(var(--border) / .6); border-radius: 8px; color: hsl(var(--foreground) / .76); background: hsl(var(--muted) / .24); font-size: 11px; line-height: 1.35; }
-.agent-progress-mark { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: hsl(var(--primary)); }
-.agent-progress-summary.status-complete .agent-progress-mark { background: hsl(var(--primary) / .55); }
-.agent-progress-summary.status-error .agent-progress-mark { background: hsl(var(--destructive)); }
-.agent-progress-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-progress-summary small { flex: 0 0 auto; margin-left: auto; color: hsl(var(--foreground) / .48); font-size: 10px; white-space: nowrap; }
-.agent-progress-summary.status-running small { color: hsl(var(--primary) / .9); }
-.agent-progress-summary.status-error small { color: hsl(var(--destructive)); }
+.agent-meta-tag { width: fit-content; max-width: 100%; color: hsl(var(--foreground) / .45); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.agent-open-workspace { display: inline-flex; justify-self: start; align-items: center; gap: 7px; min-height: 30px; padding: 0 9px; border: 1px solid hsl(var(--primary) / .28); border-radius: 7px; color: hsl(var(--primary)); background: hsl(var(--primary) / .06); font-size: 11px; cursor: pointer; transition: background .16s ease, border-color .16s ease; }
+.agent-open-workspace:hover { border-color: hsl(var(--primary) / .52); background: hsl(var(--primary) / .11); }
+.agent-open-workspace:focus-visible, .deepthink-recommendation button:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
+.deepthink-recommendation { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 10px; padding: 10px 12px; border: 1px solid hsl(var(--primary) / .22); border-radius: 10px; color: hsl(var(--foreground) / .76); background: hsl(var(--primary) / .045); font-size: 11.5px; line-height: 1.45; }
+.deepthink-recommendation-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.deepthink-recommendation button { min-height: 28px; padding: 0 9px; border: 1px solid hsl(var(--primary) / .35); border-radius: 7px; color: hsl(var(--primary)); background: hsl(var(--primary) / .08); font-size: 10.5px; cursor: pointer; }
+.deepthink-recommendation button:hover { background: hsl(var(--primary) / .14); }
+.deepthink-recommendation .deepthink-dismiss { border-color: transparent; color: hsl(var(--foreground) / .52); background: transparent; }
+@media (max-width: 640px) {
+  .deepthink-recommendation { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .deepthink-recommendation-actions { width: 100%; }
+  .agent-progress-summary { margin-inline: 8px; padding-inline: 8px; }
+  .agent-activity-list { padding-inline: 10px; }
+}
 @keyframes agentPulse { 50% { opacity: .35; transform: scale(.72); } }
 .notice-banner { border-radius: 10px; }
 .request-error { margin: 0 0 12px; border-radius: 10px; }
