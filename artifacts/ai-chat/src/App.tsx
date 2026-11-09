@@ -106,16 +106,11 @@ function Home() {
     const syncModePreferences = (event: StorageEvent) => {
       try {
         if (event.storageArea !== window.localStorage) return;
+        if (event.key !== null && event.key !== DEEPTHINK_KEY && event.key !== AGENT_KEY) return;
+        setDeepthink(window.localStorage.getItem(DEEPTHINK_KEY) === '1');
+        setAgentMode(window.localStorage.getItem(AGENT_KEY) === '1');
       } catch {
         return;
-      }
-      if (event.key === null) {
-        setDeepthink(false);
-        setAgentMode(false);
-      } else if (event.key === DEEPTHINK_KEY) {
-        setDeepthink(event.newValue === '1');
-      } else if (event.key === AGENT_KEY) {
-        setAgentMode(event.newValue === '1');
       }
     };
     window.addEventListener('storage', syncModePreferences);
