@@ -1446,9 +1446,9 @@ function Home() {
                     type="button"
                     aria-pressed={deepthink}
                     aria-label="Deepthink"
-                    aria-description={`${deepthink ? 'Deepthink is selected for deeper reasoning.' : 'Deepthink is off. Select it for deeper reasoning.'}${streaming ? ' Changes apply to your next message; this reply keeps its original mode.' : ''}`}
+                    aria-description={`${deepthink ? 'On. Uses deeper reasoning for your next message.' : 'Off. Select for deeper reasoning on your next message.'}${streaming ? ' Changes apply to your next message; this reply keeps its original mode.' : ''}`}
                     className={`mode-toggle deep-toggle ${deepthink ? 'is-on' : ''}`}
-                    title={`${deepthink ? 'Deepthink is selected for deeper reasoning.' : 'Deepthink is off. Select it for deeper reasoning.'}${streaming ? ' Changes apply to your next message; this reply keeps its original mode.' : ''}`}
+                    title={`${deepthink ? 'On. Uses deeper reasoning for your next message.' : 'Off. Select for deeper reasoning on your next message.'}${streaming ? ' Changes apply to your next message; this reply keeps its original mode.' : ''}`}
                     onClick={toggleDeepthink}
                     data-testid="toggle-deepthink"
                   >
@@ -1458,9 +1458,9 @@ function Home() {
                     type="button"
                     aria-pressed={agentMode}
                     aria-label="Agent"
-                    aria-description={`${agentMode ? 'Agent is selected for model-routed research and sandboxed build-and-test tasks.' : 'Agent is off. Select it for model-routed research and sandboxed build-and-test tasks.'}${streaming ? ' Changes apply to your next message; this reply keeps its original route.' : ''}`}
+                    aria-description={`${agentMode ? 'On. Routes your next message to Agent for research and build-and-test tasks.' : 'Off. Select to route your next message to Agent for research and build-and-test tasks.'}${streaming ? ' Changes apply to your next message; this reply keeps its original route.' : ''}`}
                     className={`mode-toggle agent-toggle ${agentMode ? 'is-on' : ''}`}
-                    title={`${agentMode ? 'Agent is selected for model-routed research and sandboxed build-and-test tasks.' : 'Agent is off. Select it for model-routed research and sandboxed build-and-test tasks.'}${streaming ? ' Changes apply to your next message; this reply keeps its original route.' : ''}`}
+                    title={`${agentMode ? 'On. Routes your next message to Agent for research and build-and-test tasks.' : 'Off. Select to route your next message to Agent for research and build-and-test tasks.'}${streaming ? ' Changes apply to your next message; this reply keeps its original route.' : ''}`}
                     onClick={toggleAgentMode}
                     data-testid="toggle-agent"
                   >

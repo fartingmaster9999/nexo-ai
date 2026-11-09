@@ -6,6 +6,61 @@ const themes = ['midnight', 'graphite', 'abyss', 'paper', 'dune'];
 await withFixture('tests/theme.html', async ({ cdp, evaluate, navigate }) => {
   await waitFor(() => evaluate(`!!document.querySelector('[data-testid="dialog-settings"]') && !!document.querySelector('.cm-content')`), 'theme fixture and code editor');
 
+  const readModeAccessibility = async (name) => {
+    const { nodes } = await cdp('Accessibility.getFullAXTree');
+    const node = nodes.find((entry) => entry.role?.value === 'button' && entry.name?.value === name);
+    assert.ok(node, `Accessibility tree contains the ${name} button`);
+    const property = (name) => node.properties?.find((entry) => entry.name === name)?.value?.value ?? null;
+    return {
+      role: node.role?.value,
+      name: node.name?.value,
+      description: node.description?.value,
+      pressed: property('pressed') === 'true',
+    };
+  };
+  const assertModeAccessibility = async (name, pressed, descriptionPattern) => {
+    const state = await readModeAccessibility(name);
+    assert.deepEqual(
+      { role: state.role, name: state.name, pressed: state.pressed },
+      { role: 'button', name, pressed },
+      `${name} is exposed as a named toggle with the correct pressed state`,
+    );
+    assert.match(state.description ?? '', descriptionPattern, `${name} description explains its state and effect`);
+  };
+
+  await evaluate(`document.querySelector('[data-testid="button-close-settings"]').click()`);
+  await evaluate(`document.querySelector('[data-testid="button-close-workspace"]').click()`);
+  await waitFor(() => evaluate(`!document.querySelector('[data-testid="dialog-settings"]') && !document.querySelector('.workspace')`), 'close modal layers before mode accessibility checks');
+
+  await assertModeAccessibility('Deepthink', false, /Off.*deeper reasoning.*next message/);
+  await assertModeAccessibility('Agent', false, /Off.*(?:Agent.*next message|next message.*Agent).*research.*build-and-test/);
+  await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed') === 'true'`), 'Deepthink selected for accessibility check');
+  await assertModeAccessibility('Deepthink', true, /On.*deeper reasoning.*next message/);
+  await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed') === 'true'`), 'Agent selected for accessibility check');
+  await assertModeAccessibility('Agent', true, /On.*(?:Agent.*next message|next message.*Agent).*research.*build-and-test/);
+  await evaluate(`document.querySelector('[data-testid="simulate-streaming"]').click()`);
+  const streamingDescriptions = await Promise.all([
+    readModeAccessibility('Deepthink'),
+    readModeAccessibility('Agent'),
+  ]);
+  assert.match(streamingDescriptions[0].description ?? '', /Changes apply to your next message; this reply keeps its original mode/,
+    'Deepthink description preserves the next-message boundary during a reply');
+  assert.match(streamingDescriptions[1].description ?? '', /Changes apply to your next message; this reply keeps its original route/,
+    'Agent description preserves the next-message boundary during a reply');
+  await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed') === 'false'`), 'Deepthink unselected for accessibility check');
+  await assertModeAccessibility('Deepthink', false, /Off.*deeper reasoning.*next message.*Changes apply to your next message/);
+  await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed') === 'false'`), 'Agent unselected for accessibility check');
+  await assertModeAccessibility('Agent', false, /Off.*next message.*Agent.*research.*build-and-test.*Changes apply to your next message/);
+  await evaluate(`document.querySelector('[data-testid="simulate-streaming"]').click()`);
+  console.log('Mode accessibility checks passed: named pressed states and descriptions update after toggles, including during a reply.');
+  await evaluate(`document.querySelector('.top-btn').click()`);
+  await evaluate(`document.querySelector('[data-testid="reopen-workspace-fixture"]').click()`);
+  await waitFor(() => evaluate(`!!document.querySelector('[data-testid="dialog-settings"]') && !!document.querySelector('.cm-content')`), 'reopen modal layers after mode accessibility checks');
+
   const readContrast = (selector, foregroundProperty, backgroundSelector, pseudo = '') => evaluate(`(() => {
     const parse = (text) => {
       const channels = text.match(/[\\d.]+/g)?.map(Number) ?? [];

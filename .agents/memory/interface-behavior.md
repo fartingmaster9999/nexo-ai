@@ -33,6 +33,12 @@ Deepthink and Agent may be changed while a reply is streaming, but each selectio
 
 **How to apply:** Keep both toggles usable during streaming, preserve their active visual state and pressed-state accessibility, explain mode selection and next-message behavior in their descriptions/tooltips, and never relabel an in-progress reply based on a later preference change.
 
+**Verification:** Browser accessibility tests should inspect the computed accessibility tree for each toggle’s name, pressed state, and description before and after activation, including during a reply. DOM attributes alone do not prove a control is exposed to assistive technology; automated browser checks still do not replace testing with actual screen readers.
+
+**Why:** Modal layers can remove background controls from the accessibility tree, while correct-looking markup can still yield missing or stale computed semantics.
+
+**How to apply:** Close obstructing modal layers before checking controls, then test their exposed role/name/state/description across transitions. Document when operating-system screen readers were not available.
+
 Sync mode preferences across tabs by applying storage events to UI state without writing those received values back to storage. Persist only user-initiated toggle changes.
 
 **Why:** When both tabs persisted every state update, delayed effects could overwrite newer values and make the preferences ping-pong between tabs.
