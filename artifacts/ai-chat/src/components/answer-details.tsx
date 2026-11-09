@@ -127,7 +127,12 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
   const hasActivity = (message.activity ?? []).length > 0;
   const hasSources = (message.sources ?? []).length > 0;
   if (!live && !reasoning && !hasActivity && !hasSources) return null;
-  const runningLabel = searching ? [...(message.activity ?? [])].reverse().find((a) => a.kind === 'search' && a.status === 'running')?.label : undefined;
+  const activities = message.activity ?? [];
+  const runningLabel = searching ? [...activities].reverse().find((a) => a.kind === 'search' && a.status === 'running')?.label : undefined;
+  const currentActivity = [...activities].reverse().find((activity) => activity.status === 'running') ?? activities.at(-1);
+  const agentProgressStatus = currentActivity?.status ?? (live ? 'running' : 'complete');
+  const agentProgressLabel = currentActivity?.label ?? 'Working on your request';
+  const agentProgressState = agentProgressStatus === 'running' ? 'In progress' : agentProgressStatus === 'error' ? 'Needs attention' : 'Done';
   const bodyId = `progress-body-${index}`;
   const sections = open && !agentMode ? splitReasoning(reasoning) : [];
   return (
@@ -137,6 +142,13 @@ export const ThinkingPanel = memo(function ThinkingPanel({ message, live, index 
         <span className="term-title">{agentMode ? (live ? 'Agent is working' : 'Agent activity') : !live && hasSources && !reasoning && !hasActivity ? 'Sources' : message.deepthink ? (live ? 'Deepthinking' : 'Deepthink reasoning') : (live ? 'Thinking' : 'Thought process')}{live && <span className="term-ellipsis" aria-hidden="true" />}</span>
         <ChevronDown size={13} className={`term-chev ${open ? 'is-open' : ''}`} aria-hidden="true" />
       </button>
+      {agentMode && !searching && (
+        <div className={`agent-progress-summary status-${agentProgressStatus}`} role="status" aria-live={live ? 'polite' : 'off'} aria-atomic="true" data-testid={`agent-progress-${index}`}>
+          <span className="agent-progress-mark" aria-hidden="true" />
+          <span className="agent-progress-label">{agentProgressLabel}</span>
+          <small>{agentProgressState}</small>
+        </div>
+      )}
       {searching && (
         <div className="term-search" data-testid={`status-searching-${index}`}>
           <ReplyStatus mode="search" label={runningLabel ?? 'Searching the web'} />

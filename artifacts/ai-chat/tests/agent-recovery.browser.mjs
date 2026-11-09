@@ -62,6 +62,10 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   assert.equal(waiting.retries, 1);
   await cdp('Page.reload');
   await openSaved(waiting.conversationId);
+  const recoveryText = await evaluate(`document.querySelector('[data-testid="agent-recovery"]')?.textContent || ''`);
+  assert.match(recoveryText, /saved files and completed steps are safe/i);
+  assert.match(recoveryText, /completed steps will not be repeated/i);
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-testid="button-resume-agent"]'))`), true, 'a resumable checkpoint must offer an explicit resume action');
   await delay(400);
   assert.equal((await requests()).length, 1, 'reload and selection must not request inference');
   assert.equal(await evaluate(`document.querySelectorAll('iframe').length`), 0, 'reload must not execute a preview');
@@ -76,7 +80,7 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   await waitFor(() => evaluate(`!(${findCheckpoint})`), 'completed checkpoint cleanup');
 
   // Start a separate request, complete the real browser runner, reload during its optional review.
-  await evaluate(`document.querySelector('[data-testid="button-close-workspace"]').click()`);
+  await evaluate(`document.querySelector('[data-testid="button-close-workspace"]')?.click()`);
   await evaluate(`localStorage.setItem('test-scenario', 'tool')`);
   await send('Run a tool then recover it');
   await waitFor(() => evaluate(`(${findCheckpoint})?.history?.at(-1)?.result.includes('stdout: completed-before-reload')`), 'completed tool result saved before review', 25000);
@@ -94,7 +98,7 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   await waitFor(() => evaluate(`!(${findCheckpoint})`), 'tool build completion');
 
   // Corrupt and future-version records never expose a resume action or change history.
-  await evaluate(`document.querySelector('[data-testid="button-close-workspace"]').click()`);
+  await evaluate(`document.querySelector('[data-testid="button-close-workspace"]')?.click()`);
   for (const raw of ['{bad', '{"version":999}']) {
     await evaluate(`localStorage.setItem('nexo-agent-continuation:' + encodeURIComponent(${JSON.stringify(completed.conversationId)}), ${JSON.stringify(raw)})`);
     await cdp('Page.reload');
@@ -130,12 +134,20 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
     p.selectedPaths = [];
     localStorage.setItem(key, JSON.stringify(p));
   })()`);
+  const projectKey = `nexo-project-v1:${encodeURIComponent(written.conversationId)}`;
+  const manuallyEditedBeforeReload = await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(projectKey)})).files[0].content`);
+  assert.equal(manuallyEditedBeforeReload, '<h1>Manual edit after the write</h1>', 'manual project edits must be saved before reload');
+  await delay(100);
+  assert.equal(await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(projectKey)})).files[0].content`), '<h1>Manual edit after the write</h1>', 'the active app must not overwrite a newer saved project');
   const writeCount = (await requests()).length;
   await cdp('Page.reload');
+  assert.equal(await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(projectKey)})).files[0].content`), '<h1>Manual edit after the write</h1>', 'a page reload must not revert project files');
   await openSaved(written.conversationId);
+  assert.equal(await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(projectKey)})).files[0].content`), '<h1>Manual edit after the write</h1>', 'reload must preserve manual project edits');
   assert.equal((await requests()).length, writeCount);
   await evaluate(`localStorage.setItem('test-scenario', 'finish'); document.querySelector('[data-testid="button-resume-agent"]').click()`);
   await waitFor(async () => (await requests()).length === writeCount + 1, 'write continuation');
+  assert.equal(await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(projectKey)})).files[0].content`), '<h1>Manual edit after the write</h1>', 'resume must preserve manual project edits');
   const writeContinuation = (await requests()).at(-1);
   assert.equal(writeContinuation.agentHistory.at(-1).callId, 'write-once');
   assert.equal(writeContinuation.agentHistory.at(-1).arguments.files[0].content, '', 'historical source respects deselection');

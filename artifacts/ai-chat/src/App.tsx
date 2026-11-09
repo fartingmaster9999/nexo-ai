@@ -1336,10 +1336,10 @@ function Home() {
               <div>
                 <strong>{recovery.error ? 'Agent recovery unavailable' : recovery.checkpoint?.phase === 'cancelled' ? 'Agent build stopped' : 'Interrupted Agent build'}</strong>
                 <p>{recovery.error || (recovery.checkpoint?.phase === 'cancelled'
-                  ? 'You stopped this build. Saved files are kept; it will not resume.'
+                  ? 'You stopped this build. Saved project files are still available in the workspace.'
                   : recovery.checkpoint?.phase === 'executing'
-                    ? 'The last tool may have been interrupted. Resume keeps saved files and reports the uncertain outcome without replaying that call.'
-                    : 'Completed tool results and saved files are kept. Nothing runs until you choose Resume Agent.')}</p>
+                    ? 'The last action may have stopped partway through. Resume keeps saved files and checks the uncertain result without repeating a completed action.'
+                    : 'Your saved files and completed steps are safe. Choose Resume Agent to continue; completed steps will not be repeated.')}</p>
                 {recovery.checkpoint?.imageRequired && <p>Reattach the original image before resuming. Images are not saved.</p>}
                 {recovery.checkpoint && recovery.checkpoint.phase !== 'cancelled' &&
                   <button type="button" onClick={resumeAgent} disabled={recovery.checkpoint.imageRequired && !pendingImage} data-testid="button-resume-agent">Resume Agent</button>}

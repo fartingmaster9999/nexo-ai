@@ -16,28 +16,35 @@ const cases: Array<{ mode: ReplyMode; compact: boolean }> = [
   { mode: 'search', compact: true },
 ];
 
-type TransitionStage = 'normal' | 'deep' | 'search' | 'search-complete' | 'complete';
+type TransitionStage = 'normal' | 'deep' | 'search' | 'search-complete' | 'complete' | 'agent-code' | 'agent-complete' | 'agent-error';
 let setTransitionStage: ((stage: TransitionStage) => void) | undefined;
 
 function LiveTransitionFixture() {
   const [stage, setStage] = useState<TransitionStage>('normal');
   setTransitionStage = setStage;
-  const live = stage !== 'complete';
-  const hasContent = stage === 'deep' || stage === 'search' || stage === 'search-complete' || stage === 'complete';
+  const live = !['complete', 'agent-complete', 'agent-error'].includes(stage);
+  const hasContent = stage !== 'normal';
   const searching = stage === 'search';
+  const activity: NonNullable<ChatMessage['activity']> = stage === 'agent-code'
+    ? [{ id: 'agent-code', label: 'Running Python code in the isolated browser', kind: 'code', status: 'running' }]
+    : stage === 'agent-complete'
+      ? [{ id: 'agent-code', label: 'Code finished in the isolated browser', kind: 'code', status: 'complete' }]
+      : stage === 'agent-error'
+        ? [{ id: 'agent-search', label: 'Web search was unavailable', kind: 'search', status: 'error' }]
+        : [
+          { id: 'agent-work', label: 'Agent is checking sources', kind: 'thinking', status: live ? 'running' : 'complete' },
+          ...(searching
+            ? [{ id: 'web-search', label: 'Searching the web for sources', kind: 'search' as const, status: 'running' as const }]
+            : stage === 'search-complete'
+              ? [{ id: 'web-search', label: 'Searching the web for sources', kind: 'search' as const, status: 'complete' as const }]
+              : []),
+        ];
   const message: ChatMessage = {
     role: 'assistant',
     content: hasContent ? 'This streamed reply stays mounted while its status changes.' : '',
     deepthink: stage !== 'normal',
     agentMode: true,
-    activity: [
-      { id: 'agent-work', label: 'Agent is checking sources', kind: 'thinking', status: live ? 'running' : 'complete' },
-      ...(searching
-        ? [{ id: 'web-search', label: 'Searching the web for sources', kind: 'search' as const, status: 'running' as const }]
-        : stage === 'search-complete'
-          ? [{ id: 'web-search', label: 'Searching the web for sources', kind: 'search' as const, status: 'complete' as const }]
-          : []),
-    ],
+    activity,
   };
 
   return (
@@ -126,10 +133,25 @@ Object.assign(window, {
       const dot = transition.querySelector<HTMLElement>('.status-running .agent-activity-dot');
       if (!dot || getComputedStyle(dot).animationName !== 'rsTmDot') errors.push(`${stageName()}: running Agent marker is not animated`);
     };
+    const verifyAgentSummary = (label: string, state: string) => {
+      const summary = transition.querySelector<HTMLElement>('[data-testid="agent-progress-999"]');
+      if (!summary) {
+        errors.push(`${stageName()}: visible Agent progress summary is missing`);
+        return;
+      }
+      if (summary.getAttribute('role') !== 'status' || summary.getAttribute('aria-live') !== (transition.querySelector('.term')?.classList.contains('is-live') ? 'polite' : 'off')) {
+        errors.push(`${stageName()}: progress summary does not expose an appropriate accessible status`);
+      }
+      if (!summary.textContent?.includes(label) || !summary.textContent.includes(state)) {
+        errors.push(`${stageName()}: expected progress "${label}" (${state}), found "${summary.textContent}"`);
+      }
+    };
 
     const toggle = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
     if (!toggle) errors.push('transition: Agent activity toggle is missing');
-    else flushSync(() => toggle.click());
+    verifyAgentSummary('Agent is checking sources', 'In progress');
+    if (transition.querySelector('.term-body')) errors.push('transition: detailed activity should stay collapsed by default');
+    else if (toggle) flushSync(() => toggle.click());
     const button = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
     if (button?.getAttribute('aria-label') !== 'Hide Agent activity') errors.push(`transition: Agent activity accessible label is incorrect (${button?.getAttribute('aria-label') ?? 'missing'})`);
     verifyStatus('normal', 'Working on it', false);
@@ -153,6 +175,7 @@ Object.assign(window, {
 
     setStage('complete');
     verifyStatus(null);
+    verifyAgentSummary('Agent is checking sources', 'Done');
     if (transition.querySelector('.term-ellipsis')) errors.push('complete: live header ellipsis remained after completion');
     if (transition.querySelector('.term.is-live')) errors.push('complete: activity panel remained marked live');
     if (transition.querySelector('.message-text p') !== streamedParagraph) errors.push('complete: streamed reply content was remounted');
@@ -163,6 +186,14 @@ Object.assign(window, {
         errors.push('complete: finished Agent marker is still animated');
       }
     }
+    flushSync(() => activityButton?.click());
+    setStage('agent-code');
+    verifyAgentSummary('Running Python code in the isolated browser', 'In progress');
+    if (transition.querySelector('.term-body')) errors.push('agent-code: the current action is hidden when the activity panel is collapsed');
+    setStage('agent-complete');
+    verifyAgentSummary('Code finished in the isolated browser', 'Done');
+    setStage('agent-error');
+    verifyAgentSummary('Web search was unavailable', 'Needs attention');
     return { errors };
   },
   __verifyReplyStatusFixture() {

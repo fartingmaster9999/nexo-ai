@@ -106,6 +106,14 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 .agent-activity-item.status-error .agent-activity-dot { background: hsl(var(--destructive)); }
 .agent-activity-item small { color: hsl(var(--foreground) / .4); font-size: 10px; white-space: nowrap; }
 .agent-activity-list .term-note { margin: 4px 0 0; color: hsl(var(--foreground) / .42); font-size: 11px; }
+.agent-progress-summary { display: flex; align-items: center; gap: 9px; min-height: 32px; margin: 0 12px 8px; padding: 6px 10px; border: 1px solid hsl(var(--border) / .6); border-radius: 8px; color: hsl(var(--foreground) / .76); background: hsl(var(--muted) / .24); font-size: 11px; line-height: 1.35; }
+.agent-progress-mark { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: hsl(var(--primary)); }
+.agent-progress-summary.status-complete .agent-progress-mark { background: hsl(var(--primary) / .55); }
+.agent-progress-summary.status-error .agent-progress-mark { background: hsl(var(--destructive)); }
+.agent-progress-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-progress-summary small { flex: 0 0 auto; margin-left: auto; color: hsl(var(--foreground) / .48); font-size: 10px; white-space: nowrap; }
+.agent-progress-summary.status-running small { color: hsl(var(--primary) / .9); }
+.agent-progress-summary.status-error small { color: hsl(var(--destructive)); }
 @keyframes agentPulse { 50% { opacity: .35; transform: scale(.72); } }
 .notice-banner { border-radius: 10px; }
 .request-error { margin: 0 0 12px; border-radius: 10px; }
