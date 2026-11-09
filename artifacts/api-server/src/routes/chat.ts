@@ -77,7 +77,7 @@ router.post("/chat", async (req, res): Promise<void> => {
     const ids = coding ? await availableModels(client) : [PRIMARY_MODEL, SMALL_MODEL];
     const candidates = chooseModels(ids, coding);
     controller.signal.throwIfAborted();
-    let fallbackModel: string | undefined;
+  let fallbackModel: string | undefined;
     const now = new Date();
     const request = buildChatRequest(parsed.data, now, { webContext, searchFailed, coding });
     const { model, stream } = await openModelStream(
@@ -93,6 +93,13 @@ router.post("/chat", async (req, res): Promise<void> => {
         { provider: "groq", model: limitedModel, ...quota },
         "Groq rate limit triggered model fallback",
       ),
+      (failedModel, nextModel, status) => {
+        activeModel = nextModel;
+        req.log.warn(
+          { event: "chat.model.fallback", provider: "groq", model: failedModel, fallbackModel: nextModel, status },
+          "Chat model failed; trying a compatible Groq model",
+        );
+      },
     );
     activeModel = model;
     if (fallbackModel) await emit({ notice: { id: "model-downgrade", message: DOWNGRADE_MESSAGE, model: fallbackModel } });

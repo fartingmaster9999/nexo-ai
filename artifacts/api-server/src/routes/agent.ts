@@ -10,7 +10,7 @@ import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry"
 import {
   agentGenerationModelIds, agentSecurityModelIds, availableModelCatalog, classifyAgentTask,
   isAgentTask, isCoolingDown, clearRateLimit, codingRateLimitMessage, modelsForRequest, recordRateLimit, rateLimitDiagnostics, reduceOutputBudget, modelLabel, routeAgentTask,
-  routeGeminiAgentTask, type AgentTask,
+  routeGeminiAgentTask, shouldTryCompatibleModel, type AgentTask,
 } from "../lib/model-routing";
 import { reviewAgentTool, screenPromptInjection } from "../lib/agent-security";
 import {
@@ -732,7 +732,8 @@ export function createAgentRouter({
         } catch (error) {
       if (activeProvider === "gemini" && error instanceof GeminiAgentApiError) {
             if (!isProgramReview && error.status === 429 && await switchToGroqFallback(error.status)) continue;
-            if (error.status >= 500 && await switchToGeminiFallback("provider_error", error.status)) continue;
+            if ((error.status === 404 || error.status === 408 || error.status >= 500) &&
+                await switchToGeminiFallback("provider_error", error.status)) continue;
           }
           const failure = groqAgentFailure(error);
           const candidate = {
@@ -872,6 +873,33 @@ export function createAgentRouter({
             await emit({ activity: { id: "agent-provider-recovery", label: "Retrying the Agent response…", kind: "info", status: "running" } });
             await waitForGeminiRetry(controller.signal, 500);
             continue;
+          }
+          if (activeProvider === "groq" && activeTask !== "coding" &&
+              shouldTryCompatibleModel(candidate.status, failure?.code)) {
+            const nextIndex = groqCandidates.findIndex((model, index) =>
+              index > groqModelIndex && !isCoolingDown(model));
+            if (nextIndex >= 0) {
+              const previousModel = activeModel;
+              groqModelIndex = nextIndex;
+              activeModel = groqCandidates[nextIndex]!;
+              groqFailureRetries = 0;
+              req.log.warn({
+                event: "agent.model.fallback",
+                provider: "groq",
+                model: previousModel,
+                fallbackModel: activeModel,
+                task: activeTask,
+                status: candidate.status,
+                failureReason: failure?.code ?? "provider_error",
+              }, "Agent model failed; retrying with a compatible catalog model");
+              await emit({ model: activeModel, agentProvider: activeProvider, agentTask: activeTask });
+              pendingRateNotice = {
+                id: "agent-model-fallback",
+                message: `${modelLabel(previousModel)} could not complete this request. Nexo Agent is continuing with ${modelLabel(activeModel)}.`,
+                model: activeModel,
+              };
+              continue;
+            }
           }
           if (attemptTimedOut && activeProvider === "gemini" && await switchToGeminiFallback("stream_idle")) continue;
           if (attemptTimedOut && modelIdleRetries < 1 && !controller.signal.aborted) {

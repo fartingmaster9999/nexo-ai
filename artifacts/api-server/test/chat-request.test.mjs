@@ -141,6 +141,44 @@ test("an actual 429 switches models once and emits a downgrade notice", async ()
   assert.equal(result.stream, "working-stream");
 });
 
+test("a temporarily unavailable primary model falls back without pretending it was rate-limited", async () => {
+  const attempts = [], fallbacks = [], notices = [];
+  const result = await openModelStream(
+    ["temporary-primary", "temporary-fallback"],
+    async model => {
+      attempts.push(model);
+      if (model === "temporary-primary") throw { status: 503 };
+      return "fallback-stream";
+    },
+    (model) => notices.push(model),
+    undefined,
+    (failed, next, status) => fallbacks.push({ failed, next, status }),
+  );
+  assert.deepEqual(attempts, ["temporary-primary", "temporary-fallback"]);
+  assert.deepEqual(fallbacks, [{ failed: "temporary-primary", next: "temporary-fallback", status: 503 }]);
+  assert.deepEqual(notices, ["temporary-fallback"]);
+  assert.deepEqual(result, { model: "temporary-fallback", stream: "fallback-stream" });
+});
+
+test("only a model-not-found 404 can trigger model fallback; other client errors stay explicit", async () => {
+  let calls = 0;
+  const result = await openModelStream(
+    ["missing-model", "available-model"],
+    async (model) => {
+      calls++;
+      if (model === "missing-model") throw { status: 404, error: { code: "model_not_found" } };
+      return "accepted";
+    },
+    () => {},
+  );
+  assert.equal(calls, 2);
+  assert.equal(result.model, "available-model");
+  await assert.rejects(
+    openModelStream(["bad-request-a", "bad-request-b"], async () => { throw { status: 400 }; }, () => {}),
+    (error) => error.status === 400,
+  );
+});
+
 test("exhausting both models returns the exact requested usage message", async () => {
   await assert.rejects(openModelStream(["quota-a","quota-b"], async () => {throw {status:429};}, () => {}), {message:USAGE_LIMIT_MESSAGE});
   assert.equal(USAGE_LIMIT_MESSAGE, "You have reached your usage limits, please try again later");

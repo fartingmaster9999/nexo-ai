@@ -100,12 +100,13 @@ export function NoticeBanner({ notices, index }: { notices?: Notice[]; index: nu
         const fallback = n.id === 'model-downgrade' ||
           n.id === 'agent-route-fallback' ||
           n.id === 'agent-model-rate-fallback' ||
+          n.id === 'agent-model-fallback' ||
           n.id === 'gemini-agent-route-fallback' ||
           n.id === 'gemini-agent-qwen-fallback' ||
           n.id === 'gemini-agent-model-fallback';
         // Normalize old saved notices too; a successful model switch is not a blocked chat.
         const text = n.id === 'model-downgrade'
-          ? 'The main model is temporarily rate-limited. A lighter model is answering this reply—you can keep chatting.'
+          ? 'The main model could not complete this reply. A compatible model is answering—you can keep chatting.'
           : n.message;
         const Icon = fallback ? Info : AlertTriangle;
         return (

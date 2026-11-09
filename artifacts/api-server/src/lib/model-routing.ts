@@ -11,7 +11,7 @@ export const LLAMA_SYNTHESIS_MODEL = "meta-llama/llama-3.3-70b-versatile";
 export const GEMINI_AGENT_PRIMARY_MODEL = "gemini-3.8-flash";
 export const GEMINI_AGENT_FALLBACK_MODEL = "gemini-3.6-flash";
 export const USAGE_LIMIT_MESSAGE = "You have reached your usage limits, please try again later";
-export const DOWNGRADE_MESSAGE = "The main model is temporarily rate-limited. A lighter model is answering this reply—you can keep chatting.";
+export const DOWNGRADE_MESSAGE = "The main model could not complete this reply. A compatible model is answering—you can keep chatting.";
 
 export const AGENT_TASKS = [
   "coding",
@@ -398,16 +398,31 @@ export class UsageLimitError extends Error {
   constructor() { super(USAGE_LIMIT_MESSAGE); }
 }
 
-/** Retry only on an actual rate limit, not authentication or generic upstream failures. */
+export function shouldTryCompatibleModel(status: number | undefined, code?: string): boolean {
+  return status === 429 || status === 408 || (status === 404 && code === "model_not_found") ||
+    (status !== undefined && status >= 500 && status <= 599);
+}
+
+function providerErrorCode(error: unknown): string | undefined {
+  const body = (error as { error?: unknown } | null)?.error;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const code = (body as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+/** Retry compatible alternatives after model-specific and transient provider failures. */
 export async function openModelStream<T>(
   models: string[],
   create: (model: string) => Promise<T>,
   onDowngrade: (model: string) => void,
   onRateLimit?: (model: string, diagnostics: ReturnType<typeof rateLimitDiagnostics>) => void,
+  onModelFallback?: (failedModel: string, nextModel: string, status: number) => void,
 ): Promise<{ model: string; stream: T }> {
   if (!models.length) throw new Error("No compatible model is available for this request.");
   const candidates = modelsForRequest(models);
   const budgetRetries = new Set<string>();
+  let allCandidatesRateLimited = true;
+  let lastError: unknown;
   for (let index = 0; index < candidates.length; index++) {
     const model = candidates[index]!;
     try {
@@ -418,15 +433,26 @@ export async function openModelStream<T>(
       return { model, stream };
     }
     catch (error) {
+      lastError = error;
       const candidate = error as { status?: number; headers?: Headers };
-      if (candidate.status !== 429) throw error;
-      const diagnostics = recordRateLimit(model, error);
-      onRateLimit?.(model, diagnostics);
-      if (!budgetRetries.has(model) && reduceOutputBudget(model, error) !== undefined) {
-        budgetRetries.add(model);
-        index--; // Retry the same model once with its verified, smaller output allowance.
+      const status = candidate.status;
+      if (status === 429) {
+        const diagnostics = recordRateLimit(model, error);
+        if (diagnostics.requestTooLarge) allCandidatesRateLimited = false;
+        onRateLimit?.(model, diagnostics);
+        if (!budgetRetries.has(model) && reduceOutputBudget(model, error) !== undefined) {
+          budgetRetries.add(model);
+          index--; // Retry the same model once with its verified, smaller output allowance.
+          continue;
+        }
+      } else {
+        allCandidatesRateLimited = false;
+        if (!shouldTryCompatibleModel(status, providerErrorCode(error))) throw error;
       }
+      const nextModel = candidates[index + 1];
+      if (nextModel && status !== undefined) onModelFallback?.(model, nextModel, status);
     }
   }
-  throw new UsageLimitError();
+  if (allCandidatesRateLimited) throw new UsageLimitError();
+  throw lastError ?? new Error("No compatible model could complete this request.");
 }
