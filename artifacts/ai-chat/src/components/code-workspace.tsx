@@ -52,7 +52,6 @@ export type AgentWorkspaceTask = {
 };
 const DRAFT_KEY = WORKSPACE_DRAFT_KEY;
 const WRAP_KEY = 'nexo-code-wrap-v1';
-const appliedAgentProjectTasks = new Set<string>();
 function readDrafts(): Record<string, Draft> {
   try { const v = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
 }
@@ -153,10 +152,6 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
 
   useEffect(() => {
     if (!agentCode?.projectFiles || !agentCode.projectEntrypoint) return;
-    const taskKey = `${conversationId ?? ''}:${agentCode.id}`;
-    (window as Window & { __agentProjectApplies?: string[] }).__agentProjectApplies ??= [];
-    (window as Window & { __agentProjectApplies?: string[] }).__agentProjectApplies?.push(`effect:${taskKey}:blocked=${appliedAgentProjectTasks.has(taskKey)}`);
-    if (appliedAgentProjectTasks.has(taskKey)) return;
     let previous: SavedProject | null = null;
     let persistenceError = agentCode.projectStorageError ?? '';
     try {
@@ -166,27 +161,18 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     }
     let next: SavedProject;
     try {
-      next = createAgentProject(agentCode.projectFiles, agentCode.projectEntrypoint, previous);
+      // The Agent controller saves tool updates before publishing this task.
+      // Loading the workspace must not replay an older write over newer edits.
+      next = previous && !persistenceError
+        ? previous
+        : createAgentProject(agentCode.projectFiles, agentCode.projectEntrypoint, previous);
     } catch (error) {
       setStorageError(error instanceof Error ? error.message : 'The project update is invalid; existing files were kept.');
       return;
     }
     setProject(next);
     setActiveProjectPath(next.entrypoint);
-    let saved = false;
-    if (conversationId && !persistenceError) {
-      try { writeSavedProject(localStorage, conversationId, next); saved = true; }
-      catch { persistenceError = 'Project changes could not be saved in this browser. Export a backup before leaving.'; }
-    }
     setStorageError(persistenceError);
-    if (saved) {
-      appliedAgentProjectTasks.add(taskKey);
-      (window as Window & { __agentProjectApplies?: string[] }).__agentProjectApplies?.push(`saved:${taskKey}`);
-      if (appliedAgentProjectTasks.size > 200) {
-        const oldest = appliedAgentProjectTasks.values().next().value;
-        if (oldest) appliedAgentProjectTasks.delete(oldest);
-      }
-    }
   }, [agentCode?.id, agentCode?.projectFiles, agentCode?.projectEntrypoint, conversationId]);
 
   const saveProject = (next: SavedProject | null) => {

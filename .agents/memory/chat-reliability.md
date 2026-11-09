@@ -22,3 +22,7 @@ Budget a multi-step Agent build separately from each provider request, and keep 
 Treat an interrupted browser tool's outcome as uncertain, not as permission to replay it.
 **Why:** A browser reload can occur between saving continuation intent and finishing a file update or execution; those operations cannot share an atomic commit. Favor keeping user edits over silently completing an uncertain operation twice.
 **How to apply:** Recovery requires explicit user action. Carry a consumed-call result describing uncertainty into the continuation, let Agent inspect current selected files, and never infer successful execution from intent alone. Source opt-outs also apply to historical tool arguments and optional reviewer requests.
+
+Keep tool persistence owned by the Agent controller, not by delayed workspace rendering.
+**Why:** Lazy UI effects can run after a tool checkpoint and after newer edits have been saved. Reapplying the tool payload during display can overwrite those edits even without replaying the tool itself.
+**How to apply:** Display the latest saved project after a successful tool write. Keep failed-save output available for export without treating a remount as permission to retry an old write.
