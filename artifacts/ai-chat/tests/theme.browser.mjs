@@ -333,4 +333,105 @@ await withFixture('tests/theme.html', async ({ cdp, evaluate, navigate }) => {
   assert.equal(agentFocus.focusVisible, true, 'Agent keyboard focus remains visible at 200% zoom');
   assert.ok(agentFocus.description && agentFocus.tooltip, 'Agent description and tooltip remain available while focused');
 
+  // A 360 CSS-pixel desktop viewport reproduces the narrow layout at 400% zoom.
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 360, height: 640, deviceScaleFactor: 1, mobile: false });
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-agent"]')?.getBoundingClientRect().width > 0`), 'mode controls at 400% zoom');
+  const modesAt400 = await evaluate(`(() => {
+    const group = document.querySelector('.composer-mode-buttons');
+    const buttons = [...group.querySelectorAll('.mode-toggle')];
+    const rects = buttons.map((button) => button.getBoundingClientRect());
+    return {
+      groupName: group.getAttribute('aria-label'),
+      labels: buttons.map((button) => button.innerText.trim()),
+      names: buttons.map((button) => button.getAttribute('aria-label')),
+      visible: rects.map((rect, i) => rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= innerHeight &&
+        rect.left >= 0 && rect.right <= innerWidth && getComputedStyle(buttons[i]).visibility === 'visible'),
+      overlap: rects[0].left < rects[1].right && rects[0].right > rects[1].left &&
+        rects[0].top < rects[1].bottom && rects[0].bottom > rects[1].top,
+    };
+  })()`);
+  assert.equal(modesAt400.groupName, 'Message modes', 'Mode controls retain their accessible group name at 400% zoom');
+  assert.deepEqual(modesAt400.labels, ['Deepthink', 'Agent'], 'Deepthink and Agent remain separately identifiable at 400% zoom');
+  assert.deepEqual(modesAt400.names, ['Deepthink', 'Agent'], 'Both accessible control names remain distinct at 400% zoom');
+  assert.deepEqual(modesAt400.visible, [true, true], 'Both mode controls remain within the viewport at 400% zoom');
+  assert.equal(modesAt400.overlap, false, 'Mode controls do not overlap at 400% zoom');
+
+  await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed') === 'false'`), 'Deepthink unselected at 400% zoom');
+  await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed') === 'false'`), 'Agent unselected at 400% zoom');
+  const unselectedAt400 = await evaluate(`['toggle-deepthink', 'toggle-agent'].map((id) => {
+    const style = getComputedStyle(document.querySelector('[data-testid="' + id + '"]'));
+    return [style.color, style.backgroundColor, style.borderColor];
+  })`);
+  await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed') === 'true'`), 'Deepthink selected at 400% zoom');
+  const selectedDeepthinkAt400 = await evaluate(`(() => {
+    const style = getComputedStyle(document.querySelector('[data-testid="toggle-deepthink"]'));
+    return [style.color, style.backgroundColor, style.borderColor];
+  })()`);
+  assert.notDeepEqual(selectedDeepthinkAt400, unselectedAt400[0], 'Deepthink selected styling differs from unselected at 400% zoom');
+  await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').click()`);
+  await evaluate(`document.querySelector('[data-testid="toggle-agent"]').click()`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed') === 'true'`), 'Agent selected at 400% zoom');
+  const selectedAgentAt400 = await evaluate(`(() => {
+    const style = getComputedStyle(document.querySelector('[data-testid="toggle-agent"]'));
+    return [style.color, style.backgroundColor, style.borderColor];
+  })()`);
+  assert.notDeepEqual(selectedAgentAt400, unselectedAt400[1], 'Agent selected styling differs from unselected at 400% zoom');
+
+  const readModeFocusAt400 = (testId) => evaluate(`(() => {
+    const button = document.activeElement;
+    const bounds = button.getBoundingClientRect();
+    const style = getComputedStyle(button);
+    const inset = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+    const focus = { left: bounds.left - inset, right: bounds.right + inset, top: bounds.top - inset, bottom: bounds.bottom + inset };
+    let clippedByAncestor = false;
+    for (let parent = button.parentElement; parent; parent = parent.parentElement) {
+      const parentStyle = getComputedStyle(parent);
+      const parentBounds = parent.getBoundingClientRect();
+      const left = parentBounds.left + parent.clientLeft;
+      const top = parentBounds.top + parent.clientTop;
+      const right = left + parent.clientWidth;
+      const bottom = top + parent.clientHeight;
+      const clipX = ['hidden', 'clip', 'auto', 'scroll'].includes(parentStyle.overflowX);
+      const clipY = ['hidden', 'clip', 'auto', 'scroll'].includes(parentStyle.overflowY);
+      if ((clipX && (focus.left < left || focus.right > right)) || (clipY && (focus.top < top || focus.bottom > bottom))) {
+        clippedByAncestor = true;
+        break;
+      }
+    }
+    return {
+      expected: button.matches('[data-testid="' + ${JSON.stringify(testId)} + '"]'),
+      focusVisible: button.matches(':focus-visible'),
+      insideViewport: focus.left >= 0 && focus.top >= 0 && focus.right <= innerWidth && focus.bottom <= innerHeight,
+      clippedByAncestor,
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+      description: button.getAttribute('aria-description'),
+      tooltip: button.getAttribute('title'),
+    };
+  })()`);
+
+  await evaluate(`document.querySelector('.composer textarea').focus()`);
+  for (let i = 0; i < 2; i++) {
+    await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  }
+  const deepthinkFocusAt400 = await readModeFocusAt400('toggle-deepthink');
+  assert.equal(deepthinkFocusAt400.expected, true, 'Keyboard Tab reaches Deepthink at 400% zoom');
+  assert.equal(deepthinkFocusAt400.focusVisible, true, 'Deepthink has visible keyboard focus at 400% zoom');
+  assert.equal(deepthinkFocusAt400.insideViewport, true, 'Deepthink focus outline remains inside the 400% viewport');
+  assert.equal(deepthinkFocusAt400.clippedByAncestor, false, 'Deepthink focus outline is not clipped at 400% zoom');
+  assert.ok(Number.parseFloat(deepthinkFocusAt400.outlineWidth) >= 2, 'Deepthink focus outline remains at least 2 CSS pixels');
+  assert.equal(deepthinkFocusAt400.outlineStyle, 'solid', 'Deepthink focus outline remains solid');
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  const agentFocusAt400 = await readModeFocusAt400('toggle-agent');
+  assert.equal(agentFocusAt400.expected, true, 'Keyboard Tab reaches Agent after Deepthink at 400% zoom');
+  assert.equal(agentFocusAt400.focusVisible, true, 'Agent has visible keyboard focus at 400% zoom');
+  assert.equal(agentFocusAt400.insideViewport, true, 'Agent focus outline remains inside the 400% viewport');
+  assert.equal(agentFocusAt400.clippedByAncestor, false, 'Agent focus outline is not clipped at 400% zoom');
+  assert.ok(agentFocusAt400.description && agentFocusAt400.tooltip, 'Agent description and tooltip remain available at 400% zoom');
+
 });
