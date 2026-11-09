@@ -179,6 +179,22 @@ test("only a model-not-found 404 can trigger model fallback; other client errors
   );
 });
 
+test("service failures are never mislabeled as exhausted model usage", async () => {
+  const unavailable = { status: 503 };
+  await assert.rejects(
+    openModelStream(["unavailable-a", "unavailable-b"], async () => { throw unavailable; }, () => {}),
+    (error) => error === unavailable,
+  );
+  const serviceError = { status: 502 };
+  await assert.rejects(
+    openModelStream(["mixed-quota", "mixed-service"], async (model) => {
+      if (model === "mixed-quota") throw { status: 429 };
+      throw serviceError;
+    }, () => {}),
+    (error) => error === serviceError,
+  );
+});
+
 test("exhausting both models returns the exact requested usage message", async () => {
   await assert.rejects(openModelStream(["quota-a","quota-b"], async () => {throw {status:429};}, () => {}), {message:USAGE_LIMIT_MESSAGE});
   assert.equal(USAGE_LIMIT_MESSAGE, "You have reached your usage limits, please try again later");

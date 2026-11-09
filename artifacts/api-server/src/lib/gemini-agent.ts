@@ -52,7 +52,9 @@ export async function availableGeminiAgentModels(
           if (!item || typeof item !== "object" || Array.isArray(item)) continue;
           const model = item as GeminiCatalogItem;
           if (typeof model.name !== "string" ||
-              !model.supportedGenerationMethods?.includes("streamGenerateContent") ||
+              !Array.isArray(model.supportedGenerationMethods) ||
+              !model.supportedGenerationMethods?.some((method) =>
+                method === "generateContent" || method === "streamGenerateContent") ||
               typeof model.inputTokenLimit !== "number" || model.inputTokenLimit < 8192 ||
               typeof model.outputTokenLimit !== "number" || model.outputTokenLimit < 8192) continue;
           models.push(model);

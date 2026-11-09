@@ -209,8 +209,11 @@ export function buildGroqAgentRequest(
     stream: true,
     temperature: model === CODING_FALLBACK ? 0.25 : 0.6,
     max_completion_tokens: outputTokenBudget(model, input.deepthink === true ? 8192 : 4096),
-    reasoning_effort: input.deepthink === true ? "high" : "medium",
-    reasoning_format: "parsed",
+    ...(model.startsWith("openai/gpt-oss-")
+      ? { reasoning_effort: input.deepthink === true ? "high" as const : "medium" as const, include_reasoning: false }
+      : model.startsWith("qwen/")
+        ? { reasoning_effort: input.deepthink === true ? "high" as const : "medium" as const, reasoning_format: "parsed" as const }
+        : {}),
     tool_choice: allowTools ? buildPolicy.requireTool ? "required" : "auto" : "none",
     parallel_tool_calls: false,
     ...(allowTools ? { tools: agentTools } : {}),

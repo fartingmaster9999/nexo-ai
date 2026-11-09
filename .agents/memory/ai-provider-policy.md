@@ -35,9 +35,9 @@ Use GPT-OSS 120B for ordinary text chat, with GPT-OSS 20B as its quota fallback.
 
 Validate Groq model capabilities with a live request instead of trusting the SDK's general option types.
 
-**Why:** The SDK accepts citation settings that GPT-OSS rejects at runtime, even though this model does support native browser search. Tool support and individual output options have separate compatibility constraints.
+**Why:** The SDK accepts a union of request options across models, not a per-model guarantee. GPT-OSS rejects citation settings and `reasoning_format`; non-reasoning Llama models reject reasoning controls. Tool support and individual output options have separate compatibility constraints.
 
-**How to apply:** Check the selected model's documentation and make one targeted live call when enabling new provider features. Keep web retrieval external as required by the search policy, regardless of native browser capabilities.
+**How to apply:** Build options per model family, check the selected model's documentation and make one targeted live call when enabling new provider features. Keep web retrieval external as required by the search policy, regardless of native browser capabilities. Gemini catalogs advertise `generateContent` for generation-capable models, including streaming; requiring a separate `streamGenerateContent` entry can incorrectly exclude the whole provider.
 
 Do not interpret every Groq 429 as exhausted daily requests. Token and request limits are independent and organization-wide; reasoning and repeated conversation history consume tokens.
 
@@ -83,6 +83,6 @@ Diagnose blank Gemini replies from model finish/block metadata, not just HTTP su
 
 A Groq SDK error with no HTTP status is not necessarily a connection failure: the SDK also raises statusless API errors for provider error events inside successful SSE responses.
 
-**Why:** Production Agent failures were labeled only as `HTTP unknown`, obscuring the difference between transport problems and rejected streamed tool generation. Direct live GPT-OSS 20B answer and tool-call requests succeeded with the existing request format.
+**Why:** Production Agent failures were labeled only as `HTTP unknown`, obscuring the difference between transport problems and rejected streamed tool generation. A past successful request is not proof that later payload variants are supported by the same model.
 
 **How to apply:** Classify SDK connection/timeout subclasses separately from in-stream errors, using only allowlisted provider codes. Never log SDK error messages or failed-generation payloads, which can contain generated code or user content. Retry only bounded recoverable generations before tool dispatch, keeping prior tool results intact.

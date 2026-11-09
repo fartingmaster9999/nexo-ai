@@ -842,6 +842,7 @@ export function createAgentRouter({
               const previousModel = activeModel;
               groqModelIndex = nextIndex;
               activeModel = groqCandidates[nextIndex]!;
+              groqFailureRetries = 0;
               req.log.warn({
                 provider: activeProvider,
                 model: previousModel,

@@ -90,6 +90,51 @@ function projectStream(id, project) {
   })();
 }
 
+test("Agent request options match Qwen, GPT-OSS and non-reasoning Llama capabilities", () => {
+  const input = { messages: [{ role: "user", content: "Explain how rainbows form." }], deepthink: true };
+  for (const model of [PRIMARY_MODEL, SMALL_MODEL]) {
+    const request = buildGroqAgentRequest(input, new Date(), true, model);
+    assert.equal(request.reasoning_effort, "high");
+    assert.equal(request.reasoning_format, undefined, "GPT-OSS rejects reasoning_format");
+    assert.equal(request.include_reasoning, false);
+  }
+  const qwen = buildGroqAgentRequest(input, new Date(), true, CODING_FALLBACK);
+  assert.equal(qwen.reasoning_format, "parsed");
+  assert.equal(qwen.include_reasoning, undefined);
+  for (const model of ["meta-llama/llama-3.1-8b-instant", "meta-llama/llama-3.3-70b-versatile"]) {
+    const request = buildGroqAgentRequest(input, new Date(), true, model);
+    assert.equal(request.reasoning_effort, undefined);
+    assert.equal(request.reasoning_format, undefined);
+    assert.equal(request.include_reasoning, undefined);
+    assert.ok(request.tools);
+  }
+});
+
+test("non-coding Agent answers with GPT-OSS and falls back from transient model failures", async () => {
+  const attempts = [];
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      attempts.push(request.model);
+      assert.equal(request.reasoning_format, undefined, "GPT-OSS must not receive Qwen-only settings");
+      if (request.model === SMALL_MODEL) throw new Groq.APIError(503, { code: "service_unavailable" }, undefined, new Headers());
+      assert.equal(request.model, PRIMARY_MODEL);
+      return textStream("GPT-OSS completed the answer.");
+    } } },
+  };
+  await withServer(createApp(client), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Explain how rainbows form." }], agentProvider: "groq" }),
+    }));
+    assert.ok(events.some((event) => event.content === "GPT-OSS completed the answer."));
+    assert.ok(events.some((event) => event.notice?.id === "agent-model-fallback"));
+    assert.equal(events.some((event) => event.error), false);
+  });
+  assert.deepEqual(attempts, [SMALL_MODEL, SMALL_MODEL, PRIMARY_MODEL]);
+});
+
 test("Agent corrects rejected project payloads, runs the build, and consumes its result before finishing", async () => {
   let calls = 0;
   const client = {
