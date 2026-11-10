@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "p3s48d2UZlZdkQtL7dx1B"
+uri = "file://generated-artifacts/nexo-live-trailer.mp4"
+type = "video"
+title = "Nexo Live Trailer (MP4)"
+description = "6-second silent MP4, 1920×1080, 30 fps."
+logical_id = "b6332033-2650-4707-9ac4-827fa61e9377"
+content_hash = "sha256:f9e213ca5f481172f657f6d3c2da925bdcfc6cb50dfaae38217daa3d77e85f45"
+size = 742644
+mtime_ms = 1794315554640
+storage_uri = "gcs://replit-rams-assets-spock/rams/assets/repl:99143acd-8f67-4420-9275-411a6e1a3033/b6332033-2650-4707-9ac4-827fa61e9377/f1cf3980-5aee-4ead-9a09-6b2e7d109647"
+storage_version_token = "1794315597986675"
+content_type = "video/mp4"
