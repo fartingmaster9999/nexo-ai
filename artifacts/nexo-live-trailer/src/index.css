@@ -138,7 +138,6 @@ body {
   width: 18vmin;
   height: 18vmin;
   object-fit: contain;
-  transform: translateX(-50%);
 }
 .live-wordmark {
   position: absolute;
@@ -152,7 +151,6 @@ body {
   line-height: .96;
   letter-spacing: -.075em;
   white-space: nowrap;
-  transform: translateX(-50%);
 }
 .live-feature {
   position: absolute;
@@ -170,7 +168,6 @@ body {
   letter-spacing: .015em;
   line-height: 1.2;
   white-space: nowrap;
-  transform: translateX(-50%);
 }
 
 @media (prefers-reduced-motion: reduce) {
