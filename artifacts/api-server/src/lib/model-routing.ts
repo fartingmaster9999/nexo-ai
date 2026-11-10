@@ -126,6 +126,8 @@ const preferredModels: Record<AgentTask, { model?: string; label: string; models
 let catalog: { models: ProviderModel[]; expires: number } | undefined;
 let catalogRequest: Promise<ProviderModel[]> | undefined;
 const cooldowns = new Map<string, number>();
+const unhealthyModels = new Map<string, number>();
+export const MODEL_HEALTH_WINDOW_MS = 15_000;
 
 export async function availableModelCatalog(client: Groq): Promise<ProviderModel[]> {
   if (catalog && catalog.expires > Date.now()) return catalog.models;
@@ -257,13 +259,35 @@ export function isCoolingDown(model: string): boolean {
 }
 
 /**
- * Cooldowns are a routing hint, not proof that a new request will be rejected.
- * If every candidate is cached, recheck just the earliest one, once per request.
+ * Quota cooldowns and temporary health failures are routing hints. Never recheck
+ * an unhealthy model during its short window; an expired entry is eligible again.
+ * If every healthy candidate has a quota cooldown, recheck the earliest one.
  */
-export function modelsForRequest(models: string[]): string[] {
-  const ready = models.filter((model) => !isCoolingDown(model));
+export function isModelUnhealthy(model: string, now = Date.now()): boolean {
+  const expires = unhealthyModels.get(model);
+  if (expires === undefined) return false;
+  if (expires <= now) {
+    unhealthyModels.delete(model);
+    return false;
+  }
+  return true;
+}
+
+/** Remember transient service failures briefly, without treating quota or auth errors as outages. */
+export function markModelUnhealthy(model: string, now = Date.now()): void {
+  unhealthyModels.set(model, now + MODEL_HEALTH_WINDOW_MS);
+}
+
+export function clearModelUnhealthy(model: string): void {
+  unhealthyModels.delete(model);
+}
+
+export function modelsForRequest(models: string[], now = Date.now()): string[] {
+  const healthy = models.filter((model) => !isModelUnhealthy(model, now));
+  if (!healthy.length) return [];
+  const ready = healthy.filter((model) => !isCoolingDown(model));
   if (ready.length || !models.length) return ready;
-  return [[...models].sort((a, b) => (cooldowns.get(a) ?? 0) - (cooldowns.get(b) ?? 0))[0]!];
+  return [[...healthy].sort((a, b) => (cooldowns.get(a) ?? 0) - (cooldowns.get(b) ?? 0))[0]!];
 }
 
 export function clearRateLimit(model: string): void {
@@ -403,6 +427,14 @@ export function shouldTryCompatibleModel(status: number | undefined, code?: stri
     (status !== undefined && status >= 500 && status <= 599);
 }
 
+/** Only service-side failures belong in the brief health window. */
+export function isTransientModelFailure(status?: number, failureKind?: string): boolean {
+  if (status === 429 || status === 401 || status === 403) return false;
+  return status === 408 || (status !== undefined && status >= 500 && status <= 599) ||
+    failureKind === "groq_connection" || failureKind === "groq_timeout" ||
+    failureKind === "gemini_connection" || failureKind === "gemini_timeout";
+}
+
 function providerErrorCode(error: unknown): string | undefined {
   const body = (error as { error?: unknown } | null)?.error;
   if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
@@ -420,6 +452,9 @@ export async function openModelStream<T>(
 ): Promise<{ model: string; stream: T }> {
   if (!models.length) throw new Error("No compatible model is available for this request.");
   const candidates = modelsForRequest(models);
+  if (!candidates.length) {
+    throw new Error("Compatible models are temporarily unavailable. Please retry shortly.");
+  }
   const budgetRetries = new Set<string>();
   let allCandidatesRateLimited = true;
   let lastError: unknown;
@@ -428,6 +463,7 @@ export async function openModelStream<T>(
     try {
       const stream = await create(model);
       clearRateLimit(model);
+      clearModelUnhealthy(model);
       // A fallback notice describes a confirmed usable stream, not a failed attempt.
       if (model !== models[0]) onDowngrade(model);
       return { model, stream };
@@ -436,6 +472,10 @@ export async function openModelStream<T>(
       lastError = error;
       const candidate = error as { status?: number; headers?: Headers };
       const status = candidate.status;
+      const failureKind = error instanceof Error && error.name === "APIConnectionTimeoutError"
+        ? "groq_timeout"
+        : error instanceof Error && error.name === "APIConnectionError" ? "groq_connection" : undefined;
+      if (isTransientModelFailure(status, failureKind)) markModelUnhealthy(model);
       if (status === 429) {
         const diagnostics = recordRateLimit(model, error);
         if (diagnostics.requestTooLarge) allCandidatesRateLimited = false;

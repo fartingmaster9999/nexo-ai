@@ -9,8 +9,9 @@ import { searchWeb, type SearchResult } from "../lib/web-search";
 import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry";
 import {
   agentGenerationModelIds, agentSecurityModelIds, availableModelCatalog, classifyAgentTask,
-  isAgentTask, isCoolingDown, clearRateLimit, codingRateLimitMessage, modelsForRequest, recordRateLimit, rateLimitDiagnostics, reduceOutputBudget, modelLabel, routeAgentTask,
-  routeGeminiAgentTask, shouldTryCompatibleModel, type AgentTask,
+  isAgentTask, isCoolingDown, isModelUnhealthy, clearModelUnhealthy, markModelUnhealthy,
+  clearRateLimit, codingRateLimitMessage, modelsForRequest, recordRateLimit, rateLimitDiagnostics, reduceOutputBudget,
+  isTransientModelFailure, modelLabel, routeAgentTask, routeGeminiAgentTask, shouldTryCompatibleModel, type AgentTask,
 } from "../lib/model-routing";
 import { reviewAgentTool, screenPromptInjection } from "../lib/agent-security";
 import {
@@ -229,6 +230,7 @@ export function createAgentRouter({
     let geminiCandidates: string[] = [];
     let geminiPreferredLabel = "";
     let geminiFallback = false;
+    let geminiHealthFallback = false;
     const hasNewCodingRequest = agentTask === "coding" && !(parsed.data.agentHistory?.length) &&
       !(parsed.data.agentRetryCount ?? 0);
     const needsGeminiCatalog = Boolean(apiKey) && (
@@ -287,6 +289,8 @@ export function createAgentRouter({
     let groqCandidates: string[] = [];
     let groqPreferredLabel = "";
     let groqFallback = false;
+    let groqHealthFallback = false;
+    let groqQuotaFallback = false;
     if (!isProgramReview && groqClient && (requestedProvider === "groq" || requestedProvider === "gemini")) {
       const catalog = await availableModelCatalog(groqClient);
       groqModels = agentGenerationModelIds(catalog);
@@ -318,16 +322,25 @@ export function createAgentRouter({
           requestedModel,
           ...groqCandidates.filter((model) => model !== requestedModel),
         ];
-        if (isCoolingDown(requestedModel)) {
+        groqHealthFallback = isModelUnhealthy(requestedModel);
+        groqQuotaFallback = isCoolingDown(requestedModel);
+        if (isCoolingDown(requestedModel) || isModelUnhealthy(requestedModel)) {
           groqFallback = true;
           groqPreferredLabel = modelLabel(requestedModel);
           groqCandidates = modelsForRequest(groqCandidates);
         }
       } else {
         groqCandidates = modelsForRequest(groqCandidates);
-        if (groqCandidates[0] !== routeAgentTask(agentTask, groqModels).preferredModel) {
+        const preferredModel = routeAgentTask(agentTask, groqModels).preferredModel;
+        groqHealthFallback = Boolean(preferredModel && isModelUnhealthy(preferredModel));
+        groqQuotaFallback = Boolean(preferredModel && isCoolingDown(preferredModel));
+        if (groqCandidates[0] !== preferredModel) {
           groqFallback = true;
         }
+      }
+      if (!groqCandidates.length) {
+        res.status(503).json({ error: "Compatible Groq models are temporarily unavailable. Please retry shortly." });
+        return;
       }
     } else {
       if (parsed.data.agentModel && !geminiCandidates.includes(parsed.data.agentModel)) {
@@ -339,7 +352,8 @@ export function createAgentRouter({
           parsed.data.agentModel,
           ...geminiCandidates.filter((model) => model !== parsed.data.agentModel),
         ];
-        if (isCoolingDown(parsed.data.agentModel)) {
+        geminiHealthFallback = isModelUnhealthy(parsed.data.agentModel);
+        if (isCoolingDown(parsed.data.agentModel) || isModelUnhealthy(parsed.data.agentModel)) {
           geminiFallback = true;
           geminiPreferredLabel = modelLabel(parsed.data.agentModel);
           geminiCandidates = modelsForRequest(geminiCandidates);
@@ -347,9 +361,14 @@ export function createAgentRouter({
       } else {
         geminiCandidates = modelsForRequest(geminiCandidates);
         const preferredModel = isProgramReview ? "gemma-4-31b-it" : routeGeminiAgentTask(agentTask, geminiModels).preferredModel;
+        geminiHealthFallback = Boolean(preferredModel && isModelUnhealthy(preferredModel));
         if (geminiCandidates[0] !== preferredModel) {
           geminiFallback = true;
         }
+      }
+      if (!geminiCandidates.length) {
+        res.status(503).json({ error: "Compatible Gemini models are temporarily unavailable. Please retry shortly." });
+        return;
       }
     }
     if (parsed.data.timeZone !== undefined && !isValidTimeZone(parsed.data.timeZone)) {
@@ -411,7 +430,11 @@ export function createAgentRouter({
         await emit({
           notice: {
             id: "agent-route-fallback",
-            message: `The preferred ${groqPreferredLabel} model is not available in this account's live catalog. Nexo Agent is using compatible Groq model ${modelLabel(activeModel)}.`,
+            message: groqHealthFallback
+              ? `The preferred ${groqPreferredLabel} model is temporarily unavailable. Nexo Agent is using compatible Groq model ${modelLabel(activeModel)}.`
+              : groqQuotaFallback
+                ? `The preferred ${groqPreferredLabel} model is rate-limited. Nexo Agent is using compatible Groq model ${modelLabel(activeModel)}.`
+              : `The preferred ${groqPreferredLabel} model is not available in this account's live catalog. Nexo Agent is using compatible Groq model ${modelLabel(activeModel)}.`,
             model: activeModel,
           },
         });
@@ -420,7 +443,9 @@ export function createAgentRouter({
         await emit({
           notice: {
             id: "gemini-agent-route-fallback",
-            message: `The preferred ${geminiPreferredLabel} model is not available in the live Gemini catalog. Nexo Agent is using compatible model ${modelLabel(activeModel)}.`,
+            message: geminiHealthFallback
+              ? `The preferred ${geminiPreferredLabel} model is temporarily unavailable. Nexo Agent is using compatible model ${modelLabel(activeModel)}.`
+              : `The preferred ${geminiPreferredLabel} model is not available in the live Gemini catalog. Nexo Agent is using compatible model ${modelLabel(activeModel)}.`,
             model: activeModel,
           },
         });
@@ -484,6 +509,7 @@ export function createAgentRouter({
               fetchImpl,
               resetPlannerIdle,
             );
+            clearModelUnhealthy(plannerModel);
             req.log.info({
               event: "agent.gemini.plan.completed",
               provider: "gemini",
@@ -494,6 +520,7 @@ export function createAgentRouter({
           } catch (error) {
             if (controller.signal.aborted) throw error;
             const status = error instanceof GeminiAgentApiError ? error.status : undefined;
+            if (isTransientModelFailure(status) || plannerTimedOut) markModelUnhealthy(plannerModel);
             req.log.warn({
               event: "agent.gemini.plan.unavailable",
               provider: "gemini",
@@ -553,7 +580,7 @@ export function createAgentRouter({
       const switchToGeminiFallback = async (reason: "provider_error" | "stream_idle", status?: number) => {
         if (activeProvider !== "gemini" || toolCalls !== 0) return false;
         const nextIndex = geminiCandidates.findIndex(
-          (model, index) => index > geminiModelIndex && !isCoolingDown(model),
+          (model, index) => index > geminiModelIndex && !isCoolingDown(model) && !isModelUnhealthy(model),
         );
         if (nextIndex < 0) return false;
         const previousModel = activeModel;
@@ -743,7 +770,7 @@ export function createAgentRouter({
             });
           }
         } catch (error) {
-      if (activeProvider === "gemini" && error instanceof GeminiAgentApiError) {
+          if (activeProvider === "gemini" && error instanceof GeminiAgentApiError) {
             if (!isProgramReview && error.status === 429 && await switchToGroqFallback(error.status)) continue;
             if ((error.status === 404 || error.status === 408 || error.status >= 500) &&
                 await switchToGeminiFallback("provider_error", error.status)) continue;
@@ -753,6 +780,13 @@ export function createAgentRouter({
             status: failure?.status ?? (error as { status?: number }).status,
             headers: (error as { headers?: Headers }).headers,
           };
+          if (activeProvider === "gemini" && (isTransientModelFailure(candidate.status) || attemptTimedOut)) {
+            markModelUnhealthy(activeModel);
+          }
+          if (activeProvider === "groq" &&
+              (isTransientModelFailure(candidate.status, failure?.kind) || attemptTimedOut)) {
+            markModelUnhealthy(activeModel);
+          }
           if (activeProvider === "groq" && candidate.status === 413 && !compactRequest) {
             const compacted = buildGroqAgentRequest(agentInput, now(), allowTools, activeModel, securityNote(), codingPlan, true);
             if (repairToolRequest) {
@@ -850,7 +884,8 @@ export function createAgentRouter({
               res.end();
               return;
             }
-            const nextIndex = groqCandidates.findIndex((model, index) => index > groqModelIndex && !isCoolingDown(model));
+            const nextIndex = groqCandidates.findIndex((model, index) =>
+              index > groqModelIndex && !isCoolingDown(model) && !isModelUnhealthy(model));
             if (nextIndex >= 0) {
               const previousModel = activeModel;
               groqModelIndex = nextIndex;
@@ -891,7 +926,7 @@ export function createAgentRouter({
           if (activeProvider === "groq" && activeTask !== "coding" &&
               shouldTryCompatibleModel(candidate.status, failure?.code)) {
             const nextIndex = groqCandidates.findIndex((model, index) =>
-              index > groqModelIndex && !isCoolingDown(model));
+              index > groqModelIndex && !isCoolingDown(model) && !isModelUnhealthy(model));
             if (nextIndex >= 0) {
               const previousModel = activeModel;
               groqModelIndex = nextIndex;
@@ -932,6 +967,7 @@ export function createAgentRouter({
 
         if (!modelResponse) throw new AgentPublicError("The Agent returned no response. Please try again.");
         clearRateLimit(activeModel);
+        clearModelUnhealthy(activeModel);
         if (compactRequest) {
           await emit({ activity: { id: "agent-context-recovery",
             label: "Qwen accepted the smaller request context", kind: "info", status: "complete",

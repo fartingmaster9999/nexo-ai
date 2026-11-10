@@ -9,7 +9,9 @@ import {
   requestGeminiAgentStream, validateAgentHistory,
 } from "../src/lib/gemini-agent.ts";
 import { buildGroqAgentRequest, collectGroqAgentResponse, GROQ_AGENT_MODEL } from "../src/lib/groq-agent.ts";
-import { CODING_FALLBACK } from "../src/lib/model-routing.ts";
+import {
+  CODING_FALLBACK, GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_PRIMARY_MODEL, clearModelUnhealthy,
+} from "../src/lib/model-routing.ts";
 import { createAgentRouter } from "../src/routes/agent.ts";
 
 const input = {
@@ -472,6 +474,7 @@ test("Qwen Agent decoder collects streamed tool arguments and rejects invalid JS
 });
 
 async function withServer(app, run) {
+  [CODING_FALLBACK, GEMINI_AGENT_PRIMARY_MODEL, GEMINI_AGENT_FALLBACK_MODEL].forEach(clearModelUnhealthy);
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve, reject) => {
     server.once("listening", resolve);

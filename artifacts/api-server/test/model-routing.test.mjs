@@ -8,12 +8,18 @@ import {
   CODING_FALLBACK,
   GEMINI_AGENT_FALLBACK_MODEL,
   GEMINI_AGENT_PRIMARY_MODEL,
+  MODEL_HEALTH_WINDOW_MS,
   LLAMA_CLASSIFIER_MODEL,
   LLAMA_SYNTHESIS_MODEL,
   PRIMARY_MODEL,
   PROMPT_GUARD_MODEL,
   routeGeminiAgentTask,
   routeAgentTask,
+  clearModelUnhealthy,
+  isModelUnhealthy,
+  isTransientModelFailure,
+  markModelUnhealthy,
+  modelsForRequest,
   SAFEGUARD_MODEL,
   SMALL_MODEL,
 } from "../src/lib/model-routing.ts";
@@ -98,4 +104,25 @@ test("Agent filters provider catalogs by context and output capacity", () => {
 test("Failed provider discovery never invents supported model IDs", async () => {
   const ids = await availableModels({ models: { list: async () => { throw new Error("catalog unavailable"); } } });
   assert.deepEqual(ids, []);
+});
+
+test("transient model health skips failing routes briefly, then rechecks them", () => {
+  const now = 10_000;
+  markModelUnhealthy(SMALL_MODEL, now);
+  try {
+    assert.equal(isModelUnhealthy(SMALL_MODEL, now), true);
+    assert.deepEqual(modelsForRequest([SMALL_MODEL, PRIMARY_MODEL], now), [PRIMARY_MODEL]);
+    assert.deepEqual(modelsForRequest([SMALL_MODEL], now), []);
+    assert.equal(isModelUnhealthy(SMALL_MODEL, now + MODEL_HEALTH_WINDOW_MS), false);
+    assert.deepEqual(modelsForRequest([SMALL_MODEL, PRIMARY_MODEL], now + MODEL_HEALTH_WINDOW_MS),
+      [SMALL_MODEL, PRIMARY_MODEL]);
+  } finally {
+    clearModelUnhealthy(SMALL_MODEL);
+  }
+  assert.equal(isTransientModelFailure(503), true);
+  assert.equal(isTransientModelFailure(408), true);
+  assert.equal(isTransientModelFailure(undefined, "groq_connection"), true);
+  assert.equal(isTransientModelFailure(429), false);
+  assert.equal(isTransientModelFailure(401), false);
+  assert.equal(isTransientModelFailure(403), false);
 });

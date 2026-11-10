@@ -16,6 +16,8 @@ import {
   rateLimitDiagnostics,
   codingRateLimitMessage,
   isCoolingDown,
+  isModelUnhealthy,
+  clearModelUnhealthy,
 } from "../src/lib/model-routing.ts";
 import { createAgentRouter } from "../src/routes/agent.ts";
 
@@ -50,6 +52,7 @@ function createApp(
 }
 
 async function withServer(app, run) {
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearModelUnhealthy);
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve, reject) => {
     server.once("listening", resolve);
@@ -116,6 +119,8 @@ test("Agent request options match Qwen, GPT-OSS and non-reasoning Llama capabili
 });
 
 test("non-coding Agent answers with GPT-OSS and falls back from transient model failures", async () => {
+  clearRateLimit(SMALL_MODEL);
+  clearRateLimit(PRIMARY_MODEL);
   const attempts = [];
   const client = {
     models: { list: async () => ({ data: catalog }) },
@@ -128,16 +133,106 @@ test("non-coding Agent answers with GPT-OSS and falls back from transient model 
       return textStream("GPT-OSS completed the answer.");
     } } },
   };
-  await withServer(createApp(client), async (url) => {
-    const events = await eventsFrom(await fetch(url, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: [{ role: "user", content: "Explain how rainbows form." }], agentProvider: "groq" }),
-    }));
-    assert.ok(events.some((event) => event.content === "GPT-OSS completed the answer."));
-    assert.ok(events.some((event) => event.notice?.id === "agent-model-fallback"));
-    assert.equal(events.some((event) => event.error), false);
-  });
-  assert.deepEqual(attempts, [SMALL_MODEL, SMALL_MODEL, PRIMARY_MODEL]);
+  try {
+    await withServer(createApp(client), async (url) => {
+      const post = () => fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Explain how rainbows form." }], agentProvider: "groq" }),
+      }).then(eventsFrom);
+      const events = await post();
+      assert.ok(events.some((event) => event.content === "GPT-OSS completed the answer."));
+      assert.ok(events.some((event) => event.notice?.id === "agent-model-fallback"));
+      assert.equal(events.some((event) => event.error), false);
+      const consecutive = await post();
+      assert.ok(consecutive.some((event) => event.content === "GPT-OSS completed the answer."));
+      assert.equal(consecutive.some((event) => event.error), false);
+      assert.match(consecutive.find((event) => event.notice?.id === "agent-route-fallback")?.notice.message ?? "",
+        /temporarily unavailable/);
+    });
+    assert.deepEqual(attempts, [SMALL_MODEL, SMALL_MODEL, PRIMARY_MODEL, PRIMARY_MODEL]);
+    assert.equal(isModelUnhealthy(SMALL_MODEL), true);
+  } finally {
+    clearRateLimit(SMALL_MODEL);
+    clearRateLimit(PRIMARY_MODEL);
+    clearModelUnhealthy(SMALL_MODEL);
+  }
+});
+
+test("a recovered Qwen request reuses completed tool history without rerunning the tool", async () => {
+  clearModelUnhealthy(CODING_FALLBACK);
+  const requests = [];
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      requests.push(request);
+      assert.equal(request.model, CODING_FALLBACK);
+      assert.equal(request.messages.filter((message) => message.role === "tool").length, 1);
+      if (requests.length === 1) throw new Groq.APIError(503, { code: "service_unavailable" }, undefined, new Headers());
+      return textStream("The completed run printed 4.");
+    } } },
+  };
+  try {
+    await withServer(createApp(client), async (url) => {
+      const events = await eventsFrom(await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: "What did the completed run show?" }],
+          agentHistory: [{
+            tool: "run_code", callId: "already-run", thoughtSignature: "groq-agent-v1",
+            arguments: { language: "javascript", code: "console.log(2+2)" },
+            result: "stdout: 4",
+          }],
+        }),
+      }));
+      assert.ok(events.some((event) => event.content === "The completed run printed 4."));
+      assert.equal(events.some((event) => event.agentTool || event.error), false);
+    });
+    assert.equal(requests.length, 2);
+    assert.equal(isModelUnhealthy(CODING_FALLBACK), false, "a successful response clears the temporary outage state");
+  } finally {
+    clearModelUnhealthy(CODING_FALLBACK);
+  }
+});
+
+test("a down Qwen service is not retried on the next request or mislabeled as exhausted usage", async () => {
+  clearModelUnhealthy(CODING_FALLBACK);
+  let attempts = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      assert.equal(request.model, CODING_FALLBACK);
+      attempts++;
+      throw new Groq.APIError(503, { code: "service_unavailable" }, undefined, new Headers());
+    } } },
+  };
+  try {
+    await withServer(createApp(client), async (url) => {
+      const body = {
+        messages: [{ role: "user", content: "Build a small calculator app" }],
+      };
+      const first = await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const firstEvents = await eventsFrom(first);
+      const firstError = firstEvents.find((event) => event.error)?.error ?? "";
+      assert.ok(firstError);
+      assert.doesNotMatch(firstError, /usage limit|exhausted|quota/i);
+      assert.equal(attempts, 2, "only the existing bounded retry runs in the first request");
+
+      const next = await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      assert.equal(next.status, 503);
+      const nextError = (await next.json()).error;
+      assert.match(nextError, /temporarily unavailable/);
+      assert.doesNotMatch(nextError, /usage limit|exhausted|quota/i);
+      assert.equal(attempts, 2, "the unhealthy Qwen model is skipped during its health window");
+    });
+  } finally {
+    clearModelUnhealthy(CODING_FALLBACK);
+  }
 });
 
 test("Agent corrects rejected project payloads, runs the build, and consumes its result before finishing", async () => {
