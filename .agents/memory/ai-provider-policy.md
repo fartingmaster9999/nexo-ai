@@ -15,6 +15,12 @@ The user chose their own Gemini API key for image understanding and Nexo Agent. 
 
 **How to apply:** Read `GEMINI_API_KEY` from the server environment only. Never pass it to the browser, write it into tracked configuration, or reuse it as a Groq credential.
 
+Gemini Live browser sessions must use a short-lived, one-use token created by the server and constrained to Nexo's supported Live model and audio configuration. In the public-key app, forward the visitor's Gemini key only to create that token; never send the long-lived key to the browser's WebSocket.
+
+**Why:** Live voice uses a browser-to-Google WebSocket, so sending the normal Gemini API key to the browser would expose a reusable credential.
+
+**How to apply:** Keep token issuance server-side, lock the supported model and session configuration, and never cache or log the returned ephemeral token. Treat Live audio as a separate Gemini route; normal chat stays on Groq.
+
 Prefer Gemini for non-coding Agent work when configured. For coding, Gemini may supply an implementation brief, but Qwen remains responsible for generating and repairing code. Favor useful planning and verification over minimum latency.
 
 **Why:** The user reported zero Gemini calls alongside many Groq calls and explicitly said longer waits were acceptable if quality improved. They still require coding to be handled by Qwen, not GPT-OSS.

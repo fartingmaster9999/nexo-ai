@@ -14,6 +14,8 @@ tags:
     description: Nexo AI chat
   - name: agent
     description: Nexo Agent
+  - name: live
+    description: Real-time voice sessions
 paths:
   /healthz:
     get:
@@ -298,6 +300,88 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /live/token:
+    post:
+      operationId: createLiveSessionToken
+      tags: [live]
+      summary: Create a short-lived Gemini Live session token
+      description: Returns a one-use token constrained to Nexo's supported audio-only Gemini Live configuration. The server API key is never returned.
+      responses:
+        "200":
+          description: Short-lived token for a single Live session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveSessionToken"
+        "429":
+          description: Token creation is temporarily rate-limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "502":
+          description: Gemini could not create the session token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: Gemini Live is not configured on this server
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "504":
+          description: Gemini did not create the token before the timeout
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /public/live/token:
+    post:
+      operationId: createPublicLiveSessionToken
+      tags: [live]
+      summary: Create a Live session token with the visitor's Gemini key
+      description: The visitor's Gemini API key is forwarded only to create this constrained token and is never stored or returned.
+      parameters:
+        - name: X-Nexo-Gemini-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+      responses:
+        "200":
+          description: Short-lived token for a single Live session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveSessionToken"
+        "401":
+          description: A valid user Gemini key is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: Token creation is temporarily rate-limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "502":
+          description: Gemini could not create the session token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "504":
+          description: Gemini did not create the token before the timeout
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   schemas:
     HealthStatus:
@@ -307,6 +391,24 @@ components:
           type: string
       required:
         - status
+    LiveSessionToken:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: Ephemeral Gemini token; valid only for the constrained Live session
+        expiresAt:
+          type: string
+          format: date-time
+        model:
+          type: string
+          enum: [gemini-3.8-live]
+      required:
+        - token
+        - expiresAt
+        - model
     ChatMessage:
       type: object
       properties:

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, MessageSquare, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -17,6 +17,7 @@ import {
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SettingsDialog } from '@/components/settings-dialog';
 import { ProviderSettingsDialog, type PublicProviderKeys } from '@/components/provider-settings-dialog';
+import { LiveVoiceDialog, type LiveSessionToken } from '@/components/live-voice-dialog';
 import { HomeLanding } from '@/components/home-landing';
 import NotFound from '@/pages/not-found';
 import { LiveReplyIndicator, NoticeBanner, ThinkingPanel, type Activity, type ChatMessage } from '@/components/answer-details';
@@ -140,6 +141,7 @@ function Home() {
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
+  const [liveOpen, setLiveOpen] = useState(false);
   const [providerKeys, setProviderKeys] = useState<PublicProviderKeys>(readPublicProviderKeys);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceVisited, setWorkspaceVisited] = useState(false);
@@ -195,6 +197,43 @@ function Home() {
     } catch {
       setError('Browser storage is unavailable. Your provider keys could not be saved on this device.');
     }
+  };
+  const fetchLiveToken = useCallback(async (signal: AbortSignal): Promise<LiveSessionToken> => {
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    if (PUBLIC_KEY_MODE) {
+      const geminiKey = readPublicProviderKeys().gemini.trim();
+      if (!geminiKey) {
+        const missingKey = new Error('Add a Gemini API key in Settings to use Nexo Live.') as Error & { openProviderSettings?: boolean };
+        missingKey.openProviderSettings = true;
+        throw missingKey;
+      }
+      headers['X-Nexo-Gemini-Key'] = geminiKey;
+    }
+
+    const response = await fetch(apiEndpoint('/api/live/token'), { method: 'POST', headers, signal });
+    let body: unknown;
+    try { body = await response.json(); } catch { body = null; }
+    const payload = typeof body === 'object' && body !== null ? body as Record<string, unknown> : {};
+    if (!response.ok) {
+      const failure = new Error(typeof payload.error === 'string' ? payload.error : 'Nexo Live could not start. Please try again.') as Error & { openProviderSettings?: boolean };
+      failure.openProviderSettings = PUBLIC_KEY_MODE && response.status === 401;
+      throw failure;
+    }
+    if (typeof payload.token !== 'string' || typeof payload.model !== 'string') {
+      throw new Error('Nexo Live received an invalid session token. Please try again.');
+    }
+    return { token: payload.token, model: payload.model };
+  }, []);
+  const openLiveVoice = () => {
+    if (PUBLIC_KEY_MODE && !readPublicProviderKeys().gemini.trim()) {
+      setProviderSettingsOpen(true);
+      toast({
+        title: 'Gemini key needed for Nexo Live',
+        description: 'Add a Gemini API key in Settings to start a real-time voice session.',
+      });
+      return;
+    }
+    setLiveOpen(true);
   };
   const [agentCodeTask, setAgentCodeTask] = useState<AgentWorkspaceTask | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1644,6 +1683,18 @@ function Home() {
                   >
                     <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent</span>
                   </button>
+                  <button
+                    type="button"
+                    className="mode-toggle live-toggle"
+                    onClick={openLiveVoice}
+                    disabled={streaming || preparingImage}
+                    aria-haspopup="dialog"
+                    aria-label="Start a Nexo Live voice conversation"
+                    title="Talk with Nexo in real time"
+                    data-testid="button-open-live"
+                  >
+                    <span className="mode-toggle-icon"><Mic size={15} aria-hidden="true" /></span><span>Live</span>
+                  </button>
                 </div>
                 <span className="hint-keys">Enter to send · Shift + Enter for new line</span>
                 {streaming ? (
@@ -1706,6 +1757,12 @@ function Home() {
       {PUBLIC_KEY_MODE && (
         <ProviderSettingsDialog open={providerSettingsOpen} onOpenChange={setProviderSettingsOpen} keys={providerKeys} onSave={saveProviderKeys} />
       )}
+      <LiveVoiceDialog
+        open={liveOpen}
+        onOpenChange={setLiveOpen}
+        fetchToken={fetchLiveToken}
+        onOpenSettings={() => { setLiveOpen(false); setProviderSettingsOpen(true); }}
+      />
     </div>
   );
 }

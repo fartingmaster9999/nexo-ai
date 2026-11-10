@@ -397,3 +397,41 @@ export const StreamPublicAgentChatBody = zod.object({
 export const StreamPublicAgentChatResponse = zod.unknown()
 
 
+/**
+ * Returns a one-use token constrained to Nexo's supported audio-only Gemini Live configuration. The server API key is never returned.
+ * @summary Create a short-lived Gemini Live session token
+ */
+export const createLiveSessionTokenResponseTokenMax = 4096;
+
+
+
+export const CreateLiveSessionTokenResponse = zod.object({
+  "token": zod.string().min(1).max(createLiveSessionTokenResponseTokenMax).describe('Ephemeral Gemini token; valid only for the constrained Live session'),
+  "expiresAt": zod.coerce.date(),
+  "model": zod.enum(['gemini-3.8-live'])
+})
+
+
+/**
+ * The visitor's Gemini API key is forwarded only to create this constrained token and is never stored or returned.
+ * @summary Create a Live session token with the visitor's Gemini key
+ */
+export const createPublicLiveSessionTokenHeaderXNexoGeminiKeyMax = 512;
+
+
+
+export const CreatePublicLiveSessionTokenHeader = zod.object({
+  "X-Nexo-Gemini-Key": zod.string().min(1).max(createPublicLiveSessionTokenHeaderXNexoGeminiKeyMax)
+})
+
+export const createPublicLiveSessionTokenResponseTokenMax = 4096;
+
+
+
+export const CreatePublicLiveSessionTokenResponse = zod.object({
+  "token": zod.string().min(1).max(createPublicLiveSessionTokenResponseTokenMax).describe('Ephemeral Gemini token; valid only for the constrained Live session'),
+  "expiresAt": zod.coerce.date(),
+  "model": zod.enum(['gemini-3.8-live'])
+})
+
+

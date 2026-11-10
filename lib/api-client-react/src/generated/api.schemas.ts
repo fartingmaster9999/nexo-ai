@@ -9,6 +9,24 @@ export interface HealthStatus {
   status: string;
 }
 
+export type LiveSessionTokenModel = typeof LiveSessionTokenModel[keyof typeof LiveSessionTokenModel];
+
+
+export const LiveSessionTokenModel = {
+  'gemini-38-live': 'gemini-3.8-live',
+} as const;
+
+export interface LiveSessionToken {
+  /**
+     * Ephemeral Gemini token; valid only for the constrained Live session
+     * @minLength 1
+     * @maxLength 4096
+     */
+  token: string;
+  expiresAt: string;
+  model: LiveSessionTokenModel;
+}
+
 export type ChatMessageRole = typeof ChatMessageRole[keyof typeof ChatMessageRole];
 
 

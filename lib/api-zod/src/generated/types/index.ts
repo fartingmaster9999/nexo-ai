@@ -28,3 +28,5 @@ export * from './healthStatus';
 export * from './imageAttachment';
 export * from './imageAttachmentMimeType';
 export * from './imageChatInput';
+export * from './liveSessionToken';
+export * from './liveSessionTokenModel';
