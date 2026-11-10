@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none" role="img" aria-labelledby="title">
+  <title id="title">Nexo Live voice mark</title>
+  <path d="M77 15a47 47 0 1 0 0 90" stroke="#1769FF" stroke-width="8" stroke-linecap="round"/>
+  <path d="M74 34a28 28 0 1 0 0 52" stroke="#55A9FF" stroke-width="7" stroke-linecap="round"/>
+  <rect x="48" y="52" width="8" height="16" rx="4" fill="#F4F7FF"/>
+  <rect x="62" y="40" width="8" height="40" rx="4" fill="#F4F7FF"/>
+  <rect x="76" y="48" width="8" height="24" rx="4" fill="#55A9FF"/>
+  <circle cx="96" cy="60" r="4.5" fill="#F4F7FF"/>
+</svg>

@@ -1,0 +1,29 @@
+kind = "video"
+previewPath = "/nexo-live-trailer/"
+title = "Nexo Live Trailer"
+description = "A short Nexo Live trailer introducing real-time voice conversation with the Gemini Live API."
+version = "1.0.0"
+id = "artifacts/nexo-live-trailer"
+router = "path"
+videoAspectRatio = "16:9"
+
+[[services]]
+name = "web"
+paths = [ "/nexo-live-trailer/" ]
+localPort = 18325
+
+[services.development]
+run = "pnpm --filter @workspace/nexo-live-trailer run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/nexo-live-trailer", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/nexo-live-trailer/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18325"
+BASE_PATH = "/nexo-live-trailer/"
