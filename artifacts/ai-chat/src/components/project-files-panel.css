@@ -2,9 +2,10 @@
   --project-line: hsl(var(--border));
   --project-surface: hsl(var(--card));
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   min-width: 0;
-  min-height: 240px;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--project-line);
   border-radius: 12px;
@@ -75,7 +76,7 @@
 .project-files-body {
   display: grid;
   grid-template-columns: minmax(180px, 27%) minmax(0, 1fr);
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
 }
 

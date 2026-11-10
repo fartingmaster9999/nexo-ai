@@ -80,7 +80,6 @@ export function HomeLanding({ logoUrl, onStart, onPrompt, onDraftPrompt, onOpenH
           aria-expanded={historyOpen} aria-controls="history-sidebar" data-testid="button-home-logo">
           <img src={logoUrl} alt="" aria-hidden="true" />
         </button>
-        <p className="nx-hello nx-in" style={{ ['--d' as string]: '60ms' }}>Welcome to Nexo</p>
         <h1 ref={headingRef} tabIndex={-1} className="nx-title nx-in" style={{ ['--d' as string]: '110ms' }}>
           What's on your mind<span className="nx-accent"> today?</span>
         </h1>

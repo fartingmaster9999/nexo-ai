@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, MessageSquare, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
@@ -121,6 +121,10 @@ function Home() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [homeHistoryOpen, setHomeHistoryOpen] = useState(false);
   const [draft, setDraft] = useState('');
+  const [longPasteCollapsed, setLongPasteCollapsed] = useState(false);
+  useEffect(() => {
+    if (!draft) setLongPasteCollapsed(false);
+  }, [draft]);
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
   const [preparingImage, setPreparingImage] = useState(false);
   const [error, setError] = useState('');
@@ -194,6 +198,7 @@ function Home() {
   };
   const [agentCodeTask, setAgentCodeTask] = useState<AgentWorkspaceTask | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const longPasteEditRef = useRef<HTMLButtonElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const homeHeadingRef = useRef<HTMLHeadingElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -1252,10 +1257,43 @@ function Home() {
 
   const onDraftChange = (value: string) => {
     setDraft(value);
+    if (!value) setLongPasteCollapsed(false);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
     }
+  };
+
+  const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = event.clipboardData.getData('text/plain');
+    const isLongPaste = pasted.length >= 1200 || pasted.split(/\r\n|\r|\n/).length >= 12;
+    if (!isLongPaste) return;
+
+    const textarea = event.currentTarget;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const nextDraft = `${draft.slice(0, start)}${pasted}${draft.slice(end)}`;
+    if (nextDraft.length > 12000) return;
+    event.preventDefault();
+    onDraftChange(nextDraft);
+    setLongPasteCollapsed(true);
+    window.requestAnimationFrame(() => longPasteEditRef.current?.focus({ preventScroll: true }));
+  };
+
+  const editLongPaste = () => {
+    setLongPasteCollapsed(false);
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus({ preventScroll: true });
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+  };
+
+  const clearLongPaste = () => {
+    setDraft('');
+    setLongPasteCollapsed(false);
+    window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
   };
 
   return (
@@ -1520,16 +1558,31 @@ function Home() {
                     </div>
                   )}
                   {preparingImage && <div role="status" className="image-attachment-preview" data-testid="image-preparing-status">Preparing image…</div>}
+                  {longPasteCollapsed && (
+                    <div className="long-paste-summary" role="group" aria-label="Long pasted message" data-testid="long-paste-summary">
+                      <div className="long-paste-summary-heading">
+                        <strong>Long pasted message</strong>
+                        <span>{draft.length.toLocaleString()} characters</span>
+                      </div>
+                      <p>{draft.trim().replace(/\s+/g, ' ').slice(0, 180)}{draft.trim().length > 180 ? '…' : ''}</p>
+                      <div className="long-paste-summary-actions">
+                        <button ref={longPasteEditRef} type="button" onClick={editLongPaste} data-testid="button-edit-long-paste">Edit text</button>
+                        <button type="button" onClick={clearLongPaste} data-testid="button-clear-long-paste">Clear message</button>
+                      </div>
+                    </div>
+                  )}
                   <textarea
                     ref={textareaRef}
                     rows={1}
                     value={draft}
                     onChange={(event) => onDraftChange(event.target.value)}
+                    onPaste={onComposerPaste}
                     onKeyDown={onComposerKeyDown}
                     placeholder={deepthink ? 'Describe a hard problem…' : 'Ask Nexo AI anything…'}
                     aria-label="Your message"
                     maxLength={12000}
                     disabled={streaming}
+                    hidden={longPasteCollapsed}
                     data-testid="input-message"
                   />
                 </div>
