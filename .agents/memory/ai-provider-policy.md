@@ -7,7 +7,7 @@ Nexo AI must use Groq with the user's own API key. Do not add an OpenAI API conn
 
 **Why:** The user explicitly required Groq-hosted GPT-OSS instead of OpenAI billed through Replit and said to never use OpenAI. They requested GPT-OSS specifically; its `openai/` model namespace identifies its publisher, not the inference provider.
 
-**How to apply:** Keep normal text-chat inference on Groq; do not fall back to Gemini for ordinary chat. Use Gemini only for the user-selected image and Agent routes. Normal Groq reasoning should be medium and Deepthink should raise it to high unless the user changes that requirement.
+**How to apply:** Keep normal text-chat inference on Groq; do not fall back to Gemini for ordinary chat. Use Gemini only for the user-selected image, Agent, and Live voice routes. Normal Groq reasoning should be medium and Deepthink should raise it to high unless the user changes that requirement.
 
 The user chose their own Gemini API key for image understanding and Nexo Agent. Keep Gemini credentials server-side and configure them separately in Replit and any external host such as Vercel.
 
@@ -20,6 +20,12 @@ Gemini Live browser sessions must use a short-lived, one-use token created by th
 **Why:** Live voice uses a browser-to-Google WebSocket, so sending the normal Gemini API key to the browser would expose a reusable credential.
 
 **How to apply:** Keep token issuance server-side, lock the supported model and session configuration, and never cache or log the returned ephemeral token. Treat Live audio as a separate Gemini route; normal chat stays on Groq.
+
+Fail a Live call explicitly when the connection cannot keep up, rather than silently dropping speech or retaining an unbounded audio backlog.
+
+**Why:** Replaying delayed microphone input into a later turn changes what the user meant, and unbounded playback can leave the interface apparently active but far behind the conversation.
+
+**How to apply:** Bound incoming messages, outgoing microphone data, and scheduled playback independently. On overflow, release the microphone and audio resources and offer a new call; do not reuse buffered audio in another session.
 
 Prefer Gemini for non-coding Agent work when configured. For coding, Gemini may supply an implementation brief; Groq-hosted coding models generate and repair code. Keep optional feedback concise and separately time-bounded rather than making the code-generation step rush.
 

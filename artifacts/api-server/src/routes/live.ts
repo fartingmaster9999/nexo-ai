@@ -16,6 +16,7 @@ type LiveRouterOptions = {
   fetchImpl?: typeof fetch;
   now?: () => Date;
   rateLimit?: number;
+  tokenTimeoutMs?: number;
 };
 
 function clientKey(request: Request): string {
@@ -47,6 +48,7 @@ export function createLiveRouter({
   fetchImpl = fetch,
   now = () => new Date(),
   rateLimit = TOKEN_RATE_LIMIT,
+  tokenTimeoutMs = TOKEN_REQUEST_TIMEOUT_MS,
 }: LiveRouterOptions = {}): IRouter {
   const router: IRouter = Router();
 
@@ -77,7 +79,7 @@ export function createLiveRouter({
     const timeout = setTimeout(() => {
       timedOut = true;
       abortController.abort(new Error("Gemini Live token request timed out"));
-    }, TOKEN_REQUEST_TIMEOUT_MS);
+    }, tokenTimeoutMs);
     const abortOnDisconnect = () => {
       if (!res.writableEnded) {
         clientDisconnected = true;
@@ -99,6 +101,9 @@ export function createLiveRouter({
           expireTime: expiresAt,
           newSessionExpireTime: newSessionExpiresAt,
           bidiGenerateContentSetup: {
+            // The empty field mask locks the entire setup server-side. The
+            // constrained WebSocket ignores the browser's setup configuration.
+            // https://ai.google.dev/api/live#AuthToken
             model: `models/${GEMINI_LIVE_MODEL}`,
             generationConfig: {
               responseModalities: ["AUDIO"],
@@ -116,6 +121,7 @@ export function createLiveRouter({
       });
 
       if (!upstream.ok) {
+        void upstream.body?.cancel().catch(() => {});
         req.log?.warn(
           { event: "live.token.failed", provider: "gemini", status: upstream.status },
           "Gemini Live token request failed",
@@ -124,12 +130,17 @@ export function createLiveRouter({
         res.status(status).json({
           error: status === 429
             ? "Gemini Live is temporarily rate-limited. Try again later."
-            : "Gemini could not start a Live session. Check that the Gemini API key has Live API access.",
+            : upstream.status === 401 || upstream.status === 403
+              ? "Gemini denied Live access. Check that the Gemini API key is valid, unrestricted for this server, and has Live API access."
+              : upstream.status === 400 || upstream.status === 404
+                ? "Gemini rejected the Live session configuration. Check the API key and that this account has access to the Gemini Live model."
+                : "Gemini could not start a Live session. Try again shortly or check the Gemini service status.",
         });
         return;
       }
 
       const payload: unknown = await upstream.json();
+      if (clientDisconnected || res.destroyed) return;
       if (
         typeof payload !== "object" || payload === null ||
         !("name" in payload) || typeof payload.name !== "string" || !payload.name.trim() ||

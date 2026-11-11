@@ -217,10 +217,13 @@ function Home() {
     const payload = typeof body === 'object' && body !== null ? body as Record<string, unknown> : {};
     if (!response.ok) {
       const failure = new Error(typeof payload.error === 'string' ? payload.error : 'Nexo Live could not start. Please try again.') as Error & { openProviderSettings?: boolean };
-      failure.openProviderSettings = PUBLIC_KEY_MODE && response.status === 401;
+      failure.openProviderSettings = PUBLIC_KEY_MODE && (response.status === 401 || response.status === 502);
       throw failure;
     }
-    if (typeof payload.token !== 'string' || typeof payload.model !== 'string') {
+    if (
+      typeof payload.token !== 'string' || !payload.token.trim() || payload.token.length > 4096 ||
+      typeof payload.model !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,127}$/.test(payload.model)
+    ) {
       throw new Error('Nexo Live received an invalid session token. Please try again.');
     }
     return { token: payload.token, model: payload.model };

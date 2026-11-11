@@ -13,8 +13,10 @@ import {
   LIVE_OUTPUT_SAMPLE_RATE,
   decodePcm16LeBase64,
   encodePcm16LeBase64,
-  resampleMonoToLiveInput,
+  createLiveInputResampler,
 } from "@/lib/live-audio";
+import { startLiveCapture } from "@/lib/live-capture";
+import { createLiveMessageQueue, liveConnectionError, liveProviderError } from "@/lib/live-protocol";
 import "./live-voice-dialog.css";
 
 type LiveStatus = "idle" | "requesting" | "connecting" | "listening" | "speaking" | "ended" | "error";
@@ -30,7 +32,10 @@ type LiveSession = {
   stream?: MediaStream;
   audioContext?: AudioContext;
   tokenController?: AbortController;
-  nodes: AudioNode[];
+  lifetime: AbortController;
+  muted: boolean;
+  closeMessages?: () => void;
+  resampler?: ReturnType<typeof createLiveInputResampler>;
   playbackSources: Set<AudioBufferSourceNode>;
   nextPlaybackTime: number;
   inputSamples: number[];
@@ -56,20 +61,26 @@ function releaseSession(session: LiveSession) {
   if (session.stopped) return;
   session.stopped = true;
   if (session.setupTimer !== undefined) window.clearTimeout(session.setupTimer);
+  session.closeMessages?.();
+  session.lifetime.abort();
   session.tokenController?.abort(new Error("Live session closed"));
-  session.socket?.close(1000, "Nexo Live session ended");
+  const socket = session.socket;
+  if (socket) {
+    socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
+    try { socket.close(1000, "Nexo Live session ended"); } catch { /* connection already gone */ }
+  }
   session.stream?.getTracks().forEach((track) => track.stop());
   for (const source of session.playbackSources) {
+    source.onended = null;
     try { source.stop(); } catch { /* already stopped */ }
+    try { source.disconnect(); } catch { /* already disconnected */ }
   }
   session.playbackSources.clear();
-  session.nodes.forEach((node) => {
-    try { node.disconnect(); } catch { /* already disconnected */ }
-  });
   if (session.audioContext && session.audioContext.state !== "closed") {
     void session.audioContext.close().catch(() => {});
   }
   session.inputSamples.length = 0;
+  session.resampler?.reset();
 }
 
 function appendTranscript(
@@ -86,14 +97,13 @@ function appendTranscript(
   const currentIndex = currentId ? nextLines.findIndex((line) => line.id === currentId) : -1;
   if (currentIndex >= 0) {
     const currentLine = nextLines[currentIndex];
-    const nextText = mode === "append" ? `${currentLine.text}${text}` : text;
+    const nextText = mode === "append" && !(currentLine.interim && !interim) ? `${currentLine.text}${text}` : text;
     nextLines[currentIndex] = { ...currentLine, text: nextText.slice(0, MAX_TRANSCRIPT_LINE_CHARS), interim };
   } else {
     const id = makeId();
     activeIds.current[role] = id;
     nextLines.push({ id, role, text: text.slice(0, MAX_TRANSCRIPT_LINE_CHARS), interim });
   }
-  if (!interim && role === "user") activeIds.current.user = null;
   linesRef.current = nextLines.slice(-MAX_TRANSCRIPT_LINES);
   setLines(linesRef.current);
 }
@@ -132,88 +142,63 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
     sessionRef.current = null;
   }, []);
 
-  const handleServerMessage = useCallback((session: LiveSession, raw: unknown) => {
-    if (session.stopped || typeof raw !== "string") return;
-    let message: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (typeof parsed !== "object" || parsed === null) return;
-      message = parsed as Record<string, unknown>;
-    } catch {
-      setError("Nexo Live received an unreadable message. End the call and try again.");
+  const failSession = useCallback((session: LiveSession, message: string) => {
+    if (session.stopped || sessionRef.current !== session) return;
+    setError(message);
+    setStatus("error");
+    releaseSession(session);
+  }, []);
+
+  const handleServerMessage = useCallback((session: LiveSession, message: Record<string, unknown>) => {
+    if (session.stopped || sessionRef.current !== session) return;
+    if (message.error) {
+      const failure = message.error as { code?: unknown; status?: unknown };
+      failSession(session, liveProviderError(failure.code ?? failure.status));
       return;
     }
 
     if (message.setupComplete) {
+      if (session.setupComplete) return;
       session.setupComplete = true;
-      if (session.setupTimer !== undefined) window.clearTimeout(session.setupTimer);
-      setStatus("listening");
       const context = session.audioContext;
       const stream = session.stream;
       const socket = session.socket;
       if (!context || !stream || !socket) return;
 
       const sendPcm = (input: Float32Array) => {
-        if (session.stopped || !session.setupComplete || socket.readyState !== WebSocket.OPEN) return;
-        const resampled = resampleMonoToLiveInput(input, context.sampleRate);
-        for (const sample of resampled) session.inputSamples.push(sample);
-        while (session.inputSamples.length >= LIVE_INPUT_FRAMES_PER_CHUNK && socket.readyState === WebSocket.OPEN) {
-          const chunk = session.inputSamples.splice(0, LIVE_INPUT_FRAMES_PER_CHUNK);
-          socket.send(JSON.stringify({
-            realtimeInput: {
-              audio: {
-                data: encodePcm16LeBase64(chunk),
-                mimeType: `audio/pcm;rate=${LIVE_INPUT_SAMPLE_RATE}`,
+        if (session.stopped || session.muted || socket.readyState !== WebSocket.OPEN) return;
+        try {
+          // Do not accumulate seconds of old speech during a connection stall.
+          if (socket.bufferedAmount > 256_000) {
+            failSession(session, "Your connection cannot keep up with Live audio. Check your connection and start a new call.");
+            return;
+          }
+          const resampled = session.resampler!.process(input);
+          for (const sample of resampled) session.inputSamples.push(sample);
+          while (session.inputSamples.length >= LIVE_INPUT_FRAMES_PER_CHUNK && !session.stopped) {
+            const chunk = session.inputSamples.splice(0, LIVE_INPUT_FRAMES_PER_CHUNK);
+            socket.send(JSON.stringify({
+              realtimeInput: {
+                audio: {
+                  data: encodePcm16LeBase64(chunk),
+                  mimeType: `audio/pcm;rate=${LIVE_INPUT_SAMPLE_RATE}`,
+                },
               },
-            },
-          }));
+            }));
+          }
+        } catch {
+          failSession(session, "Nexo Live could not send microphone audio. Check your connection and start a new call.");
         }
       };
 
-      const source = context.createMediaStreamSource(stream);
-      const silence = context.createGain();
-      silence.gain.value = 0;
-      session.nodes.push(source, silence);
-      if (context.audioWorklet) {
-        const processorSource = `
-          class NexoLiveInput extends AudioWorkletProcessor {
-            process(inputs) {
-              const channel = inputs[0] && inputs[0][0];
-              if (channel && channel.length) {
-                const copy = channel.slice();
-                this.port.postMessage(copy, [copy.buffer]);
-              }
-              return true;
-            }
-          }
-          registerProcessor("nexo-live-input", NexoLiveInput);
-        `;
-        const moduleUrl = URL.createObjectURL(new Blob([processorSource], { type: "text/javascript" }));
-        void context.audioWorklet.addModule(moduleUrl).then(() => {
-          URL.revokeObjectURL(moduleUrl);
-          if (session.stopped || !session.setupComplete) return;
-          const worklet = new AudioWorkletNode(context, "nexo-live-input");
-          worklet.port.onmessage = (event: MessageEvent<Float32Array>) => sendPcm(event.data);
-          source.connect(worklet);
-          worklet.connect(silence);
-          session.nodes.push(worklet);
-        }).catch(() => {
-          URL.revokeObjectURL(moduleUrl);
-          if (session.stopped || !session.setupComplete) return;
-          const processor = context.createScriptProcessor(4096, 1, 1);
-          processor.onaudioprocess = (event) => sendPcm(event.inputBuffer.getChannelData(0));
-          source.connect(processor);
-          processor.connect(silence);
-          session.nodes.push(processor);
-        });
-      } else {
-        const processor = context.createScriptProcessor(4096, 1, 1);
-        processor.onaudioprocess = (event) => sendPcm(event.inputBuffer.getChannelData(0));
-        source.connect(processor);
-        processor.connect(silence);
-        session.nodes.push(processor);
-      }
-      silence.connect(context.destination);
+      void startLiveCapture({
+        context, stream, signal: session.lifetime.signal, onSamples: sendPcm,
+        onError: () => failSession(session, "Microphone capture stopped. Check your microphone permissions and start a new call."),
+      }).then(() => {
+        if (session.stopped) return;
+        if (session.setupTimer !== undefined) window.clearTimeout(session.setupTimer);
+        if (session.playbackSources.size === 0) setStatus("listening");
+      }).catch(() => failSession(session, "Nexo Live could not capture microphone audio. Try another browser or microphone."));
       return;
     }
 
@@ -232,10 +217,12 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
     const output = content.outputTranscription as { text?: unknown } | undefined;
 
     if (typeof interimInput?.text === "string" && interimInput.text) {
+      const previous = transcriptLinesRef.current.find((line) => line.id === activeTranscriptIds.current.user);
+      if (previous && !previous.interim) activeTranscriptIds.current.user = null;
       appendTranscript(transcriptLinesRef, setLines, activeTranscriptIds, "user", interimInput.text, "replace", true);
     }
     if (typeof finalInput?.text === "string" && finalInput.text) {
-      appendTranscript(transcriptLinesRef, setLines, activeTranscriptIds, "user", finalInput.text, "replace");
+      appendTranscript(transcriptLinesRef, setLines, activeTranscriptIds, "user", finalInput.text, "append");
     }
     if (typeof output?.text === "string" && output.text) {
       appendTranscript(transcriptLinesRef, setLines, activeTranscriptIds, "assistant", output.text, "append");
@@ -243,7 +230,9 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
 
     if (content.interrupted === true) {
       for (const source of session.playbackSources) {
+        source.onended = null;
         try { source.stop(); } catch { /* already stopped */ }
+        try { source.disconnect(); } catch { /* already disconnected */ }
       }
       session.playbackSources.clear();
       session.nextPlaybackTime = 0;
@@ -253,16 +242,23 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
     }
 
     const modelTurn = content.modelTurn as { parts?: Array<Record<string, unknown>> } | undefined;
-    if (modelTurn?.parts && session.audioContext) {
+    if (Array.isArray(modelTurn?.parts) && session.audioContext && content.interrupted !== true) {
       for (const part of modelTurn.parts) {
         const inlineData = (part.inlineData ?? part.inline_data) as { data?: unknown; mimeType?: unknown; mime_type?: unknown } | undefined;
         if (typeof inlineData?.data !== "string") continue;
         try {
-          const pcm = decodePcm16LeBase64(inlineData.data);
           const mimeType = typeof inlineData.mimeType === "string"
             ? inlineData.mimeType
             : typeof inlineData.mime_type === "string" ? inlineData.mime_type : "";
           const sampleRate = Number(/rate=(\d+)/i.exec(mimeType)?.[1] ?? LIVE_OUTPUT_SAMPLE_RATE);
+          if (!/^audio\/pcm(?:;|$)/i.test(mimeType) || !Number.isInteger(sampleRate) || sampleRate < 8_000 || sampleRate > 48_000) {
+            throw new Error("Unsupported Live audio format");
+          }
+          const pcm = decodePcm16LeBase64(inlineData.data);
+          if (
+            Math.max(0, session.nextPlaybackTime - session.audioContext.currentTime) + pcm.length / sampleRate > 60 ||
+            session.playbackSources.size >= 512
+          ) throw new Error("Live playback queue overflow");
           const audioBuffer = session.audioContext.createBuffer(1, pcm.length, sampleRate);
           const channel = audioBuffer.getChannelData(0);
           for (let index = 0; index < pcm.length; index += 1) channel[index] = pcm[index] / 32768;
@@ -271,6 +267,8 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
           source.connect(session.audioContext.destination);
           session.playbackSources.add(source);
           source.onended = () => {
+            source.onended = null;
+            source.disconnect();
             session.playbackSources.delete(source);
             if (!session.stopped && session.playbackSources.size === 0 && session.turnComplete) {
               setStatus("listening");
@@ -282,7 +280,8 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
           session.nextPlaybackTime = startAt + audioBuffer.duration;
           setStatus("speaking");
         } catch {
-          setError("Nexo Live could not play an audio response. Check your device audio and try again.");
+          failSession(session, "Nexo Live could not play an audio response. Check your device audio and start a new call.");
+          return;
         }
       }
     }
@@ -290,16 +289,18 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
     if (content.turnComplete === true) {
       session.turnComplete = true;
       activeTranscriptIds.current.assistant = null;
+      activeTranscriptIds.current.user = null;
       if (session.playbackSources.size === 0) setStatus("listening");
     } else if (content.waitingForInput === true && session.playbackSources.size === 0) {
       setStatus("listening");
     }
-  }, []);
+  }, [failSession]);
 
   const startSession = useCallback(async () => {
     if (sessionRef.current && !sessionRef.current.stopped) return;
     setError("");
     setNeedsSettings(false);
+    setMuted(false);
     transcriptLinesRef.current = [];
     setLines([]);
     activeTranscriptIds.current = { user: null, assistant: null };
@@ -307,7 +308,8 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
 
     const session: LiveSession = {
       stopped: false,
-      nodes: [],
+      lifetime: new AbortController(),
+      muted: false,
       playbackSources: new Set(),
       nextPlaybackTime: 0,
       inputSamples: [],
@@ -315,20 +317,22 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
       turnComplete: false,
     };
     sessionRef.current = session;
+    const deadline = (milliseconds: number, message: string) => {
+      if (session.setupTimer !== undefined) window.clearTimeout(session.setupTimer);
+      session.setupTimer = window.setTimeout(() => failSession(session, message), milliseconds);
+    };
+    deadline(30_000, "Microphone access took too long. Allow microphone access in your browser and start a new call.");
 
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error("This browser cannot access a microphone. Use a current browser over HTTPS.");
       }
-      let audioContext: AudioContext;
-      try {
-        audioContext = new AudioContext({ sampleRate: 16_000 });
-      } catch {
-        audioContext = new AudioContext();
-      }
+      const audioContext = new AudioContext({ latencyHint: "interactive" });
       session.audioContext = audioContext;
+      session.resampler = createLiveInputResampler(audioContext.sampleRate);
       await audioContext.resume();
       if (session.stopped) return;
+      if (audioContext.state !== "running") throw new Error("Your browser blocked audio playback. Allow sound for this site and start a new call.");
 
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -338,8 +342,10 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
         mediaStream.getTracks().forEach((track) => track.stop());
         return;
       }
+      mediaStream.getAudioTracks().forEach((track) => { track.enabled = !session.muted; });
 
       setStatus("connecting");
+      deadline(12_000, "Nexo Live took too long to prepare. Check your connection and try again.");
       const tokenController = new AbortController();
       session.tokenController = tokenController;
       const { token, model } = await fetchToken(tokenController.signal);
@@ -347,55 +353,66 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
       const socketUrl = new URL("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained");
       socketUrl.searchParams.set("access_token", token);
       const socket = new WebSocket(socketUrl);
+      socket.binaryType = "arraybuffer";
       session.socket = socket;
-      session.setupTimer = window.setTimeout(() => {
-        if (!session.stopped && !session.setupComplete) {
-          setError("Gemini Live did not connect in time. Check your key and try again.");
-          setStatus("error");
-          releaseSession(session);
-        }
-      }, 18_000);
+      deadline(18_000, "Gemini Live did not connect in time. Check the key’s Live API access and try again.");
+      const messages = createLiveMessageQueue(
+        (message) => handleServerMessage(session, message),
+        () => failSession(session, "Nexo Live received unreadable or excessive data. Start a new call to try again."),
+      );
+      session.closeMessages = messages.close;
 
       socket.onopen = () => {
         if (session.stopped) return;
-        socket.send(JSON.stringify({
+        try { socket.send(JSON.stringify({
           setup: {
             model: `models/${model}`,
             generationConfig: { responseModalities: ["AUDIO"] },
             inputAudioTranscription: {},
             outputAudioTranscription: {},
           },
-        }));
+        })); } catch {
+          failSession(session, "Nexo Live could not start the connection. Check your connection and try again.");
+        }
       };
-      socket.onmessage = (event) => handleServerMessage(session, event.data);
+      socket.onmessage = (event) => messages.push(event.data);
       socket.onerror = () => {
-        if (session.stopped) return;
-        setError("Nexo Live could not connect to Gemini. Check your internet connection and API key.");
-        setStatus("error");
-        releaseSession(session);
+        failSession(session, liveConnectionError(1006, session.setupComplete));
       };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (session.stopped) return;
-        setError("The Live connection ended. Start a new call to continue.");
-        setStatus("ended");
-        releaseSession(session);
+        failSession(session, liveConnectionError(event.code, session.setupComplete));
       };
     } catch (reason) {
       if (session.stopped) return;
       const failure: LiveTokenError = reason instanceof Error
         ? reason as LiveTokenError
         : new Error("Nexo Live could not start. Please try again.");
-      setError(failure.message);
+      setError(failure.name === "NotAllowedError"
+        ? "Microphone access was blocked. Allow microphone access in your browser settings, then start a new call."
+        : failure.name === "NotFoundError"
+          ? "No microphone was found. Connect a microphone and start a new call."
+          : failure.name === "NotReadableError"
+            ? "Your microphone is busy or unavailable. Close other apps using it, then start a new call."
+            : failure.message);
       setNeedsSettings(failure.openProviderSettings === true);
       setStatus("error");
       releaseSession(session);
     }
-  }, [fetchToken, handleServerMessage]);
+  }, [fetchToken, handleServerMessage, failSession]);
 
   const toggleMute = () => {
-    const nextMuted = !muted;
-    const track = sessionRef.current?.stream?.getAudioTracks()[0];
-    if (track) track.enabled = !nextMuted;
+    const session = sessionRef.current;
+    if (!session || session.stopped) return;
+    const nextMuted = !session.muted;
+    session.muted = nextMuted;
+    session.stream?.getAudioTracks().forEach((track) => { track.enabled = !nextMuted; });
+    session.inputSamples.length = 0;
+    session.resampler?.reset();
+    if (nextMuted && session.setupComplete && session.socket?.readyState === WebSocket.OPEN) {
+      try { session.socket.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } })); }
+      catch { failSession(session, "Nexo Live lost its connection. Start a new call to continue."); }
+    }
     setMuted(nextMuted);
   };
 

@@ -5,7 +5,7 @@ import { LiveVoiceDialog } from "../src/components/live-voice-dialog";
 type MockSocket = {
   readyState: number;
   onopen: ((event: Event) => void) | null;
-  onmessage: ((event: { data: string }) => void) | null;
+  onmessage: ((event: { data: unknown }) => void) | null;
   onerror: ((event: Event) => void) | null;
   onclose: ((event: Event) => void) | null;
   send(payload: string): void;
@@ -18,6 +18,14 @@ type TestWindow = Window & {
   __liveMessages?: unknown[];
   __liveTrack?: { enabled: boolean; stopped: boolean; stop(): void };
   __settingsOpened?: boolean;
+  __liveContexts?: MockAudioContext[];
+  __liveSources?: ReturnType<MockAudioContext["createBufferSource"]>[];
+  __liveProcessor?: { onaudioprocess: ((event: { inputBuffer: { getChannelData(): Float32Array } }) => void) | null };
+  __denyMic?: boolean;
+  __holdMic?: boolean;
+  __resolveMic?: () => void;
+  __holdPlayback?: boolean;
+  __tokenFailure?: boolean;
 };
 
 const testWindow = window as TestWindow;
@@ -25,8 +33,10 @@ const testWindow = window as TestWindow;
 class MockWebSocket {
   static OPEN = 1;
   readyState = 0;
+  binaryType = "blob";
+  bufferedAmount = 0;
   onopen: ((event: Event) => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   onclose: ((event: Event) => void) | null = null;
 
@@ -34,6 +44,7 @@ class MockWebSocket {
     testWindow.__liveUrl = String(url);
     testWindow.__liveSocket = this;
     window.setTimeout(() => {
+      if (this.readyState === 3) return;
       this.readyState = MockWebSocket.OPEN;
       this.onopen?.(new Event("open"));
     }, 0);
@@ -44,7 +55,7 @@ class MockWebSocket {
     testWindow.__liveMessages ??= [];
     testWindow.__liveMessages.push(message);
     if (typeof message === "object" && message !== null && "setup" in message) {
-      window.setTimeout(() => this.onmessage?.({ data: JSON.stringify({ setupComplete: {} }) }), 0);
+      window.setTimeout(() => this.onmessage?.({ data: new Blob([JSON.stringify({ setupComplete: {} })]) }), 0);
     }
   }
 
@@ -60,15 +71,20 @@ class MockAudioContext {
   state = "suspended";
   destination = {};
 
-  constructor(options?: { sampleRate?: number }) {
-    this.sampleRate = options?.sampleRate ?? 16_000;
+  constructor() {
+    this.sampleRate = 48_000;
+    (testWindow.__liveContexts ??= []).push(this);
   }
 
   async resume() { this.state = "running"; }
   async close() { this.state = "closed"; }
   createMediaStreamSource() { return mockNode(); }
   createGain() { return { ...mockNode(), gain: { value: 1 } }; }
-  createScriptProcessor() { return { ...mockNode(), onaudioprocess: null }; }
+  createScriptProcessor() {
+    const processor = { ...mockNode(), onaudioprocess: null };
+    testWindow.__liveProcessor = processor;
+    return processor;
+  }
   createBuffer(_channels: number, length: number, sampleRate: number) {
     return { duration: length / sampleRate, getChannelData: () => new Float32Array(length) };
   }
@@ -76,46 +92,51 @@ class MockAudioContext {
     const source = {
       ...mockNode(),
       buffer: null as unknown,
+      stopped: false,
       onended: null as (() => void) | null,
-      start: () => window.setTimeout(() => source.onended?.(), 5),
-      stop: () => source.onended?.(),
+      start: () => { if (!testWindow.__holdPlayback) window.setTimeout(() => source.onended?.(), 5); },
+      stop: () => { source.stopped = true; source.onended?.(); },
     };
+    (testWindow.__liveSources ??= []).push(source);
     return source;
   }
 }
 
 function mockNode() {
-  return { connect() {}, disconnect() {} };
+  return { disconnected: false, connect() {}, disconnect() { this.disconnected = true; } };
 }
 
 Object.defineProperty(window, "WebSocket", { configurable: true, value: MockWebSocket });
 Object.defineProperty(window, "AudioContext", { configurable: true, value: MockAudioContext });
-const track = {
-  enabled: true,
-  stopped: false,
-  stop() { this.stopped = true; },
-};
-testWindow.__liveTrack = track;
 Object.defineProperty(navigator, "mediaDevices", {
   configurable: true,
   value: {
-    getUserMedia: async () => ({
-      getTracks: () => [track],
-      getAudioTracks: () => [track],
-    } as unknown as MediaStream),
+    getUserMedia: async () => {
+      if (testWindow.__denyMic) throw new DOMException("Test denial", "NotAllowedError");
+      if (testWindow.__holdMic) await new Promise<void>((resolve) => { testWindow.__resolveMic = resolve; });
+      const track = Object.assign(new EventTarget(), {
+        enabled: true, stopped: false, stop() { this.stopped = true; },
+      });
+      testWindow.__liveTrack = track;
+      return { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
+    },
   },
 });
 
 function Fixture() {
   const [open, setOpen] = useState(true);
-  return (
+  return (<>
+    <button type="button" id="reopen-live" onClick={() => setOpen(true)}>Reopen Live</button>
     <LiveVoiceDialog
       open={open}
       onOpenChange={setOpen}
-      fetchToken={async () => ({ token: "test-ephemeral-token", model: "gemini-3.8-live" })}
+      fetchToken={async () => {
+        if (testWindow.__tokenFailure) throw Object.assign(new Error("Add a Gemini API key in Settings to use Nexo Live."), { openProviderSettings: true });
+        return { token: "test-ephemeral-token", model: "gemini-3.8-live" };
+      }}
       onOpenSettings={() => { (window as TestWindow).__settingsOpened = true; }}
     />
-  );
+  </>);
 }
 
 createRoot(document.getElementById("root")!).render(<Fixture />);

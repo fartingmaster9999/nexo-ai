@@ -39,6 +39,7 @@ test("private Live token creation uses the server key and locks the session to a
   await withServer(router, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/live/token`, { method: "POST" });
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
     assert.deepEqual(await response.json(), {
       token: "ephemeral-live-session-token",
       expiresAt: "2026-11-10T18:30:00.000Z",
@@ -142,5 +143,49 @@ test("Gemini rate-limit errors stay distinguishable and upstream error bodies ar
     const body = await response.json();
     assert.match(body.error, /temporarily rate-limited/);
     assert.doesNotMatch(body.error, /sensitive upstream detail/);
+  });
+});
+
+test("Gemini access and configuration errors are safe and actionable", async () => {
+  for (const [status, expected] of [[401, /denied Live access/], [403, /denied Live access/], [400, /configuration/], [404, /configuration/], [503, /service status/]]) {
+    const router = createLiveRouter({
+      getApiKey: () => "test-server-key", rateLimit: 100,
+      fetchImpl: async () => new Response("sensitive provider response", { status }),
+    });
+    await withServer(router, async (url) => {
+      const response = await fetch(`${url}/api/live/token`, { method: "POST" });
+      assert.equal(response.status, 502);
+      const body = await response.json();
+      assert.match(body.error, expected);
+      assert.doesNotMatch(body.error, /sensitive/);
+    });
+  }
+});
+
+test("Live token timeout aborts the provider and returns a retryable error", async () => {
+  let aborted = false;
+  const router = createLiveRouter({
+    getApiKey: () => "test-server-key", rateLimit: 100, tokenTimeoutMs: 20,
+    fetchImpl: async (_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => { aborted = true; reject(signal.reason); }, { once: true });
+    }),
+  });
+  await withServer(router, async (url) => {
+    const response = await fetch(`${url}/api/live/token`, { method: "POST" });
+    assert.equal(response.status, 504);
+    assert.equal(aborted, true);
+    assert.match((await response.json()).error, /took too long/);
+  });
+});
+
+test("invalid provider JSON does not expose parser details or credentials", async () => {
+  const router = createLiveRouter({
+    getApiKey: () => "test-server-key", rateLimit: 100,
+    fetchImpl: async () => new Response("not-json-sensitive-token", { status: 200 }),
+  });
+  await withServer(router, async (url) => {
+    const response = await fetch(`${url}/api/live/token`, { method: "POST" });
+    assert.equal(response.status, 502);
+    assert.doesNotMatch(JSON.stringify(await response.json()), /sensitive|test-server-key/);
   });
 });
