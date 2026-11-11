@@ -387,8 +387,9 @@ test("coding tries all ready coding models before reporting quota failure withou
   } finally { [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit); }
 });
 
+for (const rejectedStatus of [429, 403, 404, 503]) {
 for (const successfulModel of [PRIMARY_MODEL, SMALL_MODEL]) {
-test(`coding switches to ${successfulModel} before waiting and retains it through completed tool history`, async () => {
+test(`coding recovers from HTTP ${rejectedStatus} with ${successfulModel} and retains completed tool history`, async () => {
   const codingModels = [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL];
   codingModels.forEach(clearRateLimit);
   const requests = [];
@@ -402,7 +403,7 @@ test(`coding switches to ${successfulModel} before waiting and retains it throug
       if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
       requests.push(request);
       if (request.model !== successfulModel) {
-        throw new Groq.APIError(429, { message: "Requests per minute (RPM): Limit 30, Used 30, Requested 1" },
+        throw new Groq.APIError(rejectedStatus, { message: "Requests per minute (RPM): Limit 30, Used 30, Requested 1" },
           undefined, new Headers({ "retry-after": "60" }));
       }
       assert.equal(request.reasoning_format, undefined, "no Qwen-only options on GPT-OSS");
@@ -434,10 +435,41 @@ test(`coding switches to ${successfulModel} before waiting and retains it throug
       assert.equal(continued.some(event => event.agentTool || event.error), false, "no completed action replay");
       assert.equal(requests.at(-1).model, successfulModel);
     });
-    assert.deepEqual(requests.map(request => request.model), successfulModel === PRIMARY_MODEL
-      ? [CODING_FALLBACK, PRIMARY_MODEL, PRIMARY_MODEL]
-      : [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL, SMALL_MODEL]);
-  } finally { codingModels.forEach(clearRateLimit); }
+    const rejected = successfulModel === PRIMARY_MODEL ? [CODING_FALLBACK] : [CODING_FALLBACK, PRIMARY_MODEL];
+    assert.deepEqual(requests.map(request => request.model), [
+      ...rejected.flatMap(model => rejectedStatus === 503 ? [model, model] : [model]),
+      successfulModel, successfulModel,
+    ]);
+  } finally { codingModels.forEach(clearRateLimit); codingModels.forEach(clearModelUnhealthy); }
+});
+}
+}
+
+for (const status of [401, 403]) {
+test(`coding reports HTTP ${status} accurately when no model can authorize`, async () => {
+  const models = [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL];
+  models.forEach(clearRateLimit);
+  models.forEach(clearModelUnhealthy);
+  const attempts = [];
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async request => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      attempts.push(request.model);
+      throw new Groq.APIError(status, { message: "PRIVATE_PROVIDER_DETAIL" }, undefined, new Headers());
+    } } },
+  };
+  await withServer(createApp(client), async url => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a simple HTML website" }] }),
+    }));
+    const error = events.find(event => event.error)?.error;
+    assert.match(error, status === 401 ? /API key/ : /access.*denied/i);
+    assert.equal(JSON.stringify(events).includes("PRIVATE_PROVIDER_DETAIL"), false);
+    assert.equal(events.some(event => event.agentTool || event.notice), false);
+  });
+  assert.deepEqual(attempts, status === 401 ? [CODING_FALLBACK] : models);
 });
 }
 

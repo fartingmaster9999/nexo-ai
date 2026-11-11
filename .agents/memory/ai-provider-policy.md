@@ -69,6 +69,12 @@ Do not interpret every Groq 429 as exhausted daily requests. Token and request l
 
 **How to apply:** Prefer models outside provider retry windows, but treat cooldowns as routing hints rather than proof of current exhaustion. When every compatible candidate is cached, permit one bounded live check of the earliest-expiring candidate and clear its cooldown on success. Do not cache request-size rejections as model-wide outages. Retain only allowlisted quota diagnostics (metric, numeric counters, reset/retry headers), never raw upstream bodies or prompts. Distinguish observed limits from an unproven historical cause, especially across Replit and Vercel accounts.
 
+Catalog visibility is not proof of permission to generate with a model. Agent coding fallback must cover model access denial and unavailability, not only rate limits.
+
+**Why:** Coding had a separate exclusion from compatible-model recovery, so a listed model's access denial stopped builds despite other approved models being available.
+
+**How to apply:** Try remaining catalog-verified coding models on 403/404 and recoverable service failures, with bounded attempts and preserved tool history. Do not fan out on 401: that is a credential failure. Report authorization failures separately from quota exhaustion.
+
 Treat Groq HTTP 413 as request-size rejection, separately from HTTP 429 and timeouts.
 
 **Why:** A live Agent build saved a partial website but its continuation failed with HTTP 413. Increasing retry waits could not resolve an oversized continuation; the generic error hid the distinction.

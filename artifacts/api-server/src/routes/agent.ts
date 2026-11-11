@@ -1041,8 +1041,12 @@ export function createAgentRouter({
             await waitForGeminiRetry(controller.signal, 500);
             continue;
           }
-          if (activeProvider === "groq" && activeTask !== "coding" &&
-              shouldTryCompatibleModel(candidate.status, failure?.code)) {
+          // Catalog visibility does not guarantee generation permission. A 403
+          // can be model-specific; try the remaining verified models once.
+          // A 401 is a credential failure and must not fan out across models.
+          if (activeProvider === "groq" &&
+              (shouldTryCompatibleModel(candidate.status, failure?.code) ||
+                candidate.status === 403 || candidate.status === 404)) {
             const nextIndex = groqCandidates.findIndex((model, index) =>
               index > groqModelIndex && !isCoolingDown(model) && !isModelUnhealthy(model));
             if (nextIndex >= 0) {
@@ -1050,6 +1054,10 @@ export function createAgentRouter({
               groqModelIndex = nextIndex;
               activeModel = groqCandidates[nextIndex]!;
               groqFailureRetries = 0;
+              outputBudgetRetried = false;
+              outputTruncationRetries = 0;
+              modelIdleRetries = 0;
+              repairToolRequest = false;
               req.log.warn({
                 event: "agent.model.fallback",
                 provider: "groq",
@@ -1377,6 +1385,12 @@ export function createAgentRouter({
         ? "Nexo Agent timed out. Your partial answer is kept; please try again."
         : error instanceof AgentPublicError || error instanceof AgentOutputLimitError
           ? error.message
+          : activeProvider === "groq" && status === 401
+            ? "Groq rejected the API key (HTTP 401). Check the Groq key configured for this deployment. No new code was run; your saved project is kept."
+          : activeProvider === "groq" && status === 403
+            ? "Groq model access was denied (HTTP 403), and no remaining compatible model could complete the request. Check model permissions for this Groq project. Your saved project is kept."
+          : activeProvider === "groq" && status === 404
+            ? "Groq could not find an accessible coding model (HTTP 404). Check the models enabled for this Groq project. Your saved project is kept."
           : activeProvider === "groq" && status === 413
             ? `Groq rejected ${modelLabel(activeModel)}'s request as too large (HTTP 413). Nexo could not safely fit the current context within its request allowance. Your saved project is kept. Ask for a smaller change to the existing files; this is not a timeout or exhausted daily messages.`
           : activeProvider === "groq" && status === 429
