@@ -681,7 +681,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         </header>
         {storageError && <div className="ws-banner" role="alert">{storageError}</div>}
         <div className="wsi-body">
-          {waiting ? (
+          {waiting && !preview ? (
             <div className="wsi-waiting" role="status" aria-live="polite" data-testid="status-agent-waiting">
               <div className="wsi-frame" aria-hidden="true">
                 <div className="wsi-frame-bar"><i /><i /><i /></div>

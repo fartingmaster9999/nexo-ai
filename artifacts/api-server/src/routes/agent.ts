@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request } from "express";
-import { agentBuildPolicy } from "../lib/agent-build-policy";
+import { agentBuildPolicy, incompleteAgentHtml } from "../lib/agent-build-policy";
 import Groq from "groq-sdk";
 import { StreamAgentChatBody, type AgentRateLimitRetry, type AgentToolExchange } from "@workspace/api-zod";
 import { isValidTimeZone } from "../lib/chat-request";
@@ -18,7 +18,7 @@ import {
   availableGeminiAgentModels, buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError,
   geminiAgentErrorMessage, geminiResponseBlocked, GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_MODEL,
   MAX_AGENT_CODE_CHARS, MAX_AGENT_HTML_PREVIEW_RUNS, MAX_AGENT_PLAN_CHARS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
-  requestGeminiAgentStream, validateAgentHistory, validateAgentProjectFiles,
+  requestGeminiAgentStream, validateAgentHistory, validateAgentProjectFiles, GeminiAgentStreamError,
 } from "../lib/gemini-agent";
 import { AgentOutputLimitError, buildGroqAgentRequest, collectGroqAgentResponse, groqAgentFailure } from "../lib/groq-agent";
 import { createUserChatClient, getChatClient, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
@@ -158,6 +158,9 @@ function normalizeTimestamp(value: unknown): Date | undefined {
 }
 
 function safeAgentFailureDetails(error: unknown) {
+  if (error instanceof GeminiAgentStreamError) {
+    return { failureKind: "gemini_transport", failureReason: error.code };
+  }
   if (error instanceof AgentPublicError) {
     return { failureKind: "agent", failureReason: error.message };
   }
@@ -577,7 +580,7 @@ export function createAgentRouter({
           await emit({ activity: { id: activityId, label: "Safeguard review is unavailable; server-side restrictions remain active", kind: "security", status: "error" } });
         }
       };
-      const switchToGeminiFallback = async (reason: "provider_error" | "stream_idle", status?: number) => {
+      const switchToGeminiFallback = async (reason: "provider_error" | "stream_idle" | "connection_interrupted", status?: number) => {
         if (activeProvider !== "gemini" || toolCalls !== 0) return false;
         const nextIndex = geminiCandidates.findIndex(
           (model, index) => index > geminiModelIndex && !isCoolingDown(model) && !isModelUnhealthy(model),
@@ -648,6 +651,7 @@ export function createAgentRouter({
       let groqFailureRetries = 0;
       let repairToolRequest = false;
       let outputBudgetRetried = false;
+      let outputTruncationRetries = 0;
       let projectValidationFailed = false;
       let previewBudgetExhausted = false;
       let compactRequest = (parsed.data.agentRetryCount ?? 0) > 0;
@@ -684,8 +688,13 @@ export function createAgentRouter({
               request.tool_choice = "required";
               request.messages.push({
                 role: "system",
-                content: "Your previous project payload was rejected without changing any saved files. Return a corrected write_project call. Include the HTML entrypoint in files, use safe relative paths, and keep the complete combined project within 8 files and 12000 characters. Do not repeat a malformed or oversized payload.",
+                content: "Your previous project payload was rejected without changing any saved files. Return a corrected write_project or run_code call. Include the HTML entrypoint in files, close every style/script block, use safe relative paths, and keep the complete combined project within 8 files and 12000 characters. Do not repeat a malformed, truncated or oversized payload.",
               });
+            }
+            if (outputTruncationRetries > 0) {
+              if (activeModel.startsWith("qwen/")) request.reasoning_effort = "none";
+              request.messages.push({ role: "system", content:
+                "Your previous response was cut off before completion. None of its tool calls were executed. Use the response allowance for complete source instead of extended reasoning. Make a compact but fully functional change, preserve existing features, and close all code and JSON. Never return only the beginning of a file." });
             }
             if (repairToolRequest) {
               request.temperature = 0.2;
@@ -761,6 +770,9 @@ export function createAgentRouter({
                 if (eventChars > 160_000) throw new AgentPublicError("Gemini's Agent response exceeded the safe output limit.");
                 events.push(item);
               }
+            } catch (error) {
+              if (attemptController.signal.aborted || error instanceof AgentPublicError) throw error;
+              throw new GeminiAgentStreamError("stream_interrupted");
             } finally {
               await reader.cancel().catch(() => {});
               reader.releaseLock();
@@ -770,6 +782,29 @@ export function createAgentRouter({
             });
           }
         } catch (error) {
+          if (activeProvider === "groq" && error instanceof AgentOutputLimitError &&
+              outputTruncationRetries < 1 && !controller.signal.aborted && !attemptController.signal.aborted) {
+            outputTruncationRetries++;
+            compactRequest = true;
+            await emit({ activity: { id: "agent-output-recovery",
+              label: "The response was cut off; retrying with the budget reserved for complete code. Saved files are unchanged.",
+              kind: "code", status: "running" } });
+            continue;
+          }
+          if (activeProvider === "gemini" && error instanceof GeminiAgentStreamError &&
+              !controller.signal.aborted && !attemptController.signal.aborted) {
+            if (modelIdleRetries < 1) {
+              modelIdleRetries++;
+              req.log.warn({ event: "agent.gemini.transport_retry", model: activeModel, reason: error.code },
+                "Retrying interrupted Gemini response before dispatching tools");
+              await emit({ activity: { id: "agent-provider-recovery",
+                label: "Gemini disconnected; reconnecting without repeating completed actions…",
+                kind: "info", status: "running" } });
+              await waitForGeminiRetry(controller.signal, 500);
+              continue;
+            }
+            if (await switchToGeminiFallback("connection_interrupted")) continue;
+          }
           if (activeProvider === "gemini" && error instanceof GeminiAgentApiError) {
             if (!isProgramReview && error.status === 429 && await switchToGroqFallback(error.status)) continue;
             if ((error.status === 404 || error.status === 408 || error.status >= 500) &&
@@ -981,6 +1016,12 @@ export function createAgentRouter({
           await emit({ activity: { id: "agent-provider-recovery", label: "Agent response recovered", kind: "info", status: "complete" } });
           repairToolRequest = false;
         }
+        if (activeProvider === "gemini" && modelIdleRetries > 0) {
+          await emit({ activity: { id: "agent-provider-recovery", label: "Gemini response recovered", kind: "info", status: "complete" } });
+        }
+        if (outputTruncationRetries > 0) {
+          await emit({ activity: { id: "agent-output-recovery", label: "Complete response recovered", kind: "code", status: "complete" } });
+        }
         modelIdleRetries = 0;
         if (activeProvider === "gemini" && geminiResponseBlocked(modelResponse)) {
           req.log.warn({
@@ -1095,7 +1136,8 @@ export function createAgentRouter({
         if (call.tool === "write_project") {
           const files = validateAgentProjectFiles(call.arguments.files);
           const entrypoint = call.arguments.entrypoint;
-          if (!files || typeof entrypoint !== "string" || !files.some((file) => file.path === entrypoint)) {
+          if (!files || typeof entrypoint !== "string" || !files.some((file) => file.path === entrypoint) ||
+              files.some(file => /\.html?$/i.test(file.path) && incompleteAgentHtml(file.content))) {
             projectValidationFailed = true;
             await emit({ activity: {
               id: `agent-project-${call.callId}`, label: "Correcting the generated project before running it",
@@ -1149,6 +1191,13 @@ export function createAgentRouter({
         if ((language !== "python" && language !== "javascript" && language !== "html") ||
             typeof code !== "string" || !code.trim() || code.length > MAX_AGENT_CODE_CHARS) {
           throw new AgentPublicError("Nexo Agent returned unsupported or oversized code. Please try a smaller request.");
+        }
+        if (language === "html" && incompleteAgentHtml(code)) {
+          projectValidationFailed = true;
+          await emit({ activity: { id: `agent-code-${call.callId}`,
+            label: "Incomplete HTML was rejected before execution; requesting a complete repair",
+            kind: "code", status: "error" } });
+          continue;
         }
         const arguments_ = { language: language as "python" | "javascript" | "html", code };
         const previous = history.find((exchange) => sameToolArguments(exchange, { tool: call.tool, arguments: arguments_ }));
@@ -1246,6 +1295,10 @@ export function createAgentRouter({
                 : `Gemini is temporarily rate-limited, and no compatible Groq model is available for the ${activeTask} task. Please check the server's Groq model access.`
             : error instanceof GeminiAgentApiError
             ? geminiAgentErrorMessage(error.status)
+            : error instanceof GeminiAgentStreamError
+              ? "Gemini's connection was interrupted after recovery attempts. Your saved files and completed actions are kept. Resume Agent to continue."
+            : error instanceof Error && error.message === "Gemini returned an incomplete Agent tool request."
+              ? "Gemini returned a tool request without the required arguments or signature. No action from that response was run; your existing project is kept."
             : "Nexo Agent could not complete this request. Please try again.";
       try {
         await writeChatEvent(res, { activity: { id: "agent-finished", label: "Agent run was interrupted", kind: "info", status: "error" } }, AbortSignal.timeout(5000));

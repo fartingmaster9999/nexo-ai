@@ -37,6 +37,12 @@ Agent project updates are file upserts, not implicit deletion requests. Validate
 
 **How to apply:** Retain unmentioned files, keep the entrypoint in update payloads, enforce total limits after merging, and reject missing local assets before committing. Feed validation errors back to Agent for correction while preserving the previous project. File deletion remains an explicit user action.
 
+Valid tool JSON does not prove generated HTML is complete.
+
+**Why:** A real Agent revision wrapped a file ending halfway through an open style block in valid JSON. The browser accepted it without a syntax exception but rendered a blank page, replacing a working counter.
+
+**How to apply:** Reject unfinished HTML raw-text blocks and comments before dispatching a save/run. Keep the prior rendered preview available during follow-up planning; do not hide it behind a first-build placeholder.
+
 Load only the editor language in use and Python packages needed by the executed code, rather than preloading all language modes or scientific packages.
 
 **Why:** The user explicitly requested not to load every language or every Python library. Earlier requests to make scientific libraries available do not mean they should all be downloaded and imported on each run.

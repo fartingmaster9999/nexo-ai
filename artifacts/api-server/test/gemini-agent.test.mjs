@@ -148,6 +148,89 @@ function geminiResponse(events, status = 200) {
   return new Response(body, { status, headers: { "Content-Type": "text/event-stream" } });
 }
 
+test("Gemini's optional tool ID gets a unique local ID without changing the signed provider history", () => {
+  const event = modelEvent([{
+    functionCall: { name: "run_code", args: { language: "javascript", code: "console.log(42)" } },
+    thoughtSignature: "original-signed-part",
+  }]);
+  const call = collectAgentResponse([event]).calls[0];
+  const second = collectAgentResponse([event]).calls[0];
+  assert.notEqual(call.callId, second.callId, "independent responses must not collide");
+  assert.ok(call.callId.length <= 128);
+  const request = buildGeminiAgentRequest({
+    ...input, agentHistory: [{ ...call, result: "stdout: 42" }],
+  });
+  const original = request.contents.at(-2).parts[0];
+  const response = request.contents.at(-1).parts[0].functionResponse;
+  assert.equal(original.functionCall.id, undefined);
+  assert.equal(response.id, undefined);
+  assert.equal(original.thoughtSignature, "original-signed-part");
+  assert.deepEqual(original.functionCall.args, event.candidates[0].content.parts[0].functionCall.args);
+  assert.throws(() => collectAgentResponse([modelEvent([{
+    functionCall: { name: "run_code", args: { language: "javascript", code: "console.log(42)" } },
+  }])]), /incomplete Agent tool request/, "a required signature is still enforced");
+});
+
+test("Agent completes a tool loop when Gemini omits the optional function-call ID", async () => {
+  const requests = [];
+  let searches = 0;
+  await withServer(createSseApp({
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      return requests.length === 1
+        ? geminiResponse([modelEvent([{
+          functionCall: { name: "web_search", args: { query: "latest public release" } },
+          thoughtSignature: "signed-search",
+        }])])
+        : geminiResponse([modelEvent([{ text: "The verified release summary is ready." }])]);
+    },
+    search: async () => { searches++; return { context: "Release notes", sources: [] }; },
+  }), async (url) => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    }));
+    assert.ok(events.some(event => event.content === "The verified release summary is ready."));
+    assert.equal(events.some(event => event.error), false);
+  });
+  assert.equal(searches, 1);
+  assert.equal(requests[1].contents.at(-2).parts[0].functionCall.id, undefined);
+  assert.equal(requests[1].contents.at(-1).parts[0].functionResponse.id, undefined);
+});
+
+test("Agent retries an interrupted Gemini stream before executing any of its partial tool calls", async () => {
+  let attempts = 0;
+  let searches = 0;
+  const requests = [];
+  await withServer(createSseApp({
+    fetchImpl: async (_url, init) => {
+      attempts++;
+      requests.push(JSON.parse(init.body));
+      if (attempts > 1) return geminiResponse([modelEvent([{ text: "Recovered answer." }])]);
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(modelEvent([{
+            functionCall: { name: "web_search", args: { query: "must not execute this partial response" } },
+            thoughtSignature: "partial-sig",
+          }]))}\n\n`));
+        },
+        pull(controller) { controller.error(new TypeError("SENSITIVE_PROVIDER_BODY")); },
+      }), { headers: { "Content-Type": "text/event-stream" } });
+    },
+    search: async () => { searches++; return { context: "", sources: [] }; },
+  }), async (url) => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    }));
+    assert.ok(events.some(event => event.content === "Recovered answer."));
+    assert.ok(events.some(event => event.activity?.id === "agent-provider-recovery"));
+    assert.equal(events.some(event => event.error), false);
+    assert.equal(JSON.stringify(events).includes("SENSITIVE_PROVIDER_BODY"), false);
+  });
+  assert.equal(attempts, 2);
+  assert.equal(searches, 0, "partial streamed tools must never run");
+  assert.deepEqual(requests[0].contents, requests[1].contents, "recovery keeps the same completed history");
+});
+
 function createSseApp({
   getApiKey = () => "test-only-key",
   getGroqClient = () => undefined,
@@ -863,7 +946,7 @@ test("Agent logs known parser failures without logging credentials or upstream b
   assert.equal(JSON.stringify(logs).includes("console.log(1)"), false);
 });
 
-test("Agent never copies unknown transport error messages into diagnostics", async () => {
+test("Agent reports interrupted connections without copying transport secrets into diagnostics", async () => {
   const logs = [];
   const logger = pino({ level: "info" }, { write: (line) => logs.push(JSON.parse(line)) });
   await withServer(createSseApp({
@@ -874,12 +957,12 @@ test("Agent never copies unknown transport error messages into diagnostics", asy
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
     });
     const body = await response.text();
-    assert.match(body, /could not complete/);
+    assert.match(body, /connection was interrupted after recovery attempts/);
     assert.equal(body.includes("SENSITIVE_PROVIDER_BODY"), false);
   });
   const failure = logs.find((entry) => entry.event === "agent.stream.failed");
-  assert.equal(failure.failureKind, "Error");
-  assert.equal(failure.failureReason, undefined);
+  assert.equal(failure.failureKind, "gemini_transport");
+  assert.equal(failure.failureReason, "connection_interrupted");
   assert.equal(JSON.stringify(logs).includes("SENSITIVE_PROVIDER_BODY"), false);
   assert.equal(JSON.stringify(logs).includes("test-only-key"), false);
 });

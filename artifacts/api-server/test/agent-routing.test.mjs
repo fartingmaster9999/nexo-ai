@@ -674,6 +674,60 @@ test("truncated Qwen tool output is rejected before incomplete code can run", as
   })();
   await assert.rejects(collectGroqAgentResponse(stream, new AbortController().signal), /No incomplete code was run/);
 });
+
+test("Agent retries a cut-off Qwen response once without reasoning overhead or executing partial code", async () => {
+  const requests = [];
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      requests.push(request);
+      if (requests.length === 1) return (async function* () {
+        yield { choices: [{ delta: {}, finish_reason: "length" }] };
+      })();
+      return projectStream("complete-retry", {
+        entrypoint: "index.html", files: [{ path: "index.html", content: '<button>Complete app</button>' }],
+      });
+    } } },
+  };
+  await withServer(createApp(client), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a tiny website" }] }),
+    }));
+    assert.equal(events.filter(event => event.agentTool).length, 1);
+    assert.equal(events.find(event => event.agentTool).agentTool.callId, "complete-retry");
+    assert.equal(events.some(event => event.error), false);
+  });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].model, CODING_FALLBACK);
+  assert.equal(requests[1].reasoning_effort, "none");
+});
+
+test("Agent rejects valid tool JSON containing truncated HTML before it can overwrite a project", async () => {
+  let attempts = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      attempts++;
+      return projectStream(attempts === 1 ? "bad-html" : "good-html", {
+        entrypoint: "index.html", files: [{ path: "index.html",
+          content: attempts === 1 ? '<style>body{border:1' : '<style>body{color:navy}</style><button>Reset</button>' }],
+      });
+    } } },
+  };
+  await withServer(createApp(client), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a tiny website" }] }),
+    }));
+    assert.equal(events.filter(event => event.agentTool).length, 1);
+    assert.equal(events.find(event => event.agentTool).agentTool.callId, "good-html");
+    assert.equal(events.some(event => event.error), false);
+  });
+  assert.equal(attempts, 2);
+});
 test("Agent rechecks one live model when every candidate has a cached cooldown", async () => {
   const models = [SMALL_MODEL, PRIMARY_MODEL, CODING_FALLBACK];
   for (let index = 0; index < models.length; index++) markRateLimited(models[index], String(600 + index * 100));

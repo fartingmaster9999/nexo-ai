@@ -157,6 +157,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
           });
         }
         if (window.__agentRequests.length === 9) {
+          await new Promise(resolve => setTimeout(resolve, 600));
           const events = [
             { model: "gemini-3.8-flash", agentProvider: "gemini", agentTask: "multimodal" },
             { activity: { id: "agent-finished", label: "Agent run was interrupted", kind: "info", status: "error" } },
@@ -355,6 +356,8 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
   await waitFor(() => evaluate(`window.__agentRequests.length === 9`), "failed image-bearing Agent request");
   assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute("srcdoc")?.includes("Corrected preview")`), "a follow-up request keeps the last working preview visible while Agent starts");
+  assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getBoundingClientRect().width > 0`), "the existing preview stays visible, not hidden behind a drafting placeholder");
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-testid="status-agent-waiting"]'))`), false, "planning does not replace an existing preview");
   await waitFor(() => evaluate(`document.body.textContent.includes("Nexo Agent could not complete this request. Please try again.")`), "safe Agent failure message");
   assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute("srcdoc")?.includes("Corrected preview")`), "a failed follow-up keeps the previous preview");
   const failedImageRequest = await evaluate(`window.__agentRequests[8]`);

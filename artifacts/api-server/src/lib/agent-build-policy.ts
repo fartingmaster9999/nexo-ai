@@ -1,5 +1,24 @@
 import type { AgentChatInput } from "@workspace/api-zod";
 
+/** Reject raw-text truncation that browsers otherwise silently accept as a blank page. */
+export function incompleteAgentHtml(source: string): boolean {
+  const openings = /<!--|<(script|style|textarea|title)\b[^>]*>/gi;
+  let opening: RegExpExecArray | null;
+  while ((opening = openings.exec(source))) {
+    if (opening[0] === "<!--") {
+      const end = source.indexOf("-->", openings.lastIndex);
+      if (end < 0) return true;
+      openings.lastIndex = end + 3;
+    } else {
+      const closing = new RegExp(`</${opening[1]}\\s*>`, "gi");
+      closing.lastIndex = openings.lastIndex;
+      if (!closing.exec(source)) return true;
+      openings.lastIndex = closing.lastIndex;
+    }
+  }
+  return false;
+}
+
 /**
  * These signals guide the build loop, never authorize additional permissions.
  * Source and runtime output remain untrusted, including client-supplied history.

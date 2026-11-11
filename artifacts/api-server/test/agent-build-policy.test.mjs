@@ -1,10 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentBuildPolicy } from "../src/lib/agent-build-policy.ts";
+import { agentBuildPolicy, incompleteAgentHtml } from "../src/lib/agent-build-policy.ts";
 import { buildGroqAgentRequest } from "../src/lib/groq-agent.ts";
 import { formatInteractionResult } from "../../ai-chat/src/lib/preview-interactions.ts";
 
 const input = (content, extras = {}) => ({ messages: [{ role: "user", content }], ...extras });
+test("incomplete HTML raw-text blocks are rejected without rejecting complete snippets", () => {
+  assert.equal(incompleteAgentHtml('<!doctype html><style>body{border:1'), true);
+  assert.equal(incompleteAgentHtml('<script src="app.js">'), true);
+  assert.equal(incompleteAgentHtml('<!--unfinished'), true);
+  assert.equal(incompleteAgentHtml('<style>body{color:navy}</style><button>Reset</button>'), false);
+  assert.equal(incompleteAgentHtml('<script>const example="<style>";</script>'), false);
+  assert.equal(incompleteAgentHtml('<!-- <style> --><h1>Ready</h1>'), false);
+});
 const run = (result) => ({
   tool: "write_project", callId: "build", thoughtSignature: "groq-agent-v1",
   arguments: { entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>App</h1>" }] },

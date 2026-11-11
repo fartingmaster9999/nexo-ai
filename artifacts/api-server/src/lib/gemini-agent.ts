@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentChatInput, AgentProjectFile, AgentToolExchange } from "@workspace/api-zod";
 import { boundedHistory } from "./chat-request";
 import { GeminiSseDecoder, validateImageData } from "./gemini-image";
@@ -5,6 +6,14 @@ import { GEMINI_AGENT_FALLBACK_MODEL as FALLBACK_MODEL, GEMINI_AGENT_PRIMARY_MOD
 
 export const GEMINI_AGENT_MODEL = GEMINI_AGENT_PRIMARY_MODEL;
 export const GEMINI_AGENT_FALLBACK_MODEL = FALLBACK_MODEL;
+const LOCAL_CALL_PREFIX = "nexo-local-gemini:";
+
+export class GeminiAgentStreamError extends Error {
+  constructor(readonly code: "connection_interrupted" | "stream_interrupted") {
+    super("Gemini's connection was interrupted before its response completed.");
+    this.name = "GeminiAgentStreamError";
+  }
+}
 export const MAX_AGENT_TOOL_CALLS = 6;
 export const MAX_AGENT_HTML_PREVIEW_RUNS = 3;
 export const MAX_AGENT_CODE_CHARS = 20_000;
@@ -210,13 +219,16 @@ export function agentSystemPrompt(now: Date, timeZone: string, hasImage: boolean
 }
 
 function exchangeParts(exchange: AgentToolExchange) {
+  // Google makes IDs optional. A local ID tracks execution, but must not alter
+  // the original signed functionCall when returning its result to Google.
+  const providerId = exchange.callId.startsWith(LOCAL_CALL_PREFIX) ? {} : { id: exchange.callId };
   return [
     {
       role: "model",
       parts: [{
         functionCall: {
           name: exchange.tool,
-          id: exchange.callId,
+          ...providerId,
           args: exchange.arguments,
         },
         ...(exchange.thoughtSignature === "gemma-agent-v1"
@@ -229,7 +241,7 @@ function exchangeParts(exchange: AgentToolExchange) {
       parts: [{
         functionResponse: {
           name: exchange.tool,
-          id: exchange.callId,
+          ...providerId,
           response: {
             result: exchange.result,
             ...(exchange.sources?.length ? { sources: exchange.sources } : {}),
@@ -358,12 +370,17 @@ export async function requestGeminiAgentStream(
   model = GEMINI_AGENT_MODEL,
 ): Promise<Response> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
-  return fetchImpl(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify(request),
-    signal,
-  });
+  try {
+    return await fetchImpl(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify(request),
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new GeminiAgentStreamError("connection_interrupted");
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -405,7 +422,7 @@ export function collectAgentResponse(
       if (!isObject(part.functionCall)) continue;
       const functionCall = part.functionCall;
       const name = functionCall.name;
-      const id = functionCall.id;
+      const id = functionCall.id === undefined ? `${LOCAL_CALL_PREFIX}${randomUUID()}` : functionCall.id;
       const args = functionCall.args;
       const rawSignature = part.thoughtSignature;
       const signature = typeof rawSignature === "string" && rawSignature

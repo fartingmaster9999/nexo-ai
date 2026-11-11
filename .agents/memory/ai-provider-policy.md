@@ -63,6 +63,12 @@ Explicit output allowances may justify one smaller-budget retry on the same mode
 
 **How to apply:** Learn caps only from verified provider quota metadata, bound recovery attempts, keep existing features, and reject truncated tool output before execution. Explain when a complete change cannot fit; do not claim the provider's limits have been bypassed.
 
+Under a learned small Qwen output allowance, reserve the budget for complete code rather than optional reasoning.
+
+**Why:** A real browser build/edit test exhausted the constrained response budget and generated incomplete source. A targeted live request confirmed that the configured Qwen model accepts `reasoning_effort: "none"`.
+
+**How to apply:** Honor the observed output cap, disable optional reasoning only on constrained output or bounded truncation recovery, and retry before dispatching any partial tool calls. Re-verify this capability when changing Qwen models; do not raise the budget past the provider's observed allowance.
+
 An Agent continuation can hit the output window after its project already ran successfully. Honor a bounded series of explicit short provider retry windows without rerunning saved tools or discarding the project.
 
 **Why:** The code-generation response used most of the available output allowance, and the immediate final-response call failed despite a working preview. Showing that as a failed build concealed the actual cause. The user explicitly chose longer automatic waiting over having to resend a request after another short-window rejection.
@@ -92,3 +98,9 @@ A Groq SDK error with no HTTP status is not necessarily a connection failure: th
 **Why:** Production Agent failures were labeled only as `HTTP unknown`, obscuring the difference between transport problems and rejected streamed tool generation. A past successful request is not proof that later payload variants are supported by the same model.
 
 **How to apply:** Classify SDK connection/timeout subclasses separately from in-stream errors, using only allowlisted provider codes. Never log SDK error messages or failed-generation payloads, which can contain generated code or user content. Retry only bounded recoverable generations before tool dispatch, keeping prior tool results intact.
+
+Gemini's function-call ID is optional; its required thought signature must still be preserved. A missing provider ID is not a malformed tool call.
+
+**Why:** Google's public API discovery schema explicitly marks `FunctionCall.id` optional. Requiring it rejects valid Agent actions, while adding a generated ID to the original signed provider part can change the replayed request.
+
+**How to apply:** Use a unique local execution identifier when Google omits its ID, but omit that local identifier from Gemini function-call/result history. Never synthesize a missing Gemini thought signature. Retry interrupted generations only before dispatching their tools; discard incomplete responses without replaying completed actions.

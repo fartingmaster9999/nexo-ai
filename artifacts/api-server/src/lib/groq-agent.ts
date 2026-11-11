@@ -216,7 +216,8 @@ export function buildGroqAgentRequest(
     ...(model.startsWith("openai/gpt-oss-")
       ? { reasoning_effort: input.deepthink === true ? "high" as const : "medium" as const, include_reasoning: false }
       : model.startsWith("qwen/")
-        ? { reasoning_effort: input.deepthink === true ? "high" as const : "medium" as const, reasoning_format: "parsed" as const }
+        ? { reasoning_effort: outputTokenBudget(model, 8192) < 2048 ? "none" as const
+          : input.deepthink === true ? "high" as const : "medium" as const, reasoning_format: "parsed" as const }
         : {}),
     tool_choice: allowTools ? buildPolicy.requireTool ? "required" : "auto" : "none",
     parallel_tool_calls: false,
