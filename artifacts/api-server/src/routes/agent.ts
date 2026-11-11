@@ -24,6 +24,10 @@ import { AgentOutputLimitError, buildGroqAgentRequest, collectGroqAgentResponse,
 import { createUserChatClient, getChatClient, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
 import { getPublicProviderKey, isPublicApiRequest } from "../lib/public-api-keys";
 import { agentProviderRetryDelay, agentProviderDeferDelay, MAX_AGENT_PROVIDER_WAITS } from "../lib/agent-provider-wait";
+import {
+  FEEDBACK_CATALOG_MS, FEEDBACK_PLANNING_MS, FEEDBACK_REVIEW_MS,
+  FeedbackTimeoutError, withFeedbackBudget,
+} from "../lib/feedback-budget";
 
 // Leave cleanup headroom below the API service's 180-second hosting limit.
 const AGENT_DEADLINE_MS = 170_000;
@@ -32,11 +36,13 @@ const TOOL_REPAIR_INSTRUCTION = "The previous generation did not produce a valid
 type AgentRouterOptions = {
   getApiKey?: (request?: Request) => string | undefined;
   getGroqClient?: (apiKey?: string) => Groq | undefined;
+  getGroqModels?: typeof availableModelCatalog;
   getGeminiModels?: typeof availableGeminiAgentModels;
   fetchImpl?: typeof fetch;
   search?: typeof searchWeb;
   now?: () => Date;
   providerIdleMs?: number;
+  feedbackBudgets?: { catalogMs?: number; planningMs?: number; reviewMs?: number };
 };
 
 class AgentPublicError extends Error {
@@ -78,6 +84,7 @@ async function generateGeminiPlanningNote(
   signal: AbortSignal,
   fetchImpl: typeof fetch,
   resetIdle: () => void,
+  onRequest: (bytes: number) => void,
 ): Promise<string> {
   const request = buildGeminiAgentRequest(input, now, false, undefined, model, "planning");
   request.generationConfig.maxOutputTokens = Math.min(
@@ -85,10 +92,9 @@ async function generateGeminiPlanningNote(
     outputLimit ?? request.generationConfig.maxOutputTokens,
   );
   request.generationConfig.temperature = 0.2;
-  const upstream = await requestGeminiWithRetry(
-    () => requestGeminiAgentStream(apiKey, request, signal, fetchImpl, model),
-    signal,
-  );
+  onRequest(Buffer.byteLength(JSON.stringify(request), "utf8"));
+  // Advisory feedback must not enter the main Agent's provider retry loop.
+  const upstream = await requestGeminiAgentStream(apiKey, request, signal, fetchImpl, model);
   if (!upstream.ok) {
     await upstream.body?.cancel().catch(() => {});
     throw new GeminiAgentApiError(upstream.status);
@@ -127,6 +133,7 @@ async function generateGeminiPlanningNote(
   signal.throwIfAborted();
   const result = collectAgentResponse(events, { allowMissingThoughtSignature: model.startsWith("gemma-") });
   if (geminiResponseBlocked(result)) throw new Error("Gemini blocked the planning request.");
+  if (result.finishReason === "MAX_TOKENS") throw new Error("Gemini planning was cut off.");
   if (result.calls.length) throw new Error("Gemini returned tools during its planning-only pass.");
   if (!result.text.trim()) throw new Error("Gemini returned no planning notes.");
   return result.text.slice(0, MAX_AGENT_PLAN_CHARS);
@@ -195,15 +202,18 @@ export function createAgentRouter({
   getGroqClient = (apiKey) => apiKey
     ? createUserChatClient(apiKey)
     : process.env.GROQ_API_KEY ? getChatClient() : undefined,
+  getGroqModels = availableModelCatalog,
   getGeminiModels = availableGeminiAgentModels,
   fetchImpl = fetch,
   search = searchWeb,
   now = () => new Date(),
   providerIdleMs = Math.max(PROVIDER_IDLE_MS, 90_000),
+  feedbackBudgets = {},
 }: AgentRouterOptions = {}): IRouter {
   const router: IRouter = Router();
 
   router.post(["/agent", "/public/agent"], async (req, res): Promise<void> => {
+    const receivedAt = Date.now();
     const parsed = StreamAgentChatBody.safeParse(req.body);
     if (!parsed.success || parsed.data.messages.at(-1)?.role !== "user") {
       res.status(400).json({ error: "Please provide a valid conversation ending with your message." });
@@ -226,8 +236,10 @@ export function createAgentRouter({
     const agentTask: AgentTask = isProgramReview ? "document"
       : inferredTask === "coding" || inferredTask === "multimodal"
       ? inferredTask : isAgentTask(parsed.data.agentTask) ? parsed.data.agentTask : inferredTask;
-    // Coding belongs to Qwen even when an older client carries a GPT/Gemini route.
-    const requestedModel = agentTask === "coding" || isProgramReview ? undefined : parsed.data.agentModel;
+    // New code starts on Qwen. Keep a successful Groq fallback on continuations.
+    const requestedModel = isProgramReview ||
+      (agentTask === "coding" && !(parsed.data.agentProvider === "groq" && parsed.data.agentHistory?.length))
+      ? undefined : parsed.data.agentModel;
     let geminiModels: string[] = [];
     let geminiModelOutputLimits = new Map<string, number>();
     let geminiCandidates: string[] = [];
@@ -245,7 +257,27 @@ export function createAgentRouter({
       !groqClient
     );
     if (apiKey && needsGeminiCatalog) {
-      const catalog = await getGeminiModels(apiKey, fetchImpl);
+      const catalogStartedAt = Date.now();
+      const catalogController = new AbortController();
+      const cancelCatalog = () => catalogController.abort(new Error("Client disconnected"));
+      res.once("close", cancelCatalog);
+      let catalog: Awaited<ReturnType<typeof getGeminiModels>> = [];
+      try {
+        catalog = await withFeedbackBudget(
+          () => getGeminiModels(apiKey, fetchImpl),
+          catalogController.signal,
+          feedbackBudgets.catalogMs ?? FEEDBACK_CATALOG_MS,
+        );
+      } catch (error) {
+        if (catalogController.signal.aborted) return;
+        req.log.warn({ event: "agent.feedback.catalog.unavailable",
+          timedOut: error instanceof FeedbackTimeoutError, durationMs: Date.now() - catalogStartedAt,
+        }, "Gemini catalog unavailable within its budget");
+      } finally {
+        res.off("close", cancelCatalog);
+      }
+      req.log.info({ event: "agent.feedback.catalog.completed", durationMs: Date.now() - catalogStartedAt,
+        modelCount: catalog.length }, "Gemini model discovery finished");
       geminiModels = catalog.map((model) => model.name?.replace(/^models\//, "") ?? "").filter(Boolean);
       geminiModelOutputLimits = new Map(
         catalog.flatMap((model) => {
@@ -255,7 +287,7 @@ export function createAgentRouter({
       );
       const route = routeGeminiAgentTask(agentTask, geminiModels);
       if (isProgramReview) {
-        const reviewOrder = ["gemma-4-31b-it", "gemma-4-26b-a4b-it"];
+        const reviewOrder = ["gemma-4-26b-a4b-it", "gemma-4-31b-it"];
         geminiCandidates = reviewOrder.filter((model) => route.models.includes(model));
         geminiPreferredLabel = geminiCandidates.length ? modelLabel(geminiCandidates[0]!) : "Gemma 4";
         geminiFallback = false;
@@ -295,7 +327,7 @@ export function createAgentRouter({
     let groqHealthFallback = false;
     let groqQuotaFallback = false;
     if (!isProgramReview && groqClient && (requestedProvider === "groq" || requestedProvider === "gemini")) {
-      const catalog = await availableModelCatalog(groqClient);
+      const catalog = await getGroqModels(groqClient);
       groqModels = agentGenerationModelIds(catalog);
       groqSecurityModels = agentSecurityModelIds(catalog);
       if (agentTask !== "multimodal") {
@@ -312,7 +344,7 @@ export function createAgentRouter({
       }
       if (!groqCandidates.length) {
         res.status(503).json({ error: agentTask === "coding"
-          ? "Coding requires Qwen, but the configured Groq account has no compatible Qwen model available. Nexo will not substitute GPT-OSS."
+          ? "No compatible coding model is available. Check Groq access to Qwen, GPT-OSS 120B, or GPT-OSS 20B."
           : `No compatible Groq model is available for the ${agentTask} task. Check the live Groq model catalog and account access.` });
         return;
       }
@@ -363,7 +395,7 @@ export function createAgentRouter({
         }
       } else {
         geminiCandidates = modelsForRequest(geminiCandidates);
-        const preferredModel = isProgramReview ? "gemma-4-31b-it" : routeGeminiAgentTask(agentTask, geminiModels).preferredModel;
+        const preferredModel = isProgramReview ? "gemma-4-26b-a4b-it" : routeGeminiAgentTask(agentTask, geminiModels).preferredModel;
         geminiHealthFallback = Boolean(preferredModel && isModelUnhealthy(preferredModel));
         if (geminiCandidates[0] !== preferredModel) {
           geminiFallback = true;
@@ -411,7 +443,9 @@ export function createAgentRouter({
     const deadline = setTimeout(() => {
       timedOut = true;
       controller.abort(new Error("Agent request deadline exceeded"));
-    }, AGENT_DEADLINE_MS);
+    }, isProgramReview
+      ? Math.max(1, (feedbackBudgets.reviewMs ?? FEEDBACK_REVIEW_MS) - (Date.now() - receivedAt))
+      : AGENT_DEADLINE_MS);
     const abortOnDisconnect = () => {
       if (!res.writableEnded) controller.abort(new Error("Client disconnected"));
     };
@@ -485,63 +519,68 @@ export function createAgentRouter({
       }
       if (hasNewCodingRequest && apiKey && geminiCandidates.length) {
         const plannerCandidates = modelsForRequest(geminiCandidates).slice(0, 2);
-        await emit({ activity: { id: "agent-gemini-plan", label: "Gemini is planning the implementation for Qwen", kind: "thinking", status: "running" } });
-        for (const plannerModel of plannerCandidates) {
-          const plannerController = new AbortController();
-          const abortPlanner = () => plannerController.abort(controller.signal.reason);
-          if (controller.signal.aborted) abortPlanner();
-          else controller.signal.addEventListener("abort", abortPlanner, { once: true });
-          let plannerIdle: ReturnType<typeof setTimeout> | undefined;
-          let plannerTimedOut = false;
-          const resetPlannerIdle = () => {
-            clearTimeout(plannerIdle);
-            plannerIdle = setTimeout(() => {
-              plannerTimedOut = true;
-              plannerController.abort(new Error("Gemini planning stream stalled"));
-            }, providerIdleMs);
-          };
-          try {
-            resetPlannerIdle();
-            codingPlan = await generateGeminiPlanningNote(
-              { ...parsed.data, agentHistory: history },
-              apiKey,
-              plannerModel,
-              geminiModelOutputLimits.get(plannerModel),
-              now(),
-              plannerController.signal,
-              fetchImpl,
-              resetPlannerIdle,
-            );
-            clearModelUnhealthy(plannerModel);
-            req.log.info({
-              event: "agent.gemini.plan.completed",
-              provider: "gemini",
-              model: plannerModel,
-              planChars: codingPlan.length,
-            }, "Gemini completed the bounded coding plan");
-            break;
-          } catch (error) {
-            if (controller.signal.aborted) throw error;
-            const status = error instanceof GeminiAgentApiError ? error.status : undefined;
-            if (isTransientModelFailure(status) || plannerTimedOut) markModelUnhealthy(plannerModel);
-            req.log.warn({
-              event: "agent.gemini.plan.unavailable",
-              provider: "gemini",
-              model: plannerModel,
-              ...(status !== undefined ? { status } : {}),
-              timedOut: plannerTimedOut,
-            }, "Gemini planning was unavailable; Qwen will continue");
-            if (status === 401 || status === 403) break;
-          } finally {
-            clearTimeout(plannerIdle);
-            controller.signal.removeEventListener("abort", abortPlanner);
-            plannerController.abort();
-          }
+        const planningStartedAt = Date.now();
+        let planningTimedOut = false;
+        let planningAttempts = 0;
+        let planningBytes = 0;
+        let firstChunkMs: number | undefined;
+        await emit({ activity: { id: "agent-gemini-plan", label: `Gemini is planning the implementation for ${modelLabel(activeModel)}`, kind: "thinking", status: "running" } });
+        try {
+          codingPlan = await withFeedbackBudget(async (signal) => {
+            for (const plannerModel of plannerCandidates) {
+              signal.throwIfAborted();
+              planningAttempts++;
+              try {
+                const plan = await generateGeminiPlanningNote(
+                  { ...parsed.data, agentHistory: history },
+                  apiKey,
+                  plannerModel,
+                  geminiModelOutputLimits.get(plannerModel),
+                  now(),
+                  signal,
+                  fetchImpl,
+                  () => { firstChunkMs ??= Date.now() - planningStartedAt; },
+                  (bytes) => { planningBytes += bytes; },
+                );
+                clearModelUnhealthy(plannerModel);
+                req.log.info({
+                  event: "agent.gemini.plan.completed",
+                  provider: "gemini",
+                  model: plannerModel,
+                  planChars: plan.length,
+                }, "Gemini completed the bounded coding plan");
+                return plan;
+              } catch (error) {
+                if (signal.aborted) throw error;
+                const status = error instanceof GeminiAgentApiError ? error.status : undefined;
+                if (isTransientModelFailure(status)) markModelUnhealthy(plannerModel);
+                req.log.warn({
+                  event: "agent.gemini.plan.unavailable",
+                  provider: "gemini",
+                  model: plannerModel,
+                  ...(status !== undefined ? { status } : {}),
+                  timedOut: false,
+                }, "Gemini planning was unavailable; Qwen will continue");
+                if (status === 401 || status === 403) break;
+              }
+            }
+            return undefined;
+          }, controller.signal, feedbackBudgets.planningMs ?? FEEDBACK_PLANNING_MS);
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+          planningTimedOut = error instanceof FeedbackTimeoutError;
         }
+        req.log.info({ event: "agent.feedback.finished", purpose: "planning",
+          durationMs: Date.now() - planningStartedAt, firstChunkMs, attempts: planningAttempts,
+          requestBytes: planningBytes, responseChars: codingPlan?.length ?? 0,
+          outcome: codingPlan ? "completed" : planningTimedOut ? "timed_out" : "unavailable",
+        }, "Optional Gemini planning finished");
         await emit({
           activity: {
             id: "agent-gemini-plan",
-            label: codingPlan ? "Gemini's implementation plan is ready" : "Gemini planning was unavailable; Qwen will plan directly",
+            label: codingPlan ? "Gemini's implementation plan is ready"
+              : planningTimedOut ? `Gemini planning took too long; ${modelLabel(activeModel)} will plan directly`
+              : `Gemini planning was unavailable; ${modelLabel(activeModel)} will plan directly`,
             kind: "thinking",
             status: codingPlan ? "complete" : "error",
           },
@@ -551,8 +590,8 @@ export function createAgentRouter({
           activity: {
             id: "agent-gemini-plan",
             label: !apiKey
-              ? "Gemini isn't configured on this server; Qwen is continuing directly"
-              : "No compatible Gemini planner is available; Qwen is continuing directly",
+              ? `Gemini isn't configured on this server; ${modelLabel(activeModel)} is continuing directly`
+              : `No compatible Gemini planner is available; ${modelLabel(activeModel)} is continuing directly`,
             kind: "info",
             status: "complete",
           },
@@ -613,7 +652,7 @@ export function createAgentRouter({
           return false;
         }
         if (!groqCandidates.length) {
-          const catalog = await availableModelCatalog(groqClient);
+          const catalog = await getGroqModels(groqClient);
           groqModels = agentGenerationModelIds(catalog);
           groqSecurityModels = agentSecurityModelIds(catalog);
           const route = routeAgentTask(activeTask, groqModels);
@@ -656,6 +695,7 @@ export function createAgentRouter({
       let previewBudgetExhausted = false;
       let compactRequest = (parsed.data.agentRetryCount ?? 0) > 0;
       const providerWait = { count: 0, totalMs: 0 };
+      const rateLimitedCodingModels = new Set<string>();
       while (true) {
         controller.signal.throwIfAborted();
         const finalizationOnly = parsed.data.agentFinalize === true || previewBudgetExhausted ||
@@ -680,6 +720,8 @@ export function createAgentRouter({
         };
         let modelResponse: ReturnType<typeof collectAgentResponse> | null = null;
         let requestBytes = 0;
+        const generationStartedAt = Date.now();
+        let firstChunkMs: number | undefined;
         try {
           resetIdle();
           if (activeProvider === "groq") {
@@ -719,6 +761,7 @@ export function createAgentRouter({
               isProgramReview ? "review" : "agent",
               parsed.data.agentReview,
             );
+            requestBytes = Buffer.byteLength(JSON.stringify(request), "utf8");
             const modelOutputLimit = geminiModelOutputLimits.get(activeModel);
             if (modelOutputLimit !== undefined) {
               request.generationConfig.maxOutputTokens = Math.min(
@@ -736,10 +779,18 @@ export function createAgentRouter({
                 request.generationConfig.thinkingConfig.thinkingLevel = parsed.data.deepthink ? "medium" : "low";
               }
             }
-            const upstream = await requestGeminiWithRetry(
-              () => requestGeminiAgentStream(apiKey!, request, attemptController.signal, fetchImpl, activeModel),
-              attemptController.signal,
-            );
+            const upstream = isProgramReview
+              ? await withFeedbackBudget(
+                  // The attempt owns the response body lifetime. Do not abort
+                  // its fetch when this header-only race successfully returns.
+                  () => requestGeminiAgentStream(apiKey!, request, attemptController.signal, fetchImpl, activeModel),
+                  attemptController.signal,
+                  feedbackBudgets.reviewMs ?? FEEDBACK_REVIEW_MS,
+                )
+              : await requestGeminiWithRetry(
+                  () => requestGeminiAgentStream(apiKey!, request, attemptController.signal, fetchImpl, activeModel),
+                  attemptController.signal,
+                );
             if (!upstream.ok) {
               await upstream.body?.cancel().catch(() => {});
               req.log.warn({ provider: "gemini", model: activeModel, status: upstream.status }, "Gemini Agent request rejected");
@@ -749,6 +800,8 @@ export function createAgentRouter({
 
             const decoder = new GeminiSseDecoder();
             const reader = upstream.body.getReader();
+            const abortRead = () => { void reader.cancel().catch(() => {}); };
+            attemptController.signal.addEventListener("abort", abortRead, { once: true });
             const events: unknown[] = [];
             let eventChars = 0;
             try {
@@ -757,6 +810,7 @@ export function createAgentRouter({
                 const { value, done } = await reader.read();
                 if (attemptController.signal.aborted) throw attemptController.signal.reason;
                 if (done) break;
+                firstChunkMs ??= Date.now() - generationStartedAt;
                 resetIdle();
                 const decoded = decoder.push(value);
                 for (const item of decoded) {
@@ -774,6 +828,7 @@ export function createAgentRouter({
               if (attemptController.signal.aborted || error instanceof AgentPublicError) throw error;
               throw new GeminiAgentStreamError("stream_interrupted");
             } finally {
+              attemptController.signal.removeEventListener("abort", abortRead);
               await reader.cancel().catch(() => {});
               reader.releaseLock();
             }
@@ -782,6 +837,8 @@ export function createAgentRouter({
             });
           }
         } catch (error) {
+          // Review is advisory: no retry/fallback chain, and never dispatch tools.
+          if (isProgramReview) throw error;
           if (activeProvider === "groq" && error instanceof AgentOutputLimitError &&
               outputTruncationRetries < 1 && !controller.signal.aborted && !attemptController.signal.aborted) {
             outputTruncationRetries++;
@@ -838,7 +895,7 @@ export function createAgentRouter({
                 status: 413, requestBytes, compactedBytes,
               }, "Retrying a smaller Qwen context after a request-size rejection");
               await emit({ activity: { id: "agent-context-recovery",
-                label: "Reducing older context for Qwen. Current files and saved progress are kept.",
+                label: `Reducing older context for ${modelLabel(activeModel)}. Current files and saved progress are kept.`,
                 kind: "info", status: "running",
               } });
               continue;
@@ -846,6 +903,32 @@ export function createAgentRouter({
           }
           if (activeProvider === "groq" && candidate.status === 429) {
             const diagnostics = recordRateLimit(activeModel, error);
+            // Prefer available coding capacity over waiting on the rejected model.
+            // No partial calls from this response were dispatched.
+            if (activeTask === "coding") {
+              rateLimitedCodingModels.add(activeModel);
+              const nextIndex = groqCandidates.findIndex((model) =>
+                model !== activeModel && !rateLimitedCodingModels.has(model) &&
+                !isCoolingDown(model) && !isModelUnhealthy(model));
+              if (nextIndex >= 0) {
+                const previousModel = activeModel;
+                groqModelIndex = nextIndex;
+                activeModel = groqCandidates[nextIndex]!;
+                groqFailureRetries = 0;
+                outputBudgetRetried = false;
+                outputTruncationRetries = 0;
+                modelIdleRetries = 0;
+                repairToolRequest = false;
+                req.log.warn({ event: "agent.coding.rate_fallback", provider: "groq",
+                  model: previousModel, fallbackModel: activeModel, status: 429,
+                }, "Using another ready coding model instead of waiting");
+                await emit({ model: activeModel, agentProvider: activeProvider, agentTask: activeTask });
+                pendingRateNotice = { id: "agent-model-rate-fallback",
+                  message: `${modelLabel(previousModel)} is rate-limited. ${modelLabel(activeModel)} is continuing the code; saved work is kept.`,
+                  model: activeModel };
+                continue;
+              }
+            }
             if (!compactRequest && /^(TPM|ITPM)$/.test(diagnostics.metric)) {
               const compacted = buildGroqAgentRequest(agentInput, now(), allowTools, activeModel, securityNote(), codingPlan, true);
               if (repairToolRequest) {
@@ -860,7 +943,7 @@ export function createAgentRouter({
                 }, "Reducing input context before the next Qwen retry");
                 if (diagnostics.requestTooLarge) {
                   await emit({ activity: { id: "agent-context-recovery",
-                    label: "Reducing older input context to fit Qwen's token allowance.",
+                    label: `Reducing older input context to fit ${modelLabel(activeModel)}'s token allowance.`,
                     kind: "info", status: "running",
                   } });
                   continue;
@@ -878,7 +961,7 @@ export function createAgentRouter({
               req.log.warn({ event: "agent.output_budget.retry", provider: "groq", model: activeModel,
                 outputTokens: budget, metric: diagnostics.metric, quotaLimit: diagnostics.quotaLimit,
               }, "Retrying the same model within the provider output allowance");
-              await emit({ activity: { id: "agent-output-budget", label: "Fitting the build to Qwen's output allowance…", kind: "info", status: "running" } });
+              await emit({ activity: { id: "agent-output-budget", label: `Fitting the build to ${modelLabel(activeModel)}'s output allowance…`, kind: "info", status: "running" } });
               continue;
             }
             const retryDelay = activeTask === "coding"
@@ -894,11 +977,11 @@ export function createAgentRouter({
                 waitAttempt: providerWait.count, totalWaitMs: providerWait.totalMs,
               }, "Waiting for Qwen's explicit short retry window");
               await emit({ activity: { id: "agent-provider-wait",
-                label: `Waiting ${Math.ceil(retryDelay / 1000)} seconds for Qwen (retry ${providerWait.count}/${MAX_AGENT_PROVIDER_WAITS}). No code is rerun while waiting; you can stop at any time.`,
+                label: `Waiting ${Math.ceil(retryDelay / 1000)} seconds for ${modelLabel(activeModel)} (retry ${providerWait.count}/${MAX_AGENT_PROVIDER_WAITS}). No code is rerun while waiting; you can stop at any time.`,
                 kind: "info", status: "running",
               } });
               await waitForGeminiRetry(controller.signal, retryDelay);
-              await emit({ activity: { id: "agent-provider-wait", label: "Continuing the same build with Qwen",
+              await emit({ activity: { id: "agent-provider-wait", label: `Continuing the same build with ${modelLabel(activeModel)}`,
                 kind: "info", status: "complete",
               } });
               continue;
@@ -911,7 +994,7 @@ export function createAgentRouter({
                 metric: diagnostics.metric, completedToolCalls: history.length,
               }, "Handing the provider wait to the browser to preserve the hosted request budget");
               await emit({ activity: { id: "agent-provider-wait",
-                label: `Qwen is still limited. Waiting ${Math.ceil(deferDelay / 1000)} seconds before resuming this request.`,
+                label: `${modelLabel(activeModel)} is still limited. Waiting ${Math.ceil(deferDelay / 1000)} seconds before resuming this request.`,
                 kind: "info", status: "running",
               } });
               await emit({ agentRetry: { afterMs: deferDelay, history } satisfies AgentRateLimitRetry });
@@ -1001,11 +1084,15 @@ export function createAgentRouter({
         }
 
         if (!modelResponse) throw new AgentPublicError("The Agent returned no response. Please try again.");
+        if (isProgramReview) req.log.info({ event: "agent.feedback.generation", purpose: "review",
+          model: activeModel, durationMs: Date.now() - generationStartedAt,
+          firstChunkMs, requestBytes, responseChars: modelResponse.text.length,
+        }, "Optional program review generation finished");
         clearRateLimit(activeModel);
         clearModelUnhealthy(activeModel);
         if (compactRequest) {
           await emit({ activity: { id: "agent-context-recovery",
-            label: "Qwen accepted the smaller request context", kind: "info", status: "complete",
+            label: `${modelLabel(activeModel)} accepted the smaller request context`, kind: "info", status: "complete",
           } });
         }
         if (pendingRateNotice && (modelResponse.text.trim() || modelResponse.calls.length)) {
@@ -1039,6 +1126,7 @@ export function createAgentRouter({
             finishReason: modelResponse.finishReason ?? "MISSING",
             retry: emptyResponseRetries,
           }, "Gemini finished without visible output");
+          if (isProgramReview) throw new AgentPublicError("The independent review returned no findings. Continue using the recorded run results; no review was completed.");
           if (emptyResponseRetries < 1) {
             emptyResponseRetries++;
             recoverEmptyResponse = true;
@@ -1063,6 +1151,9 @@ export function createAgentRouter({
           throw new AgentPublicError("Nexo Agent requested multiple tools at once. Please try a more focused request.");
         }
         const call = modelResponse.calls[0];
+        if (isProgramReview && (call || modelResponse.finishReason === "MAX_TOKENS")) {
+          throw new AgentPublicError("The independent review was incomplete and was skipped. Continue using the recorded run results.");
+        }
         if (!call) {
           const buildState = activeTask === "coding" ? agentBuildPolicy(agentInput) : undefined;
           if (!finalizationOnly && (buildState?.failed || projectValidationFailed)) {
@@ -1255,7 +1346,12 @@ export function createAgentRouter({
       await emit({ done: true });
       res.end();
       req.log.info({ event: "agent.stream.completed", provider: activeProvider, model: activeModel, durationMs: Date.now() - startedAt, toolCalls }, "Agent stream completed");
+      if (isProgramReview) req.log.info({ event: "agent.feedback.finished", purpose: "review",
+        model: activeModel, durationMs: Date.now() - receivedAt, responseChars: answer.length,
+        outcome: "completed",
+      }, "Optional program review finished");
     } catch (error) {
+      if (isProgramReview && error instanceof FeedbackTimeoutError) timedOut = true;
       if (res.destroyed || res.writableEnded || (controller.signal.aborted && !timedOut)) return;
       const status = error instanceof GeminiAgentApiError
         ? error.status
@@ -1271,15 +1367,21 @@ export function createAgentRouter({
         ...safeAgentFailureDetails(error),
         durationMs: Date.now() - startedAt,
       }, "Agent stream failed");
-      const message = timedOut
+      if (isProgramReview) req.log.info({ event: "agent.feedback.finished", purpose: "review",
+        model: activeModel, durationMs: Date.now() - receivedAt,
+        outcome: timedOut ? "timed_out" : "unavailable",
+      }, "Optional program review finished");
+      const message = isProgramReview && timedOut
+        ? "The independent review took too long and was skipped. Qwen can continue using the recorded run results; your project is kept."
+        : timedOut
         ? "Nexo Agent timed out. Your partial answer is kept; please try again."
         : error instanceof AgentPublicError || error instanceof AgentOutputLimitError
           ? error.message
           : activeProvider === "groq" && status === 413
-            ? "Groq rejected Qwen's request as too large (HTTP 413). Nexo could not safely fit the current context within its request allowance. Your saved project is kept. Ask for a smaller change to the existing files; this is not a timeout or exhausted daily messages."
+            ? `Groq rejected ${modelLabel(activeModel)}'s request as too large (HTTP 413). Nexo could not safely fit the current context within its request allowance. Your saved project is kept. Ask for a smaller change to the existing files; this is not a timeout or exhausted daily messages.`
           : activeProvider === "groq" && status === 429
             ? activeTask === "coding"
-              ? codingRateLimitMessage(error)
+              ? codingRateLimitMessage(error, activeModel)
               : rateLimitDiagnostics(error).requestTooLarge
               ? "The provider rejected this Agent request because it is too large for its token allowance. Try a smaller project change or a new conversation. This does not mean every model is out of quota."
               : `Groq rejected this request on ${modelLabel(activeModel)} with HTTP 429. This may be a token or request limit, not exhausted daily messages. Please try again later.`

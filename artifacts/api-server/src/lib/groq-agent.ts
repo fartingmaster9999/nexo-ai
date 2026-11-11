@@ -15,15 +15,15 @@ import { agentBuildPolicy } from "./agent-build-policy";
 
 export const GROQ_AGENT_MODEL = CODING_FALLBACK;
 export class AgentOutputLimitError extends Error {
-  constructor() { super("Qwen reached the response-size limit before finishing. No incomplete code was run. Try a smaller change."); }
+  constructor() { super("The coding model reached the response-size limit before finishing. No incomplete code was run. Try a smaller change."); }
 }
 const MAX_TOOL_ARGUMENT_CHARS = 140_000;
 
 export class AgentToolFormatError extends Error {
   constructor(readonly code: "invalid_tool_json" | "incomplete_tool_request") {
     super(code === "invalid_tool_json"
-      ? "Qwen returned invalid Agent tool arguments."
-      : "Qwen returned an incomplete Agent tool request.");
+      ? "The coding model returned invalid Agent tool arguments."
+      : "The coding model returned an incomplete Agent tool request.");
     this.name = "AgentToolFormatError";
   }
 }

@@ -37,9 +37,9 @@ test("Agent chooses only catalog-listed task models and identifies compatible fa
   const ids = [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK];
   assert.deepEqual(routeAgentTask("planning", ids).models, [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK]);
   assert.equal(routeAgentTask("planning", ids).fallback, false);
-  assert.deepEqual(routeAgentTask("coding", ids).models, [CODING_FALLBACK]);
+  assert.deepEqual(routeAgentTask("coding", ids).models, [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL]);
   assert.equal(routeAgentTask("coding", ids).fallback, false);
-  assert.deepEqual(routeAgentTask("coding", [PRIMARY_MODEL, SMALL_MODEL]).models, []);
+  assert.deepEqual(routeAgentTask("coding", [PRIMARY_MODEL, SMALL_MODEL]).models, [PRIMARY_MODEL, SMALL_MODEL]);
   assert.equal(classifyAgentTask({ messages: [{ role: "user", content: "Make me a task list app" }] }), "coding");
   assert.equal(classifyAgentTask({ messages: [{ role: "user", content: "Make a website for my club" }] }), "coding");
   assert.equal(classifyAgentTask({ messages: [{ role: "user", content: "Write a React component" }] }), "coding");

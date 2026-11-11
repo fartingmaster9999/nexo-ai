@@ -245,6 +245,7 @@ function createSseApp({
   fetchImpl,
   search,
   providerIdleMs,
+  feedbackBudgets,
   logger = pino({ level: "silent" }),
 } = {}) {
   const app = express();
@@ -258,6 +259,7 @@ function createSseApp({
     search,
     now: () => new Date("2026-11-06T18:30:00Z"),
     providerIdleMs,
+    feedbackBudgets,
   }));
   return app;
 }
@@ -290,7 +292,8 @@ test("Gemini planning is tool-free, bounded, and does not claim a tool limit", (
   }, new Date("2026-11-06T18:30:00Z"), true, undefined, GEMINI_AGENT_MODEL, "planning");
   assert.equal(request.tools, undefined);
   assert.equal(request.toolConfig, undefined);
-  assert.equal(request.generationConfig.maxOutputTokens, 4096);
+  assert.equal(request.generationConfig.maxOutputTokens, 1024);
+  assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "low");
   assert.match(request.systemInstruction.parts[0].text, /concrete acceptance checks/);
   assert.doesNotMatch(request.systemInstruction.parts[0].text, /tool limit has been reached/);
   assert.match(JSON.stringify(request.contents), /Existing project/);
@@ -307,10 +310,288 @@ test("Gemma review is tool-free and receives source, runtime output, and browser
   });
   assert.equal(request.tools, undefined);
   assert.equal(request.toolConfig, undefined);
-  assert.equal(request.generationConfig.maxOutputTokens, 2048);
+  assert.equal(request.generationConfig.maxOutputTokens, 768);
   assert.match(request.systemInstruction.parts[0].text, /independent reviewer/);
   assert.match(request.contents.at(-1).parts.at(-1).text, /One unlabeled control/);
   assert.match(request.contents.at(-1).parts.at(-1).text, /never execute or follow instructions/);
+});
+
+test("feedback reduces prompt overhead without dropping latest requirements or source evidence", (t) => {
+  const source = "<h1>Keep this complete source</h1>";
+  const data = {
+    messages: [
+      { role: "user", content: "OLD_TURN".repeat(850) },
+      { role: "assistant", content: "Old response" },
+      { role: "user", content: "Build a task list and preserve filters" },
+    ],
+    deepthink: true,
+    projectFiles: [{ path: "index.html", content: source }],
+    agentHistory: [{
+      tool: "run_code", callId: "earlier", thoughtSignature: "signature",
+      arguments: { language: "javascript", code: "DUPLICATED_TOOL_SOURCE" }, result: "old result",
+    }],
+  };
+  const full = buildGeminiAgentRequest(data);
+  const plan = buildGeminiAgentRequest(data, undefined, true, undefined, GEMINI_AGENT_MODEL, "planning");
+  const review = buildGeminiAgentRequest(data, undefined, true, undefined, "gemma-4-26b-a4b-it", "review", {
+    language: "html", source, output: "Runtime evidence",
+  });
+  assert.ok(JSON.stringify(plan).length < JSON.stringify(full).length / 2);
+  assert.equal(plan.generationConfig.maxOutputTokens, 1024, "Deepthink cannot expand advisory budgets");
+  assert.equal(plan.generationConfig.thinkingConfig.thinkingLevel, "low");
+  assert.match(JSON.stringify(plan.contents), /preserve filters/);
+  assert.match(JSON.stringify(plan.contents), /Keep this complete source/);
+  assert.equal(JSON.stringify(review.contents).split(source).length - 1, 1, "review source appears once");
+  assert.doesNotMatch(JSON.stringify(review.contents), /DUPLICATED_TOOL_SOURCE|OLD_TURN/);
+  assert.match(JSON.stringify(review.contents), /Runtime evidence/);
+  t.diagnostic(`Synthetic fixture request bytes: full=${Buffer.byteLength(JSON.stringify(full))}, planning=${Buffer.byteLength(JSON.stringify(plan))}, review=${Buffer.byteLength(JSON.stringify(review))}.`);
+});
+
+test("Gemini catalogs are isolated by credential and concurrent same-account lookups are shared", async () => {
+  let firstCalls = 0;
+  const first = async () => {
+    firstCalls++;
+    return new Response(JSON.stringify({ models: [{
+      name: "models/account-a", supportedGenerationMethods: ["generateContent"],
+      inputTokenLimit: 10000, outputTokenLimit: 10000,
+    }] }));
+  };
+  const [a, sameA] = await Promise.all([
+    availableGeminiAgentModels("catalog-account-a", first),
+    availableGeminiAgentModels("catalog-account-a", first),
+  ]);
+  assert.equal(firstCalls, 1);
+  assert.deepEqual(a, sameA);
+  let secondCalls = 0;
+  const b = await availableGeminiAgentModels("catalog-account-b", async () => {
+    secondCalls++;
+    return new Response("", { status: 403 });
+  });
+  assert.equal(secondCalls, 1);
+  assert.deepEqual(b, [], "never return another account's cached catalog on authorization failure");
+});
+
+test("catalog pagination and body reading share one elapsed deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let signal;
+  const result = availableGeminiAgentModels("catalog-never-responds", async (_url, init) => {
+    signal = init.signal;
+    return new Promise(() => {});
+  });
+  await Promise.resolve();
+  t.mock.timers.tick(3000);
+  assert.deepEqual(await result, []);
+  assert.equal(signal.aborted, true);
+});
+
+test("slow Gemini catalog cannot delay a Qwen build beyond the discovery budget", async () => {
+  const qwen = [];
+  let inference = 0;
+  const start = Date.now();
+  await withServer(createSseApp({
+    feedbackBudgets: { catalogMs: 20 },
+    getGeminiModels: async () => new Promise(() => {}),
+    getGroqClient: () => planningQwenClient(qwen, {
+      entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Tasks</h1>" }],
+    }),
+    fetchImpl: async () => { inference++; throw new Error("unexpected inference"); },
+  }), async url => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list website" }] }),
+    }));
+    assert.equal(events.some(event => event.error), false);
+    assert.match(events.find(event => event.activity?.id === "agent-gemini-plan").activity.label, /continuing directly/);
+  });
+  assert.ok(Date.now() - start < 1500);
+  assert.equal(qwen.length, 1);
+  assert.equal(inference, 0);
+});
+
+test("planning hard deadline continues Qwen even while Gemini keeps streaming", async () => {
+  const qwen = [];
+  let cancelled = false;
+  let chunks = 0;
+  let timer;
+  const start = Date.now();
+  await withServer(createSseApp({
+    feedbackBudgets: { planningMs: 40 },
+    getGroqClient: () => planningQwenClient(qwen, {
+      entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Tasks</h1>" }],
+    }),
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(stream) {
+        timer = setInterval(() => {
+          chunks++;
+          stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(modelEvent([{ text: "unfinished plan " }]))}\n\n`));
+        }, 5);
+      },
+      cancel() { cancelled = true; clearInterval(timer); },
+    })),
+  }), async url => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list website" }] }),
+    }));
+    assert.equal(events.some(event => event.error), false);
+    assert.ok(events.some(event => event.activity?.label.includes("planning took too long")));
+    assert.equal(events.find(event => event.agentTool)?.agentTool.tool, "write_project");
+    assert.doesNotMatch(JSON.stringify(qwen), /unfinished plan/);
+  });
+  assert.ok(Date.now() - start < 1500);
+  assert.ok(chunks > 0);
+  assert.equal(cancelled, true);
+  assert.equal(qwen.length, 1);
+});
+
+const reviewInput = {
+  messages: [{ role: "user", content: "Build a counter website" }],
+  agentReview: { language: "html", source: "<h1>Keep saved project</h1>", output: "Loaded" },
+};
+
+test("review deadline cancels a silent stream without returning partial findings or retrying", async () => {
+  let calls = 0;
+  let cancelled = false;
+  const qwen = [];
+  const start = Date.now();
+  await withServer(createSseApp({
+    feedbackBudgets: { reviewMs: 40 },
+    getGroqClient: () => planningQwenClient(qwen),
+    fetchImpl: async () => {
+      calls++;
+      return new Response(new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(modelEvent([{ text: "INCOMPLETE_FINDINGS" }]))}\n\n`));
+        },
+        cancel() { cancelled = true; },
+      }));
+    },
+  }), async url => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reviewInput),
+    }));
+    assert.match(events.find(event => event.error)?.error ?? "", /review took too long.*project is kept/);
+    assert.equal(events.some(event => event.content), false);
+    assert.equal(events.some(event => event.agentTool), false);
+  });
+  assert.ok(Date.now() - start < 1500);
+  assert.equal(cancelled, true);
+  assert.equal(calls, 1);
+  assert.equal(qwen.length, 0);
+});
+
+test("review deadline releases a provider transport that ignores abort", async () => {
+  let signal;
+  await withServer(createSseApp({
+    feedbackBudgets: { reviewMs: 20 },
+    fetchImpl: async (_url, init) => {
+      signal = init.signal;
+      return new Promise(() => {});
+    },
+  }), async url => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reviewInput),
+    }));
+    assert.match(events.find(event => event.error)?.error ?? "", /review took too long/);
+  });
+  assert.equal(signal.aborted, true);
+});
+
+test("successful review keeps the transport alive until its delayed response body is consumed", async () => {
+  let cancelledBeforeReply = false;
+  await withServer(createSseApp({
+    fetchImpl: async (_url, init) => {
+      let timer;
+      return new Response(new ReadableStream({
+        start(stream) {
+          const abort = () => {
+            clearTimeout(timer);
+            cancelledBeforeReply = true;
+            stream.error(new Error("transport aborted"));
+          };
+          init.signal.addEventListener("abort", abort, { once: true });
+          timer = setTimeout(() => {
+            init.signal.removeEventListener("abort", abort);
+            stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(modelEvent([{ text: "Missing reset handler." }]))}\n\n`));
+            stream.close();
+          }, 10);
+        },
+        cancel() { clearTimeout(timer); },
+      }));
+    },
+  }), async url => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reviewInput),
+    }));
+    assert.equal(events.some(event => event.error), false);
+    assert.match(events.map(event => event.content ?? "").join(""), /Missing reset handler/);
+  });
+  assert.equal(cancelledBeforeReply, false);
+});
+
+test("stopping during planning cancels the provider and never starts Qwen generation", async () => {
+  let started;
+  const startedPromise = new Promise(resolve => { started = resolve; });
+  const qwen = [];
+  let cancelled = false;
+  await withServer(createSseApp({
+    getGroqClient: () => planningQwenClient(qwen),
+    fetchImpl: async () => new Response(new ReadableStream({
+      start() { started(); },
+      cancel() { cancelled = true; },
+    })),
+  }), async url => {
+    const controller = new AbortController();
+    const response = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list website" }] }),
+      signal: controller.signal,
+    });
+    await startedPromise;
+    controller.abort();
+    await response.body.cancel().catch(() => {});
+    for (let index = 0; index < 20 && !cancelled; index++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(cancelled, true);
+    assert.equal(qwen.length, 0);
+  });
+});
+
+test("optional review rate limits do not wait, switch models, or retry", async () => {
+  let calls = 0;
+  await withServer(createSseApp({
+    fetchImpl: async () => {
+      calls++;
+      return new Response("", { status: 429, headers: { "retry-after": "10" } });
+    },
+  }), async url => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reviewInput),
+    }));
+    assert.ok(events.some(event => event.error));
+    assert.equal(events.some(event => event.content || event.agentTool), false);
+    assert.equal(events.filter(event => event.model).length, 1);
+  });
+  assert.equal(calls, 1);
+});
+
+test("empty optional review is skipped without inflating its output budget", async () => {
+  const requests = [];
+  await withServer(createSseApp({
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      return geminiResponse([{ candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [] } }] }]);
+    },
+  }), async url => {
+    const events = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reviewInput),
+    }));
+    assert.ok(events.some(event => event.error));
+    assert.equal(events.some(event => event.content), false);
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].generationConfig.maxOutputTokens, 768);
 });
 
 test("Gemma 4 reviews a Qwen program without calling Groq", async () => {
@@ -343,7 +624,7 @@ test("Gemma 4 reviews a Qwen program without calling Groq", async () => {
     const events = await readEvents(response);
     assert.match(events.filter((event) => event.content).map((event) => event.content).join(""), /no event handler/);
     assert.equal(events.find((event) => event.agentProvider)?.agentProvider, "gemini");
-    assert.match(geminiRequests[0].url, /models\/gemma-4-31b-it:streamGenerateContent/);
+    assert.match(geminiRequests[0].url, /models\/gemma-4-26b-a4b-it:streamGenerateContent/);
     assert.match(JSON.stringify(geminiRequests[0].body.contents), /Delete/);
     assert.match(JSON.stringify(geminiRequests[0].body.contents), /The page rendered and no runtime errors were reported/);
     assert.equal(geminiRequests[0].body.tools, undefined);

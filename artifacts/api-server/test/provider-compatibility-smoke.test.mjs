@@ -90,8 +90,8 @@ test("opt-in smoke probes use bounded, family-specific fields and safe diagnosti
   const flash = geminiRequests.find(({ url }) => url.includes(GEMINI_AGENT_PRIMARY_MODEL));
   const fallback = geminiRequests.find(({ url }) => url.includes(GEMINI_AGENT_FALLBACK_MODEL));
   const gemma = geminiRequests.find(({ url }) => url.includes("gemma-4-31b-it"));
-  assert.equal(flash.body.generationConfig.thinkingConfig.thinkingLevel, "medium");
-  assert.equal(fallback.body.generationConfig.thinkingConfig.thinkingLevel, "medium");
+  assert.equal(flash.body.generationConfig.thinkingConfig.thinkingLevel, "low");
+  assert.equal(fallback.body.generationConfig.thinkingConfig.thinkingLevel, "low");
   assert.equal(gemma.body.generationConfig.thinkingConfig, undefined);
   assert.equal(geminiRequests[0].init.headers["x-goog-api-key"], "test-gemini-secret");
 

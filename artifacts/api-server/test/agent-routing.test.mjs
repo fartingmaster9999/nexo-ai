@@ -46,9 +46,17 @@ function createApp(
   app.use("/api", createAgentRouter({
     getApiKey: agentOptions.getApiKey ?? (() => undefined),
     getGroqClient: agentOptions.getGroqClient ?? (() => client),
+    getGroqModels: agentOptions.getGroqModels ?? (async (provider) => (await provider.models.list()).data),
     search,
   }));
   return app;
+}
+
+function createQwenOnlyApp(client) {
+  return createApp(client, undefined, undefined, {
+    getGroqModels: async () => catalog.filter(model =>
+      [CODING_FALLBACK, PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(model.id)),
+  });
 }
 
 async function withServer(app, run) {
@@ -208,7 +216,7 @@ test("a down Qwen service is not retried on the next request or mislabeled as ex
     } } },
   };
   try {
-    await withServer(createApp(client), async (url) => {
+    await withServer(createQwenOnlyApp(client), async (url) => {
       const body = {
         messages: [{ role: "user", content: "Build a small calculator app" }],
       };
@@ -302,7 +310,7 @@ test("Agent cannot report successful completion without a build or after a faile
   });
 });
 
-test("coding pins Qwen through an output-budget retry and tool continuation, ignoring old GPT/Gemini routes", async () => {
+test("Qwen-only accounts retain output-budget recovery and ignore stale Gemini route hints", async () => {
   clearRateLimit(CODING_FALLBACK);
   const requests = [];
   const client = {
@@ -326,7 +334,7 @@ test("coding pins Qwen through an output-budget retry and tool continuation, ign
       return textStream("Qwen checked the result.");
     } } },
   };
-  await withServer(createApp(client), async (url) => {
+  await withServer(createQwenOnlyApp(client), async (url) => {
     const body = {
       messages: [
         { role: "user", content: "Make me a task list app" },
@@ -354,8 +362,8 @@ test("coding pins Qwen through an output-budget retry and tool continuation, ign
   assert.equal(requests.length, 3);
 });
 
-test("coding quota failure never substitutes GPT-OSS or claims a fallback succeeded", async () => {
-  clearRateLimit(CODING_FALLBACK);
+test("coding tries all ready coding models before reporting quota failure without a false success notice", async () => {
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
   const attempts = [];
   const client = {
     models: { list: async () => ({ data: catalog }) },
@@ -371,12 +379,67 @@ test("coding quota failure never substitutes GPT-OSS or claims a fallback succee
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: [{ role: "user", content: "Build a browser counter" }] }),
       }));
-      assert.match(events.find((event) => event.error)?.error, /Qwen rejected this coding request/);
+      assert.match(events.find((event) => event.error)?.error, /GPT-OSS 20B rejected this coding request/);
+      assert.equal(events.some(event => event.activity?.id === "agent-provider-wait"), false);
       assert.equal(events.some((event) => event.notice), false);
     });
-    assert.deepEqual(attempts, [CODING_FALLBACK]);
-  } finally { clearRateLimit(CODING_FALLBACK); }
+    assert.deepEqual(attempts, [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL]);
+  } finally { [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit); }
 });
+
+for (const successfulModel of [PRIMARY_MODEL, SMALL_MODEL]) {
+test(`coding switches to ${successfulModel} before waiting and retains it through completed tool history`, async () => {
+  const codingModels = [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL];
+  codingModels.forEach(clearRateLimit);
+  const requests = [];
+  const project = {
+    entrypoint: "index.html",
+    files: [{ path: "index.html", content: "<button id=\"plus\">+</button><p id=\"count\">0</p>" }],
+  };
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async request => {
+      if ([PROMPT_GUARD_MODEL, SAFEGUARD_MODEL].includes(request.model)) return { choices: [] };
+      requests.push(request);
+      if (request.model !== successfulModel) {
+        throw new Groq.APIError(429, { message: "Requests per minute (RPM): Limit 30, Used 30, Requested 1" },
+          undefined, new Headers({ "retry-after": "60" }));
+      }
+      assert.equal(request.reasoning_format, undefined, "no Qwen-only options on GPT-OSS");
+      assert.equal(request.include_reasoning, false);
+      assert.equal(request.reasoning_effort, "medium");
+      if (request.messages.some(message => message.role === "tool")) {
+        assert.match(JSON.stringify(request.messages), /SAVED_RUN_RESULT/);
+        assert.match(JSON.stringify(request.messages), /button/);
+        return textStream("The counter was built and checked.");
+      }
+      return projectStream("fallback-build", project);
+    } } },
+  };
+  try {
+    await withServer(createApp(client), async url => {
+      const body = { messages: [{ role: "user", content: "Build a counter website" }] };
+      const send = data => fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+      }).then(eventsFrom);
+      const events = await send(body);
+      const tool = events.find(event => event.agentTool)?.agentTool;
+      assert.equal(tool?.tool, "write_project");
+      assert.equal(events.some(event => event.activity?.id === "agent-provider-wait"), false);
+      assert.equal(events.find(event => event.notice)?.notice.model, successfulModel);
+      assert.equal(events.some(event => event.error), false);
+      const continued = await send({ ...body, agentProvider: "groq", agentModel: successfulModel,
+        agentHistory: [{ ...tool, result: "SAVED_RUN_RESULT: completed browser run" }] });
+      assert.ok(continued.some(event => event.content === "The counter was built and checked."));
+      assert.equal(continued.some(event => event.agentTool || event.error), false, "no completed action replay");
+      assert.equal(requests.at(-1).model, successfulModel);
+    });
+    assert.deepEqual(requests.map(request => request.model), successfulModel === PRIMARY_MODEL
+      ? [CODING_FALLBACK, PRIMARY_MODEL, PRIMARY_MODEL]
+      : [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL, SMALL_MODEL]);
+  } finally { codingModels.forEach(clearRateLimit); }
+});
+}
 
 test("Qwen 413 compacts context once without replaying tools, cutting latest code, or switching providers", async () => {
   for (const recover of [true, false]) {
@@ -459,7 +522,7 @@ test("coding waits repeatedly for explicit provider windows without replaying sa
       return textStream("The checked project is ready.");
     } } },
   };
-  await withServer(createApp(client), async (url) => {
+  await withServer(createQwenOnlyApp(client), async (url) => {
     const events = await eventsFrom(await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -491,7 +554,7 @@ test("coding stops after three waits when the browser retry budget is also exhau
     } } },
   };
   try {
-    await withServer(createApp(client), async (url) => {
+    await withServer(createQwenOnlyApp(client), async (url) => {
       const events = await eventsFrom(await fetch(url, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list app" }], agentRetryCount: 3 }),
@@ -534,7 +597,7 @@ test("input-token exhaustion defers a complete run and a later request resumes w
     } } },
   };
   try {
-    await withServer(createApp(client), async (url) => {
+    await withServer(createQwenOnlyApp(client), async (url) => {
       const send = (body) => fetch(url, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       }).then(eventsFrom);
@@ -570,7 +633,7 @@ test("legacy clients receive a clear quota error rather than an unsupported retr
     } } },
   };
   try {
-    await withServer(createApp(client), async (url) => {
+    await withServer(createQwenOnlyApp(client), async (url) => {
       const events = await eventsFrom(await fetch(url, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: [{ role: "user", content: "Build a small website" }] }),
@@ -627,7 +690,7 @@ test("stopping the stream cancels a Qwen wait before another model call", async 
     } } },
   };
   try {
-    await withServer(createApp(client), async (url) => {
+    await withServer(createQwenOnlyApp(client), async (url) => {
       const controller = new AbortController();
       const response = await fetch(url, {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,

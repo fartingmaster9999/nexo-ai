@@ -26,6 +26,7 @@ import { executeCode, formatPreviewReview, readPreviewReview, readPreviewInterac
 import { formatInteractionResult, interactionChecksHaveIssues } from '@/lib/preview-interactions';
 import { previewReviewHasIssues } from '@/lib/preview-review';
 import { startRequestDeadline, RESPONSE_DEADLINE_MS, AGENT_BUILD_DEADLINE_MS, AGENT_REVIEW_DEADLINE_MS } from '@/lib/request-deadlines';
+import { createProgramReviewMemo } from '@/lib/program-review-memo';
 import { MAX_AGENT_DEFERRED_RETRIES, waitForAgentWindow } from '@/lib/agent-retry';
 import { readAgentCheckpoint, writeAgentCheckpoint, deleteAgentCheckpoint, privateAgentHistory, extendAgentHistory, type AgentCheckpoint, type CheckpointState } from '@/lib/agent-checkpoint';
 import type { AgentWorkspaceTask } from '@/components/code-workspace';
@@ -698,6 +699,7 @@ function Home() {
     let connectTimeout: number | null = null;
     try {
       let agentHistory: AgentToolExchange[] = resume?.history ?? [];
+      const programReviews = createProgramReviewMemo();
       let agentToolCalls = resume?.toolCalls ?? 0;
       let deferredRetries = resume?.retries ?? 0;
       let agentFinalize = resume?.agentFinalize ?? false;
@@ -1095,6 +1097,11 @@ function Home() {
             if (imageMatch && imageMatch[1].length <= 2_000_000) {
               reviewBody.image = { mimeType: 'image/png', data: imageMatch[1].replace(/\s/g, '') };
             }
+            const cachedReview = programReviews.read(reviewBody);
+            if (cachedReview !== undefined) {
+              gemmaReviewText = cachedReview;
+              setReviewActivity('complete', 'Reused the review of unchanged code and run results');
+            } else {
             const reviewResponse = await fetch(apiEndpoint('/api/agent'), {
               method: 'POST',
               headers: apiRequestHeaders(),
@@ -1111,17 +1118,21 @@ function Home() {
               if (typeof event.content === 'string') reviewChunks.push(event.content);
               if (event.error) reviewerError = event.error;
               if (event.agentTool) reviewerError = 'Gemma 4 returned an unexpected tool request.';
-            }, 90_000);
+            }, AGENT_REVIEW_DEADLINE_MS);
             if (controller.signal.aborted) return;
             if (reviewerError || !reviewChunks.join('').trim()) {
               throw new Error('Gemma 4 did not return a usable review.');
             }
             gemmaReviewText = reviewChunks.join('').slice(0, 6000);
-            setReviewActivity('complete', 'Gemma 4 review is ready for Qwen');
+            programReviews.remember(reviewBody, gemmaReviewText);
+            setReviewActivity('complete', 'Gemma 4 review is ready for Agent');
+            }
             } catch {
               if (controller.signal.aborted) throw controller.signal.reason;
               gemmaReviewText = 'The Gemma 4 review was unavailable. Continue using the source, runtime output, and browser checks.';
-              setReviewActivity('error', 'Gemma 4 review unavailable; Qwen will continue with the run results');
+              setReviewActivity('error', reviewController.signal.aborted
+                ? 'Gemma 4 review took too long; Agent will continue with the run results'
+                : 'Gemma 4 review unavailable; Agent will continue with the run results');
             } finally {
               clearReviewDeadline();
               controller.signal.removeEventListener('abort', abortReview);

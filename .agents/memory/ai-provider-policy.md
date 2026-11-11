@@ -21,11 +21,23 @@ Gemini Live browser sessions must use a short-lived, one-use token created by th
 
 **How to apply:** Keep token issuance server-side, lock the supported model and session configuration, and never cache or log the returned ephemeral token. Treat Live audio as a separate Gemini route; normal chat stays on Groq.
 
-Prefer Gemini for non-coding Agent work when configured. For coding, Gemini may supply an implementation brief, but Qwen remains responsible for generating and repairing code. Favor useful planning and verification over minimum latency.
+Prefer Gemini for non-coding Agent work when configured. For coding, Gemini may supply an implementation brief; Groq-hosted coding models generate and repair code. Keep optional feedback concise and separately time-bounded rather than making the code-generation step rush.
 
-**Why:** The user reported zero Gemini calls alongside many Groq calls and explicitly said longer waits were acceptable if quality improved. They still require coding to be handled by Qwen, not GPT-OSS.
+**Why:** The user initially accepted longer waits for quality, but later explicitly asked for Gemini reviews and suggestions to take much less time. They subsequently allowed GPT-OSS alongside Qwen for Agent coding to reduce quota waits.
 
 **How to apply:** Do not route coding around Gemini merely because its code generator is Qwen. Keep the planning pass bounded, advisory, and free of tools or hidden thought disclosure. Explain when Gemini is unavailable on the actual running server and let Qwen continue without inventing quota exhaustion. Ordinary non-Agent chat remains on Groq.
+
+Optional feedback needs a fixed elapsed-time budget, not just an idle timeout that resets on every streamed chunk. A short advisory deadline expiring is not proof that a model is unhealthy.
+
+**Why:** Planning could consume most of the build deadline while still receiving chunks, and review could enter the main Agent's retry/fallback chain. The user wants less waiting without losing the working project.
+
+**How to apply:** Keep feedback deadlines independent of main generation, discard incomplete findings, preserve completed tools, and let Qwen continue with actual run evidence when review is skipped. Reuse successful feedback only for identical source, prompt, images, and run evidence within the same run; never reuse failures as findings.
+
+Model availability caches must be isolated by credential identity, including in-flight lookups and negative results.
+
+**Why:** A process-wide catalog could give a public-key visitor another account's model access, including after their own authorization failed.
+
+**How to apply:** Use a non-reversible credential digest for bounded cache keys, do not retain or log the key itself, and do not substitute a different account's cached models on failure.
 
 Use only live-catalog Gemma 4 models for the Agent's independent post-run code review. Feed its bounded findings and the isolated runner's outputs/checks to Qwen as untrusted tool results; Gemma must not modify code or execute tools.
 
@@ -33,11 +45,11 @@ Use only live-catalog Gemma 4 models for the Agent's independent post-run code r
 
 **How to apply:** Review generated source, runtime output, and sanitized structural preview checks. A generated plot image may be reviewed when supplied; do not claim visual screenshot inspection for HTML websites. If Gemma 4 is unavailable, let Qwen continue without the review and state that it was skipped. Never weaken preview isolation to capture content.
 
-Use GPT-OSS 120B for ordinary text chat, with GPT-OSS 20B as its quota fallback. Coding belongs to Qwen, in both ordinary chat and Agent mode; do not fall back to GPT-OSS for code generation.
+Use GPT-OSS 120B for ordinary text chat, with GPT-OSS 20B as its quota fallback. Ordinary chat coding stays on Qwen. Agent coding may fall back from Qwen to Groq-hosted GPT-OSS 120B, then GPT-OSS 20B.
 
-**Why:** After reporting repeated errors and poor generated code, the user explicitly changed the coding policy: “Coding should be handled by qwen not gpt-oss.” This supersedes the earlier coding-fallback arrangement, without changing the provider restriction.
+**Why:** The user previously required Qwen-only coding, but explicitly superseded that restriction for Agent: “Make agent also call gpt-oss 120b and 20b for coding, not just qwen. Rate limits affect it and then you have a delay.” The no-OpenAI-API restriction still applies; all three models run through Groq.
 
-**How to apply:** Pin coding and its tool continuations to the catalog-verified Qwen model, ignoring stale GPT/Gemini route hints from older clients. Retain coding intent across follow-ups such as “add a filter”; classifying only the latest wording previously sent project edits back to GPT-OSS. If Qwen is unavailable or genuinely limited, explain that rather than substituting GPT-OSS. Keep Gemini image analysis separate. Never invent unavailable model IDs or imply that routing bypasses provider quotas.
+**How to apply:** Agent starts coding on an available catalog-verified Qwen model, then tries ready GPT-OSS 120B and 20B before waiting on a 429. Keep a successful Groq fallback through tool continuations and retain completed tool results without rerunning actions. Use model-family-specific request options, and announce a switch only after it succeeds. Retain coding intent across follow-ups such as “add a filter.” Do not broaden ordinary chat coding or Gemini image routes. Never invent unavailable models or imply that switching bypasses shared provider quotas.
 
 Validate Groq model capabilities with a live request instead of trusting the SDK's general option types.
 
@@ -57,11 +69,11 @@ Treat Groq HTTP 413 as request-size rejection, separately from HTTP 429 and time
 
 **How to apply:** Permit only a bounded recovery that actually reduces the outgoing request. Preserve the newest prompt and complete current source, mark omitted context, and never alter saved history or rerun completed tools. Do not classify 413 as exhausted quota or switch coding to GPT-OSS. If safe compaction cannot fit, report the size limitation rather than silently cutting code.
 
-Explicit output allowances may justify one smaller-budget retry on the same model, not a change of coding provider or an incomplete project.
+Explicit output allowances may justify one smaller-budget retry on the same model, but never an incomplete project. Agent may first use another approved Groq coding model.
 
-**Why:** Large code generations were being described as exhausted model quotas and sent to GPT-OSS. Fitting a small complete implementation can recover from a size rejection, but truncating tool JSON or replacing an existing project with a stub would lose correctness.
+**Why:** Large code generations were being misdescribed as exhausted daily model quotas. The user now permits Agent model fallback, but truncating tool JSON or replacing an existing project with a stub would still lose correctness.
 
-**How to apply:** Learn caps only from verified provider quota metadata, bound recovery attempts, keep existing features, and reject truncated tool output before execution. Explain when a complete change cannot fit; do not claim the provider's limits have been bypassed.
+**How to apply:** Learn caps only from verified provider quota metadata, bound recovery attempts, keep existing features, and reject truncated tool output before execution. Agent may first try another ready coding model under the newer routing policy. Explain when a complete change cannot fit; do not claim the provider's limits have been bypassed.
 
 Under a learned small Qwen output allowance, reserve the budget for complete code rather than optional reasoning.
 
@@ -73,7 +85,7 @@ An Agent continuation can hit the output window after its project already ran su
 
 **Why:** The code-generation response used most of the available output allowance, and the immediate final-response call failed despite a working preview. Showing that as a failed build concealed the actual cause. The user explicitly chose longer automatic waiting over having to resend a request after another short-window rejection.
 
-**How to apply:** Distinguish short-window exhaustion from an oversized response or daily quota; use the provider's stated delay rather than guessing, preserve tool results, remain on Qwen, and keep all waits bounded and cancellable. Reserve hosting-deadline headroom for the resumed response rather than spending the entire request lifetime waiting.
+**How to apply:** Distinguish short-window exhaustion from an oversized response or daily quota; use the provider's stated delay rather than guessing, preserve tool results, and keep all waits bounded and cancellable. In Agent, first use another ready coding model when available. Reserve hosting-deadline headroom for the resumed response rather than spending the entire request lifetime waiting.
 
 A successful fallback should be described as a model switch that allows continued chatting, not as overall usage exhaustion.
 

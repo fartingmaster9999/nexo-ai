@@ -87,7 +87,7 @@ const preferredModels: Record<AgentTask, { model?: string; label: string; models
   coding: {
     model: CODING_FALLBACK,
     label: "Qwen3.8 27B",
-    models: [CODING_FALLBACK],
+    models: [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL],
   },
   planning: {
     model: PRIMARY_MODEL,
@@ -359,7 +359,7 @@ export function rateLimitDiagnostics(error: unknown) {
   };
 }
 
-export function codingRateLimitMessage(error: unknown): string {
+export function codingRateLimitMessage(error: unknown, model = CODING_FALLBACK): string {
   const quota = rateLimitDiagnostics(error);
   const labels: Record<string, string> = {
     TPM: "tokens per minute", TPD: "tokens per day", ITPM: "input tokens per minute",
@@ -379,7 +379,7 @@ export function codingRateLimitMessage(error: unknown): string {
     : Number.isFinite(delay) && delay >= 0 && delay <= 86400
       ? `Retry after at least ${Math.max(1, Math.ceil(delay))} seconds.`
       : "Retry after the provider window.";
-  return `Qwen rejected this coding request with HTTP 429. ${detail} ${nextStep} This rejection did not change any existing workspace files. Nexo has not switched your code to GPT-OSS.`;
+  return `${modelLabel(model)} rejected this coding request with HTTP 429. ${detail} ${nextStep} This rejection did not change any existing workspace files. No other ready coding model was available.`;
 }
 
 export function recordRateLimit(model: string, error: unknown) {

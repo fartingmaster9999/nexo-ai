@@ -23,9 +23,6 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
     window.__agentRequests = [];
     window.__agentReviewRequests = [];
     window.__agentDeferrals = [];
-    const nativeSetTimeout = window.setTimeout.bind(window);
-    window.setTimeout = (callback, delay, ...args) =>
-      nativeSetTimeout(callback, delay === 25000 ? 50 : delay, ...args);
     window.__agentAbortObserved = false;
     window.fetch = async (input, init = {}) => {
       const url = typeof input === "string" ? input : input.url;
