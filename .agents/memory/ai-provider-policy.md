@@ -27,11 +27,11 @@ Fail a Live call explicitly when the connection cannot keep up, rather than sile
 
 **How to apply:** Bound incoming messages, outgoing microphone data, and scheduled playback independently. On overflow, release the microphone and audio resources and offer a new call; do not reuse buffered audio in another session.
 
-Prefer Gemini for non-coding Agent work when configured. For coding, Gemini may supply an implementation brief; Groq-hosted coding models generate and repair code. Keep optional feedback concise and separately time-bounded rather than making the code-generation step rush.
+Prefer Gemini for non-coding Agent work when configured, and for image understanding, review, and Live. For new coding requests, use a brief Groq GPT-OSS planning pass followed by Qwen for code generation and repair; coding must not depend on Gemini credentials or model discovery.
 
-**Why:** The user initially accepted longer waits for quality, but later explicitly asked for Gemini reviews and suggestions to take much less time. They subsequently allowed GPT-OSS alongside Qwen for Agent coding to reduce quota waits.
+**Why:** The user reports that Qwen is the only model visibly called for coding, GPT-OSS is rarely called, and Gemini planning is slow or absent. They asked to use Groq GPT-OSS for planning because Groq calls are fast.
 
-**How to apply:** Do not route coding around Gemini merely because its code generator is Qwen. Keep the planning pass bounded, advisory, and free of tools or hidden thought disclosure. Explain when Gemini is unavailable on the actual running server and let Qwen continue without inventing quota exhaustion. Ordinary non-Agent chat remains on Groq.
+**How to apply:** Keep the GPT-OSS planning pass tool-free, concise, and separately time-bounded; fall back from 120B to 20B, then let Qwen proceed directly if planning fails. Do not call Gemini for coding-plan discovery. Keep Gemini for configured non-coding Agent work, image routes, code review, and Live. Ordinary non-Agent chat remains on Groq.
 
 Optional feedback needs a fixed elapsed-time budget, not just an idle timeout that resets on every streamed chunk. A short advisory deadline expiring is not proof that a model is unhealthy.
 

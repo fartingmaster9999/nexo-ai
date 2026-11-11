@@ -10,17 +10,17 @@ import { requestGeminiWithRetry, waitForGeminiRetry } from "../lib/gemini-retry"
 import {
   agentGenerationModelIds, agentSecurityModelIds, availableModelCatalog, classifyAgentTask,
   isAgentTask, isCoolingDown, isModelUnhealthy, clearModelUnhealthy, markModelUnhealthy,
-  clearRateLimit, codingRateLimitMessage, modelsForRequest, recordRateLimit, rateLimitDiagnostics, reduceOutputBudget,
+  clearRateLimit, codingRateLimitMessage, modelsForRequest, PRIMARY_MODEL, recordRateLimit, rateLimitDiagnostics, reduceOutputBudget, SMALL_MODEL,
   isTransientModelFailure, modelLabel, routeAgentTask, routeGeminiAgentTask, shouldTryCompatibleModel, type AgentTask,
 } from "../lib/model-routing";
 import { reviewAgentTool, screenPromptInjection } from "../lib/agent-security";
 import {
   availableGeminiAgentModels, buildGeminiAgentRequest, collectAgentResponse, GeminiAgentApiError,
   geminiAgentErrorMessage, geminiResponseBlocked, GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_MODEL,
-  MAX_AGENT_CODE_CHARS, MAX_AGENT_HTML_PREVIEW_RUNS, MAX_AGENT_PLAN_CHARS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
+  MAX_AGENT_CODE_CHARS, MAX_AGENT_HTML_PREVIEW_RUNS, MAX_AGENT_RESULT_CHARS, MAX_AGENT_TOOL_CALLS,
   requestGeminiAgentStream, validateAgentHistory, validateAgentProjectFiles, GeminiAgentStreamError,
 } from "../lib/gemini-agent";
-import { AgentOutputLimitError, buildGroqAgentRequest, collectGroqAgentResponse, groqAgentFailure } from "../lib/groq-agent";
+import { AgentOutputLimitError, buildGroqAgentRequest, collectGroqAgentResponse, generateGroqAgentPlan, groqAgentFailure } from "../lib/groq-agent";
 import { createUserChatClient, getChatClient, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
 import { getPublicProviderKey, isPublicApiRequest } from "../lib/public-api-keys";
 import { agentProviderRetryDelay, agentProviderDeferDelay, MAX_AGENT_PROVIDER_WAITS } from "../lib/agent-provider-wait";
@@ -37,6 +37,7 @@ type AgentRouterOptions = {
   getApiKey?: (request?: Request) => string | undefined;
   getGroqClient?: (apiKey?: string) => Groq | undefined;
   getGroqModels?: typeof availableModelCatalog;
+  generateGroqPlan?: typeof generateGroqAgentPlan;
   getGeminiModels?: typeof availableGeminiAgentModels;
   fetchImpl?: typeof fetch;
   search?: typeof searchWeb;
@@ -73,70 +74,6 @@ function htmlPreviewCount(history: AgentToolExchange[]) {
 
 function safeResultText(result: string) {
   return result.slice(0, MAX_AGENT_RESULT_CHARS);
-}
-
-async function generateGeminiPlanningNote(
-  input: Parameters<typeof buildGeminiAgentRequest>[0],
-  apiKey: string,
-  model: string,
-  outputLimit: number | undefined,
-  now: Date,
-  signal: AbortSignal,
-  fetchImpl: typeof fetch,
-  resetIdle: () => void,
-  onRequest: (bytes: number) => void,
-): Promise<string> {
-  const request = buildGeminiAgentRequest(input, now, false, undefined, model, "planning");
-  request.generationConfig.maxOutputTokens = Math.min(
-    request.generationConfig.maxOutputTokens,
-    outputLimit ?? request.generationConfig.maxOutputTokens,
-  );
-  request.generationConfig.temperature = 0.2;
-  onRequest(Buffer.byteLength(JSON.stringify(request), "utf8"));
-  // Advisory feedback must not enter the main Agent's provider retry loop.
-  const upstream = await requestGeminiAgentStream(apiKey, request, signal, fetchImpl, model);
-  if (!upstream.ok) {
-    await upstream.body?.cancel().catch(() => {});
-    throw new GeminiAgentApiError(upstream.status);
-  }
-  if (!upstream.body) throw new Error("Gemini planning returned an empty stream.");
-
-  const decoder = new GeminiSseDecoder();
-  const reader = upstream.body.getReader();
-  const abortRead = () => { void reader.cancel().catch(() => {}); };
-  signal.addEventListener("abort", abortRead, { once: true });
-  const events: unknown[] = [];
-  let eventChars = 0;
-  try {
-    while (true) {
-      signal.throwIfAborted();
-      const { value, done } = await reader.read();
-      if (signal.aborted) throw signal.reason;
-      if (done) break;
-      resetIdle();
-      for (const event of decoder.push(value)) {
-        eventChars += JSON.stringify(event).length;
-        if (eventChars > 24_000) throw new Error("Gemini planning exceeded its bounded output size.");
-        events.push(event);
-      }
-    }
-    for (const event of decoder.push()) {
-      eventChars += JSON.stringify(event).length;
-      if (eventChars > 24_000) throw new Error("Gemini planning exceeded its bounded output size.");
-      events.push(event);
-    }
-  } finally {
-    signal.removeEventListener("abort", abortRead);
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
-  signal.throwIfAborted();
-  const result = collectAgentResponse(events, { allowMissingThoughtSignature: model.startsWith("gemma-") });
-  if (geminiResponseBlocked(result)) throw new Error("Gemini blocked the planning request.");
-  if (result.finishReason === "MAX_TOKENS") throw new Error("Gemini planning was cut off.");
-  if (result.calls.length) throw new Error("Gemini returned tools during its planning-only pass.");
-  if (!result.text.trim()) throw new Error("Gemini returned no planning notes.");
-  return result.text.slice(0, MAX_AGENT_PLAN_CHARS);
 }
 
 function cleanSources(
@@ -203,6 +140,7 @@ export function createAgentRouter({
     ? createUserChatClient(apiKey)
     : process.env.GROQ_API_KEY ? getChatClient() : undefined,
   getGroqModels = availableModelCatalog,
+  generateGroqPlan = generateGroqAgentPlan,
   getGeminiModels = availableGeminiAgentModels,
   fetchImpl = fetch,
   search = searchWeb,
@@ -252,9 +190,7 @@ export function createAgentRouter({
       parsed.data.agentProvider === "gemini" ||
       isProgramReview ||
       Boolean(parsed.data.image) ||
-      hasNewCodingRequest ||
-      (agentTask !== "coding" && parsed.data.agentProvider !== "groq") ||
-      !groqClient
+      (agentTask !== "coding" && parsed.data.agentProvider !== "groq")
     );
     if (apiKey && needsGeminiCatalog) {
       const catalogStartedAt = Date.now();
@@ -517,51 +453,55 @@ export function createAgentRouter({
           await emit({ activity: { id: activityId, label: "Prompt Guard screening is unavailable; server-side restrictions remain active", kind: "security", status: "error" } });
         }
       }
-      if (hasNewCodingRequest && apiKey && geminiCandidates.length) {
-        const plannerCandidates = modelsForRequest(geminiCandidates).slice(0, 2);
+      if (hasNewCodingRequest && activeProvider === "groq") {
+        const plannerCandidates = [PRIMARY_MODEL, SMALL_MODEL].filter((model) => groqCandidates.includes(model));
         const planningStartedAt = Date.now();
         let planningTimedOut = false;
         let planningAttempts = 0;
-        let planningBytes = 0;
-        let firstChunkMs: number | undefined;
-        await emit({ activity: { id: "agent-gemini-plan", label: `Gemini is planning the implementation for ${modelLabel(activeModel)}`, kind: "thinking", status: "running" } });
+        let planningModel: string | undefined;
+        await emit({ activity: {
+          id: "agent-plan",
+          label: plannerCandidates.length
+            ? `${modelLabel(plannerCandidates[0]!)} is preparing a short plan for ${modelLabel(activeModel)}`
+            : `No ready GPT-OSS planner; ${modelLabel(activeModel)} will plan directly`,
+          kind: plannerCandidates.length ? "thinking" : "info",
+          status: plannerCandidates.length ? "running" : "complete",
+        } });
         try {
-          codingPlan = await withFeedbackBudget(async (signal) => {
+          if (groqClient && plannerCandidates.length) codingPlan = await withFeedbackBudget(async (signal) => {
             for (const plannerModel of plannerCandidates) {
               signal.throwIfAborted();
               planningAttempts++;
               try {
-                const plan = await generateGeminiPlanningNote(
-                  { ...parsed.data, agentHistory: history },
-                  apiKey,
+                const plan = await generateGroqPlan(
+                  groqClient,
+                  parsed.data,
                   plannerModel,
-                  geminiModelOutputLimits.get(plannerModel),
-                  now(),
                   signal,
-                  fetchImpl,
-                  () => { firstChunkMs ??= Date.now() - planningStartedAt; },
-                  (bytes) => { planningBytes += bytes; },
                 );
                 clearModelUnhealthy(plannerModel);
+                planningModel = plannerModel;
                 req.log.info({
-                  event: "agent.gemini.plan.completed",
-                  provider: "gemini",
+                  event: "agent.groq.plan.completed",
+                  provider: "groq",
                   model: plannerModel,
                   planChars: plan.length,
-                }, "Gemini completed the bounded coding plan");
+                }, "GPT-OSS completed the bounded coding plan");
                 return plan;
               } catch (error) {
                 if (signal.aborted) throw error;
-                const status = error instanceof GeminiAgentApiError ? error.status : undefined;
-                if (isTransientModelFailure(status)) markModelUnhealthy(plannerModel);
+                const failure = groqAgentFailure(error);
+                const status = failure?.status ?? (error as { status?: number })?.status;
+                if (status === 429) recordRateLimit(plannerModel, error);
+                else if (isTransientModelFailure(status, failure?.kind)) markModelUnhealthy(plannerModel);
                 req.log.warn({
-                  event: "agent.gemini.plan.unavailable",
-                  provider: "gemini",
+                  event: "agent.groq.plan.unavailable",
+                  provider: "groq",
                   model: plannerModel,
                   ...(status !== undefined ? { status } : {}),
-                  timedOut: false,
-                }, "Gemini planning was unavailable; Qwen will continue");
-                if (status === 401 || status === 403) break;
+                  failureKind: failure?.kind ?? "planning",
+                }, "GPT-OSS planning was unavailable; Qwen will continue");
+                if (status === 401) break;
               }
             }
             return undefined;
@@ -571,29 +511,21 @@ export function createAgentRouter({
           planningTimedOut = error instanceof FeedbackTimeoutError;
         }
         req.log.info({ event: "agent.feedback.finished", purpose: "planning",
-          durationMs: Date.now() - planningStartedAt, firstChunkMs, attempts: planningAttempts,
-          requestBytes: planningBytes, responseChars: codingPlan?.length ?? 0,
+          provider: "groq", model: planningModel,
+          durationMs: Date.now() - planningStartedAt, attempts: planningAttempts,
+          responseChars: codingPlan?.length ?? 0,
           outcome: codingPlan ? "completed" : planningTimedOut ? "timed_out" : "unavailable",
-        }, "Optional Gemini planning finished");
+        }, "Optional GPT-OSS planning finished");
         await emit({
           activity: {
-            id: "agent-gemini-plan",
-            label: codingPlan ? "Gemini's implementation plan is ready"
-              : planningTimedOut ? `Gemini planning took too long; ${modelLabel(activeModel)} will plan directly`
-              : `Gemini planning was unavailable; ${modelLabel(activeModel)} will plan directly`,
+            id: "agent-plan",
+            label: codingPlan ? `${modelLabel(planningModel!)}'s short plan is ready`
+              : planningTimedOut ? `GPT-OSS planning timed out; ${modelLabel(activeModel)} will plan directly`
+              : plannerCandidates.length
+                ? `GPT-OSS planning was unavailable; ${modelLabel(activeModel)} will plan directly`
+                : `No ready GPT-OSS planner; ${modelLabel(activeModel)} will plan directly`,
             kind: "thinking",
-            status: codingPlan ? "complete" : "error",
-          },
-        });
-      } else if (activeTask === "coding" && history.length === 0) {
-        await emit({
-          activity: {
-            id: "agent-gemini-plan",
-            label: !apiKey
-              ? `Gemini isn't configured on this server; ${modelLabel(activeModel)} is continuing directly`
-              : `No compatible Gemini planner is available; ${modelLabel(activeModel)} is continuing directly`,
-            kind: "info",
-            status: "complete",
+            status: codingPlan || !plannerCandidates.length ? "complete" : "error",
           },
         });
       }

@@ -95,11 +95,12 @@ function geminiProbeRequest(model: string) {
     false,
     undefined,
     model,
-    "planning",
+    "agent",
   );
   request.systemInstruction.parts[0]!.text = "Reply with OK.";
   request.contents = [{ role: "user", parts: [{ text: "Reply with OK." }] }];
   request.generationConfig.maxOutputTokens = 8;
+  if (!model.startsWith("gemma-")) request.generationConfig.thinkingConfig = { thinkingLevel: "low" };
   return request;
 }
 

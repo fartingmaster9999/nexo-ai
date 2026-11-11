@@ -1,5 +1,5 @@
 export const FEEDBACK_CATALOG_MS = 3_000;
-export const FEEDBACK_PLANNING_MS = 12_000;
+export const FEEDBACK_PLANNING_MS = 5_000;
 export const FEEDBACK_REVIEW_MS = 12_000;
 
 export class FeedbackTimeoutError extends Error {

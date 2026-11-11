@@ -47,6 +47,7 @@ function createApp(
     getApiKey: agentOptions.getApiKey ?? (() => undefined),
     getGroqClient: agentOptions.getGroqClient ?? (() => client),
     getGroqModels: agentOptions.getGroqModels ?? (async (provider) => (await provider.models.list()).data),
+    generateGroqPlan: agentOptions.generateGroqPlan ?? (async () => undefined),
     search,
   }));
   return app;
@@ -678,7 +679,7 @@ test("legacy clients receive a clear quota error rather than an unsupported retr
   } finally { clearRateLimit(CODING_FALLBACK); }
 });
 
-test("an empty deferred coding run does not repeat the Gemini planning pass", async () => {
+test("an empty deferred coding run does not repeat the GPT-OSS planning pass", async () => {
   const client = {
     models: { list: async () => ({ data: catalog }) },
     chat: { completions: { create: async (request) => {

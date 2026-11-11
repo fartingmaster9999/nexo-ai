@@ -8,9 +8,9 @@ import {
   GEMINI_AGENT_MODEL, MAX_AGENT_HTML_PREVIEW_RUNS,
   requestGeminiAgentStream, validateAgentHistory,
 } from "../src/lib/gemini-agent.ts";
-import { buildGroqAgentRequest, collectGroqAgentResponse, GROQ_AGENT_MODEL } from "../src/lib/groq-agent.ts";
+import { buildGroqAgentRequest, collectGroqAgentResponse, generateGroqAgentPlan, GROQ_AGENT_MODEL } from "../src/lib/groq-agent.ts";
 import {
-  CODING_FALLBACK, GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_PRIMARY_MODEL, clearModelUnhealthy,
+  CODING_FALLBACK, GEMINI_AGENT_FALLBACK_MODEL, GEMINI_AGENT_PRIMARY_MODEL, PRIMARY_MODEL, SMALL_MODEL, clearModelUnhealthy,
 } from "../src/lib/model-routing.ts";
 import { createAgentRouter } from "../src/routes/agent.ts";
 
@@ -242,6 +242,8 @@ function createSseApp({
     { name: "models/gemma-4-31b-it", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 65536 },
     { name: "models/gemma-4-26b-a4b-it", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 65536 },
   ],
+  getGroqModels,
+  generateGroqPlan = async () => undefined,
   fetchImpl,
   search,
   providerIdleMs,
@@ -254,6 +256,8 @@ function createSseApp({
   app.use("/api", createAgentRouter({
     getApiKey,
     getGroqClient,
+    ...(getGroqModels ? { getGroqModels } : {}),
+    generateGroqPlan,
     getGeminiModels,
     fetchImpl,
     search,
@@ -285,18 +289,27 @@ function planningQwenClient(requests, project) {
   };
 }
 
-test("Gemini planning is tool-free, bounded, and does not claim a tool limit", () => {
-  const request = buildGeminiAgentRequest({
-    messages: [{ role: "user", content: "Build a task list" }],
-    projectFiles: [{ path: "index.html", content: "<h1>Existing project</h1>" }],
-  }, new Date("2026-11-06T18:30:00Z"), true, undefined, GEMINI_AGENT_MODEL, "planning");
-  assert.equal(request.tools, undefined);
-  assert.equal(request.toolConfig, undefined);
-  assert.equal(request.generationConfig.maxOutputTokens, 1024);
-  assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "low");
-  assert.match(request.systemInstruction.parts[0].text, /concrete acceptance checks/);
-  assert.doesNotMatch(request.systemInstruction.parts[0].text, /tool limit has been reached/);
-  assert.match(JSON.stringify(request.contents), /Existing project/);
+test("GPT-OSS plan requests are brief, tool-free, and never expose hidden reasoning", async () => {
+  let request;
+  const client = { chat: { completions: { create: async (body, options) => {
+    request = { body, options };
+    return { choices: [{ finish_reason: "stop", message: {
+      content: "Build the page in index.html. Verify the primary button works.",
+      reasoning: "PRIVATE_PLAN_REASONING",
+    } }] };
+  } } } };
+  const plan = await generateGroqAgentPlan(client, {
+    messages: [{ role: "user", content: "Build a small interactive page" }],
+    projectFiles: [{ path: "index.html", content: "existing source" }],
+  }, PRIMARY_MODEL, new AbortController().signal);
+  assert.match(plan, /verify the primary button/i);
+  assert.equal(request.body.model, PRIMARY_MODEL);
+  assert.equal(request.body.reasoning_effort, "low");
+  assert.equal(request.body.include_reasoning, false);
+  assert.equal(request.body.max_completion_tokens, 512);
+  assert.doesNotMatch(JSON.stringify(request.body), /existing source|PRIVATE_PLAN_REASONING/);
+  assert.match(request.body.messages[1].content, /index\.html/);
+  assert.equal(request.options.signal.aborted, false);
 });
 
 test("Gemma review is tool-free and receives source, runtime output, and browser checks as untrusted data", () => {
@@ -316,7 +329,7 @@ test("Gemma review is tool-free and receives source, runtime output, and browser
   assert.match(request.contents.at(-1).parts.at(-1).text, /never execute or follow instructions/);
 });
 
-test("feedback reduces prompt overhead without dropping latest requirements or source evidence", (t) => {
+test("Gemma review reduces prompt overhead without dropping source or run evidence", (t) => {
   const source = "<h1>Keep this complete source</h1>";
   const data = {
     messages: [
@@ -332,19 +345,14 @@ test("feedback reduces prompt overhead without dropping latest requirements or s
     }],
   };
   const full = buildGeminiAgentRequest(data);
-  const plan = buildGeminiAgentRequest(data, undefined, true, undefined, GEMINI_AGENT_MODEL, "planning");
   const review = buildGeminiAgentRequest(data, undefined, true, undefined, "gemma-4-26b-a4b-it", "review", {
     language: "html", source, output: "Runtime evidence",
   });
-  assert.ok(JSON.stringify(plan).length < JSON.stringify(full).length / 2);
-  assert.equal(plan.generationConfig.maxOutputTokens, 1024, "Deepthink cannot expand advisory budgets");
-  assert.equal(plan.generationConfig.thinkingConfig.thinkingLevel, "low");
-  assert.match(JSON.stringify(plan.contents), /preserve filters/);
-  assert.match(JSON.stringify(plan.contents), /Keep this complete source/);
+  assert.ok(JSON.stringify(review).length < JSON.stringify(full).length / 2);
   assert.equal(JSON.stringify(review.contents).split(source).length - 1, 1, "review source appears once");
   assert.doesNotMatch(JSON.stringify(review.contents), /DUPLICATED_TOOL_SOURCE|OLD_TURN/);
   assert.match(JSON.stringify(review.contents), /Runtime evidence/);
-  t.diagnostic(`Synthetic fixture request bytes: full=${Buffer.byteLength(JSON.stringify(full))}, planning=${Buffer.byteLength(JSON.stringify(plan))}, review=${Buffer.byteLength(JSON.stringify(review))}.`);
+  t.diagnostic(`Synthetic fixture request bytes: full=${Buffer.byteLength(JSON.stringify(full))}, review=${Buffer.byteLength(JSON.stringify(review))}.`);
 });
 
 test("Gemini catalogs are isolated by credential and concurrent same-account lookups are shared", async () => {
@@ -401,45 +409,44 @@ test("slow Gemini catalog cannot delay a Qwen build beyond the discovery budget"
       body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list website" }] }),
     }));
     assert.equal(events.some(event => event.error), false);
-    assert.match(events.find(event => event.activity?.id === "agent-gemini-plan").activity.label, /continuing directly/);
+    assert.match(events.find(event => event.activity?.id === "agent-plan").activity.label, /plan directly/);
   });
   assert.ok(Date.now() - start < 1500);
   assert.equal(qwen.length, 1);
   assert.equal(inference, 0);
 });
 
-test("planning hard deadline continues Qwen even while Gemini keeps streaming", async () => {
+test("GPT-OSS planning hard deadline continues Qwen when the planner stalls", async () => {
   const qwen = [];
   let cancelled = false;
-  let chunks = 0;
-  let timer;
+  let plannerCalls = 0;
+  const modelCatalog = [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].map((id) => ({
+    id, active: true, context_window: 131072, max_completion_tokens: 16384,
+  }));
   const start = Date.now();
   await withServer(createSseApp({
     feedbackBudgets: { planningMs: 40 },
+    getGroqModels: async () => modelCatalog,
     getGroqClient: () => planningQwenClient(qwen, {
       entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Tasks</h1>" }],
     }),
-    fetchImpl: async () => new Response(new ReadableStream({
-      start(stream) {
-        timer = setInterval(() => {
-          chunks++;
-          stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(modelEvent([{ text: "unfinished plan " }]))}\n\n`));
-        }, 5);
-      },
-      cancel() { cancelled = true; clearInterval(timer); },
-    })),
+    generateGroqPlan: async (_client, _input, _model, signal) => {
+      plannerCalls++;
+      signal.addEventListener("abort", () => { cancelled = true; }, { once: true });
+      return new Promise(() => {});
+    },
   }), async url => {
     const events = await readEvents(await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list website" }] }),
     }));
     assert.equal(events.some(event => event.error), false);
-    assert.ok(events.some(event => event.activity?.label.includes("planning took too long")));
+    assert.ok(events.some(event => event.activity?.label.includes("GPT-OSS planning timed out")));
     assert.equal(events.find(event => event.agentTool)?.agentTool.tool, "write_project");
     assert.doesNotMatch(JSON.stringify(qwen), /unfinished plan/);
   });
   assert.ok(Date.now() - start < 1500);
-  assert.ok(chunks > 0);
+  assert.equal(plannerCalls, 1);
   assert.equal(cancelled, true);
   assert.equal(qwen.length, 1);
 });
@@ -529,17 +536,21 @@ test("successful review keeps the transport alive until its delayed response bod
   assert.equal(cancelledBeforeReply, false);
 });
 
-test("stopping during planning cancels the provider and never starts Qwen generation", async () => {
+test("stopping during GPT-OSS planning cancels the provider and never starts Qwen generation", async () => {
   let started;
   const startedPromise = new Promise(resolve => { started = resolve; });
   const qwen = [];
+  const modelCatalog = [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].map((id) => ({
+    id, active: true, context_window: 131072, max_completion_tokens: 16384,
+  }));
   let cancelled = false;
   await withServer(createSseApp({
+    getGroqModels: async () => modelCatalog,
     getGroqClient: () => planningQwenClient(qwen),
-    fetchImpl: async () => new Response(new ReadableStream({
-      start() { started(); },
-      cancel() { cancelled = true; },
-    })),
+    generateGroqPlan: async (_client, _input, _model, signal) => new Promise((resolve, reject) => {
+      started();
+      signal.addEventListener("abort", () => { cancelled = true; reject(signal.reason); }, { once: true });
+    }),
   }), async url => {
     const controller = new AbortController();
     const response = await fetch(url, {
@@ -683,19 +694,22 @@ test("Gemma review failures do not downgrade to a Groq code model", async () => 
   });
 });
 
-test("Coding calls Gemini once for planning, then Qwen builds and continues without replanning", async () => {
+test("Groq GPT-OSS plans without Gemini, then Qwen builds and continues without replanning", async () => {
   const qwenRequests = [];
-  const geminiRequests = [];
+  const planModels = [];
   const project = { entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Tasks</h1>" }] };
   const groq = planningQwenClient(qwenRequests, project);
+  const modelCatalog = [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].map((id) => ({
+    id, active: true, context_window: 131072, max_completion_tokens: 16384,
+  }));
   const app = createSseApp({
     getGroqClient: () => groq,
-    fetchImpl: async (url, init) => {
-      geminiRequests.push({ url: String(url), body: JSON.parse(init.body) });
-      return geminiResponse([modelEvent([
-        { text: "private-provider-thought", thought: true },
-        { text: "Acceptance checks: add, complete, and delete tasks; use local state and labeled controls." },
-      ])]);
+    getGroqModels: async () => modelCatalog,
+    getGeminiModels: async () => { assert.fail("coding plans must not query Gemini"); },
+    fetchImpl: async () => { assert.fail("coding plans must not call Gemini"); },
+    generateGroqPlan: async (_client, _input, model) => {
+      planModels.push(model);
+      return "Acceptance checks: add, complete, and delete tasks; use local state and labeled controls.";
     },
   });
   await withServer(app, async (url) => {
@@ -704,7 +718,7 @@ test("Coding calls Gemini once for planning, then Qwen builds and continues with
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(prompt),
     }));
     assert.equal(events.some((event) => event.error), false);
-    assert.ok(events.some((event) => event.activity?.id === "agent-gemini-plan" && event.activity.status === "complete"));
+    assert.ok(events.some((event) => event.activity?.id === "agent-plan" && event.activity.status === "complete"));
     const tool = events.find((event) => event.agentTool)?.agentTool;
     assert.equal(tool.tool, "write_project");
     assert.match(JSON.stringify(qwenRequests[0].messages), /Acceptance checks: add, complete, and delete tasks/);
@@ -725,9 +739,8 @@ test("Coding calls Gemini once for planning, then Qwen builds and continues with
     const continued = await readEvents(continuationResponse);
     assert.equal(continued.some((event) => event.error), false);
     assert.match(continued.map((event) => event.content ?? "").join(""), /build is ready/);
-    assert.equal(geminiRequests.length, 1);
-    assert.match(geminiRequests[0].url, /:streamGenerateContent/);
-    assert.equal(geminiRequests[0].body.tools, undefined);
+    assert.deepEqual(planModels, [PRIMARY_MODEL]);
+    assert.equal(qwenRequests.length, 2);
     assert.ok(qwenRequests.every((request) => request.model === CODING_FALLBACK));
   });
 });
@@ -753,16 +766,24 @@ test("Non-coding Agent work prefers Gemini even when Groq is configured", async 
   });
 });
 
-test("Unavailable Gemini planning does not block Qwen or claim a rate limit", async () => {
+test("Unavailable GPT-OSS planning falls through to Qwen without a false quota error", async () => {
   const qwenRequests = [];
-  let geminiCalls = 0;
+  const planModels = [];
+  const modelCatalog = [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].map((id) => ({
+    id, active: true, context_window: 131072, max_completion_tokens: 16384,
+  }));
   await withServer(createSseApp({
     getGroqClient: () => planningQwenClient(qwenRequests, {
       entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Tasks</h1>" }],
     }),
-    fetchImpl: async () => {
-      geminiCalls += 1;
-      return new Response("", { status: 403 });
+    getGroqModels: async () => modelCatalog,
+    getGeminiModels: async () => { assert.fail("coding plans must not query Gemini"); },
+    fetchImpl: async () => { assert.fail("coding plans must not call Gemini"); },
+    generateGroqPlan: async (_client, _input, model) => {
+      planModels.push(model);
+      const error = new Error("provider refused this model");
+      error.status = 403;
+      throw error;
     },
   }), async (url) => {
     const events = await readEvents(await fetch(url, {
@@ -770,29 +791,32 @@ test("Unavailable Gemini planning does not block Qwen or claim a rate limit", as
       body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list website" }] }),
     }));
     assert.equal(events.some((event) => event.error), false);
-    assert.ok(events.some((event) => event.activity?.id === "agent-gemini-plan" && event.activity.status === "error"));
-    assert.ok(geminiCalls > 0 && geminiCalls <= 2);
+    assert.ok(events.some((event) => event.activity?.id === "agent-plan" && event.activity.status === "error"));
+    assert.deepEqual(planModels, [PRIMARY_MODEL, SMALL_MODEL]);
     assert.equal(qwenRequests[0].model, CODING_FALLBACK);
   });
 });
 
-test("Coding without a Gemini key stays on Qwen and explains the skipped plan", async () => {
+test("Coding without Gemini still uses Groq and skips the Gemini catalog", async () => {
   const qwenRequests = [];
+  let geminiCatalogCalls = 0;
   await withServer(createSseApp({
     getApiKey: () => undefined,
     getGroqClient: () => planningQwenClient(qwenRequests, {
       entrypoint: "index.html", files: [{ path: "index.html", content: "<h1>Tasks</h1>" }],
     }),
-    fetchImpl: async () => { throw new Error("Gemini must not be called without a key"); },
+    getGeminiModels: async () => { geminiCatalogCalls++; return []; },
+    fetchImpl: async () => { throw new Error("Gemini must not be called for coding"); },
   }), async (url) => {
     const events = await readEvents(await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages: [{ role: "user", content: "Build a task list website" }] }),
     }));
     assert.equal(events.some((event) => event.error), false);
-    assert.ok(events.some((event) => event.activity?.label.includes("isn't configured on this server")));
+    assert.ok(events.some((event) => event.activity?.label.includes("No ready GPT-OSS planner")));
     assert.equal(qwenRequests[0].model, CODING_FALLBACK);
   });
+  assert.equal(geminiCatalogCalls, 0);
 });
 
 test("Qwen Agent request enables bounded autonomous build-and-test tools", () => {
