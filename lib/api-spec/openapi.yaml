@@ -485,6 +485,10 @@ components:
           type: boolean
           default: false
           description: Use high thinking level instead of medium
+        compareAgentMode:
+          type: boolean
+          default: false
+          description: For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and a Gemini final decision.
         agentProvider:
           type: string
           enum: [gemini, groq]

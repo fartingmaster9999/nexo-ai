@@ -31,7 +31,13 @@ Prefer Gemini for non-coding Agent work when configured, and for image understan
 
 **Why:** The user first asked to use fast Groq GPT-OSS planning, then chose to have GPT-OSS build a separate implementation alongside Qwen. Replacing the planning-only call with concurrent code generation avoids paying for a redundant model pass.
 
-**How to apply:** For a new coding request, generate independent Qwen and GPT-OSS 120B candidates concurrently when both models are available. Do not execute either candidate until its tool shape, project paths, size, and code completeness pass validation. Select a valid candidate by structural checks, prefer Qwen on ties, and continue with either surviving model if the other fails. Reuse a completed parallel candidate if Qwen fails; do not repeat completed model work or create another pair on continuations. Keep Gemini out of coding generation and planning. Keep Gemini for configured non-coding Agent work, image routes, independent code review, and Live. Ordinary non-Agent chat remains on Groq.
+**How to apply:** For a new coding request, generate independent Qwen and GPT-OSS 120B candidates concurrently when both models are available. Do not execute either candidate until its tool shape, project paths, size, and code completeness pass validation. Select a valid candidate by structural checks, prefer Qwen on ties, and continue with either surviving model if the other fails. Reuse a completed parallel candidate if Qwen fails; do not repeat completed model work or create another pair on continuations. Keep Gemini out of coding generation and planning. Keep Gemini for configured non-coding Agent work, image routes, independent code review, explicit Compare Agent Mode final decisions, and Live. Ordinary non-Agent chat remains on Groq.
+
+Compare Agent Mode is an explicit high-usage option and only works with Agent and Deepthink enabled. It makes three Qwen and two GPT-OSS coding drafts, asks each model to select from its own valid drafts, then asks Gemini to choose between the two finalists. Execute only the Gemini-selected, validated candidate.
+
+**Why:** The user requested this multi-model comparison specifically as a Deepthink-only Agent mode. The comparison can use up to eight provider calls, so it must remain opt-in and make its provider requirements and usage clear.
+
+**How to apply:** Require Deepthink and a configured Gemini key at the UI and API boundary. Run only new coding requests, validate all tool outputs before self-review, show progress and partial-failure counts, never execute losing drafts, and do not expose private reasoning. Stop or fail clearly when either model has no usable finalist or Gemini cannot decide; do not silently substitute another winner.
 
 Optional feedback needs a fixed elapsed-time budget, not just an idle timeout that resets on every streamed chunk. A short advisory deadline expiring is not proof that a model is unhealthy.
 

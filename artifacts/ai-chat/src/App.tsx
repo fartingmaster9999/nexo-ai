@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, GitCompare, ImagePlus, KeyRound, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -58,6 +58,7 @@ const logoUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/nexo-logo.png`;
 const prefersReducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const CodeWorkspace = lazy(() => import('@/components/code-workspace').then(module => ({ default: module.CodeWorkspace })));
 const DEEPTHINK_KEY = 'nexo-deepthink';
+const COMPARE_AGENT_KEY = 'nexo-compare-agent';
 const AGENT_KEY = 'nexo-agent';
 const PUBLIC_GROQ_KEY = 'nexo-public-groq-key';
 const PUBLIC_GEMINI_KEY = 'nexo-public-gemini-key';
@@ -153,15 +154,25 @@ function Home() {
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   const [agentMode, setAgentMode] = useState<boolean>(() => { try { return window.localStorage.getItem(AGENT_KEY) === '1'; } catch { return false; } });
+  const [compareAgentMode, setCompareAgentMode] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(DEEPTHINK_KEY) === '1' &&
+        window.localStorage.getItem(AGENT_KEY) === '1' &&
+        window.localStorage.getItem(COMPARE_AGENT_KEY) === '1';
+    } catch { return false; }
+  });
   const [deepthinkSuggestionDismissed, setDeepthinkSuggestionDismissed] = useState(false);
   useEffect(() => {
     const syncModePreferences = (event: StorageEvent) => {
       try {
         if (event.storageArea !== window.localStorage) return;
-        if (event.key !== null && event.key !== DEEPTHINK_KEY && event.key !== AGENT_KEY &&
+        if (event.key !== null && event.key !== DEEPTHINK_KEY && event.key !== AGENT_KEY && event.key !== COMPARE_AGENT_KEY &&
             event.key !== PUBLIC_GROQ_KEY && event.key !== PUBLIC_GEMINI_KEY) return;
-        setDeepthink(window.localStorage.getItem(DEEPTHINK_KEY) === '1');
-        setAgentMode(window.localStorage.getItem(AGENT_KEY) === '1');
+        const nextDeepthink = window.localStorage.getItem(DEEPTHINK_KEY) === '1';
+        const nextAgent = window.localStorage.getItem(AGENT_KEY) === '1';
+        setDeepthink(nextDeepthink);
+        setAgentMode(nextAgent);
+        setCompareAgentMode(nextDeepthink && nextAgent && window.localStorage.getItem(COMPARE_AGENT_KEY) === '1');
         setProviderKeys(readPublicProviderKeys());
       } catch {
         return;
@@ -173,17 +184,45 @@ function Home() {
   const toggleDeepthink = () => {
     const next = !deepthink;
     setDeepthink(next);
-    try { window.localStorage.setItem(DEEPTHINK_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+    if (!next) setCompareAgentMode(false);
+    try {
+      window.localStorage.setItem(DEEPTHINK_KEY, next ? '1' : '0');
+      if (!next) window.localStorage.removeItem(COMPARE_AGENT_KEY);
+    } catch { /* ignore */ }
   };
   const toggleAgentMode = () => {
     const next = !agentMode;
     setAgentMode(next);
     setDeepthinkSuggestionDismissed(false);
-    try { window.localStorage.setItem(AGENT_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+    if (!next) setCompareAgentMode(false);
+    try {
+      window.localStorage.setItem(AGENT_KEY, next ? '1' : '0');
+      if (!next) window.localStorage.removeItem(COMPARE_AGENT_KEY);
+    } catch { /* ignore */ }
     if (PUBLIC_KEY_MODE && next && !readPublicProviderKeys().gemini.trim()) {
       toast({
         title: 'Agent can run with limited features',
         description: 'Add a Gemini API key in Settings to unlock image understanding and expanded Agent capabilities.',
+      });
+    }
+  };
+  const toggleCompareAgentMode = () => {
+    if (!agentMode || !deepthink) return;
+    const next = !compareAgentMode;
+    if (next && PUBLIC_KEY_MODE && !readPublicProviderKeys().gemini.trim()) {
+      setProviderSettingsOpen(true);
+      toast({
+        title: 'Gemini key needed',
+        description: 'Add a Gemini API key in Settings for the final Compare Agent decision.',
+      });
+      return;
+    }
+    setCompareAgentMode(next);
+    try { window.localStorage.setItem(COMPARE_AGENT_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+    if (next) {
+      toast({
+        title: 'Compare Agent Mode enabled',
+        description: 'Each coding request may use up to 8 comparison calls: five drafts, two self-reviews, and one Gemini decision, plus normal safety checks.',
       });
     }
   };
@@ -571,10 +610,17 @@ function Home() {
         setError('Add a Gemini API key in Settings to analyze images.');
         return;
       }
+      if ((resume?.compareAgentMode ?? compareAgentMode) && !keys.gemini.trim()) {
+        setProviderSettingsOpen(true);
+        setError('Add a Gemini API key in Settings to use Compare Agent Mode.');
+        return;
+      }
     }
     const requestAgent = resume ? true : agentMode;
     shouldAutoFollowMessages.current = true;
     const requestDeepthink = resume?.deepthink ?? deepthink;
+    const requestCompareAgentMode = requestAgent && requestDeepthink &&
+      (resume?.compareAgentMode ?? compareAgentMode);
 
     let conversation = activeConversation;
     if (resume && (!conversation || conversation.id !== resume.conversationId)) return;
@@ -716,7 +762,8 @@ function Home() {
         const project = readSavedProject(localStorage, conversationId);
         const checkpoint: AgentCheckpoint = {
           version: 1, conversationId, assistantId: assistantMessage.id!, messages: requestMessages,
-          deepthink: requestDeepthink, imageRequired: Boolean(requestImage), provider: agentProvider.current, model: agentModel.current,
+          deepthink: requestDeepthink, compareAgentMode: requestCompareAgentMode,
+          imageRequired: Boolean(requestImage), provider: agentProvider.current, model: agentModel.current,
           task: agentTask.current, history: privateAgentHistory(agentHistory, project),
           toolCalls: agentToolCalls, retries: deferredRetries, startedAt, waitUntil, phase, agentFinalize,
         };
@@ -808,6 +855,7 @@ function Home() {
           deepthink: requestDeepthink,
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         };
+        if (requestAgent && requestCompareAgentMode) requestBody.compareAgentMode = true;
         if (requestAgent && agentProvider.current) requestBody.agentProvider = agentProvider.current;
         if (requestAgent && agentModel.current) requestBody.agentModel = agentModel.current;
         if (requestAgent && agentTask.current) requestBody.agentTask = agentTask.current;
@@ -1697,6 +1745,23 @@ function Home() {
                   >
                     <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent</span>
                   </button>
+                  {agentMode && deepthink && (
+                    <button
+                      type="button"
+                      aria-pressed={compareAgentMode}
+                      aria-label="Compare Agent Mode"
+                      aria-description="Compares three Qwen drafts and two GPT-OSS drafts, then asks Gemini to select a winner. Uses up to eight comparison calls per coding request, plus normal safety checks."
+                      className={`mode-toggle compare-toggle ${compareAgentMode ? 'is-on' : ''}`}
+                      title={PUBLIC_KEY_MODE && !providerKeys.gemini.trim()
+                        ? 'Add a Gemini API key in Settings to use Compare Agent Mode.'
+                        : 'Compare three Qwen drafts and two GPT-OSS drafts with Gemini. Uses up to eight comparison calls per coding request, plus normal safety checks.'}
+                      onClick={toggleCompareAgentMode}
+                      disabled={streaming}
+                      data-testid="toggle-compare-agent"
+                    >
+                      <span className="mode-toggle-icon compare-icon"><GitCompare size={15} aria-hidden="true" /></span><span>Compare</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="mode-toggle live-toggle"

@@ -12,6 +12,7 @@ export type AgentCheckpoint = {
   assistantId: string;
   messages: { role: 'user' | 'assistant'; content: string }[];
   deepthink: boolean;
+  compareAgentMode?: boolean;
   imageRequired: boolean;
   provider: 'gemini' | 'groq' | null;
   model: string | null;
@@ -57,6 +58,7 @@ function validate(value: unknown, id: string): AgentCheckpoint {
       c.messages.some(m => !m || !['user', 'assistant'].includes(m.role) || typeof m.content !== 'string' || m.content.length > 12_000) ||
       c.messages.at(-1)?.role !== 'user' || c.messages.reduce((n, m) => n + m.content.length, 0) > 16_000 ||
       typeof c.deepthink !== 'boolean' || typeof c.imageRequired !== 'boolean' || ![null, 'gemini', 'groq'].includes(c.provider) ||
+      (c.compareAgentMode !== undefined && typeof c.compareAgentMode !== 'boolean') ||
       !(c.model === null || typeof c.model === 'string' && c.model.length <= 256) ||
       ![null, 'coding', 'planning', 'reasoning', 'fast_worker', 'document', 'synthesis', 'classification', 'multimodal'].includes(c.task) ||
       !isAgentHistory(c.history) || new Set(c.history.map(h => h.callId)).size !== c.history.length ||

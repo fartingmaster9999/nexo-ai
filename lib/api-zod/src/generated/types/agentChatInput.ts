@@ -16,6 +16,8 @@ import type { ImageAttachment } from './imageAttachment';
 export interface AgentChatInput {
   /** Use high thinking level instead of medium */
   deepthink?: boolean;
+  /** For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and a Gemini final decision. */
+  compareAgentMode?: boolean;
   /** Continue an Agent run on its selected provider after a rate-limit fallback */
   agentProvider?: AgentChatInputAgentProvider;
   /**
