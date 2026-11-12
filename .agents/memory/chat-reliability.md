@@ -11,6 +11,10 @@ Prune whole older turns for API context, not saved history or pieces of the newe
 **Why:** Cutting code or instructions mid-message changes their meaning. Extra model calls to summarize history also consume the user's limited Groq quota.
 **How to apply:** Keep the current prompt intact, bound recent context, and explicitly reject oversized new inputs rather than silently truncating them.
 
+Long Agent conversations may use Gemini Embedding 2 to retrieve older complete turns, scoped to the current conversation only.
+**Why:** The user requested semantic memory for long chats, not shared cross-chat memory or additional server-side history retention.
+**How to apply:** Cache derived vectors locally without credentials; deleting the conversation must remove its cache and prevent late responses from recreating it. Preserve recent turns, current files, and tool evidence independently of retrieval. Label recalled text as untrusted history, and visibly continue with recent context when optional embeddings fail.
+
 Keep partial replies on interruption; do not automatically regenerate a response after streaming has begun.
 **Why:** A retry can duplicate output, spend additional quota, and overwrite useful partial work.
 **How to apply:** Distinguish cancellation, connection failures, and actual provider quota errors. Release request resources and allow a new user-initiated message.

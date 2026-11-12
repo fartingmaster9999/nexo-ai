@@ -48,10 +48,10 @@ export function AgentSettingsDialog({
             <div className="agent-setting-copy">
               <div className="agent-setting-title" id="compare-agent-label">Compare Agent Mode</div>
               <p id="compare-agent-description">
-                For new coding requests, compare three Qwen drafts with two GPT-OSS drafts. Each model selects its strongest draft, then Gemini picks the final version.
+                For new coding requests, compare three Qwen drafts with two GPT-OSS drafts. Each model selects its strongest draft, then Gemini Decision 1 scores the finalists for correctness, completeness, usability, maintainability, and safety.
               </p>
               <p className="agent-setting-note">
-                The selected version alone is sent to the workspace. This can use up to 8 comparison calls per request, plus normal safety checks.
+                Only the winner is sent to the workspace. Requires access to gemini-decision-1 and can use up to 8 comparison calls, plus safety checks. Scores review source quality; they do not prove the code ran.
               </p>
               {!canCompare && (
                 <p className="agent-setting-requirement">

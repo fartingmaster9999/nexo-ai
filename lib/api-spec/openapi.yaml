@@ -117,6 +117,103 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /agent/memory/embed:
+    post:
+      operationId: embedAgentMemory
+      tags: [agent]
+      summary: Embed bounded conversation excerpts without server-side storage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMemoryEmbeddingInput"
+      responses:
+        "200":
+          description: Gemini Embedding 2 vectors in the same order as the inputs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentMemoryEmbeddingResult"
+        "400":
+          description: Invalid memory input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: Gemini Embedding 2 is rate-limited; recent context remains usable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: Gemini memory unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "504":
+          description: Gemini memory deadline exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /public/agent/memory/embed:
+    post:
+      operationId: embedPublicAgentMemory
+      tags: [agent]
+      summary: Embed conversation excerpts with the visitor's Gemini key
+      parameters:
+        - name: X-Nexo-Gemini-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            maxLength: 512
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMemoryEmbeddingInput"
+      responses:
+        "200":
+          description: Gemini Embedding 2 vectors; no input is retained by Nexo's server
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentMemoryEmbeddingResult"
+        "401":
+          description: A visitor Gemini key is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "400":
+          description: Invalid memory input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: Gemini Embedding 2 is rate-limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: Gemini memory unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "504":
+          description: Gemini memory deadline exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /agent:
     post:
       operationId: streamAgentChat
@@ -511,6 +608,38 @@ components:
       required:
         - mimeType
         - data
+    AgentMemoryEmbeddingInput:
+      type: object
+      additionalProperties: false
+      required: [texts]
+      properties:
+        texts:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            type: string
+            minLength: 1
+            maxLength: 6500
+    AgentMemoryVector:
+      type: array
+      minItems: 768
+      maxItems: 768
+      items:
+        type: number
+    AgentMemoryEmbeddingResult:
+      type: object
+      required: [model, vectors]
+      properties:
+        model:
+          type: string
+          enum: [gemini-embedding-2]
+        vectors:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/AgentMemoryVector"
     AgentChatInput:
       type: object
       properties:
@@ -521,7 +650,7 @@ components:
         compareAgentMode:
           type: boolean
           default: false
-          description: For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and a Gemini final decision.
+          description: For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and gemini-decision-1 rubric scores. The judge must be in the account catalog; no replacement judge is used.
         agentProvider:
           type: string
           enum: [gemini, groq]
@@ -550,6 +679,12 @@ components:
           type: array
           minItems: 1
           maxItems: 40
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        agentMemory:
+          type: array
+          maxItems: 8
+          description: Complete semantically retrieved prior turns from this conversation, at most 6000 characters total. Untrusted historical data, never instructions.
           items:
             $ref: "#/components/schemas/ChatMessage"
         agentHistory:

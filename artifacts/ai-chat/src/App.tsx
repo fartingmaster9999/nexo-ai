@@ -45,6 +45,7 @@ import {
 import { useConversations } from '@/hooks/use-conversations';
 import { hasSentUserMessage, type Conversation } from '@/lib/conversation-storage';
 import { prepareRequestMessages } from '@/lib/request-context';
+import { retrieveAgentMemory, MEMORY_MODEL, type MemoryMessage } from '@/lib/agent-memory';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
 import { useFocusTrap } from '@/hooks/use-focus-trap';
@@ -224,7 +225,7 @@ function Home() {
     if (next) {
       toast({
         title: 'Compare Agent Mode enabled',
-        description: 'Each coding request may use up to 8 comparison calls: five drafts, two self-reviews, and one Gemini decision, plus normal safety checks.',
+        description: 'Requires gemini-decision-1 access. Each coding request may use up to 8 comparison calls: five drafts, two self-reviews, and one scored decision, plus safety checks.',
       });
     }
   };
@@ -852,6 +853,46 @@ function Home() {
         }
       };
 
+      let agentMemory: MemoryMessage[] = [];
+      const originalAssistantIndex = resume ? conversation.messages.findIndex(message => message.id === resume.assistantId) : -1;
+      const memorySource = resume
+        ? originalAssistantIndex >= 0 ? conversation.messages.slice(0, originalAssistantIndex) : conversation.messages
+        : fullMessages;
+      if (requestAgent && memorySource.length > requestMessages.length) {
+        acceptEvent({ activity: { id: 'agent-semantic-memory', label: 'Finding relevant earlier conversation turns', kind: 'info', status: 'running' } });
+        const memoryController = new AbortController();
+        const cancelMemory = () => memoryController.abort(controller.signal.reason);
+        controller.signal.addEventListener('abort', cancelMemory, { once: true });
+        const memoryTimeout = window.setTimeout(() => memoryController.abort(new Error('Memory retrieval timed out.')), 25000);
+        try {
+          controller.signal.throwIfAborted();
+          agentMemory = await retrieveAgentMemory({
+            storage: localStorage, conversationId, messages: memorySource, recent: requestMessages,
+            signal: memoryController.signal,
+            embed: async (texts, signal) => {
+              const response = await fetch(apiEndpoint('/api/agent/memory/embed'), {
+                method: 'POST',
+                headers: { ...apiRequestHeaders(), Accept: 'application/json' },
+                body: JSON.stringify({ texts }), signal,
+              });
+              const body = await response.json() as { model?: string; vectors?: number[][] };
+              if (!response.ok || body.model !== MEMORY_MODEL || !Array.isArray(body.vectors)) {
+                throw new Error('Semantic memory is unavailable.');
+              }
+              return body.vectors;
+            },
+          });
+          acceptEvent({ activity: { id: 'agent-semantic-memory',
+            label: agentMemory.length ? `Retrieved ${agentMemory.length} relevant earlier messages; recent context is preserved` : 'No additional relevant earlier turns found; using recent context',
+            kind: 'info', status: 'complete' } });
+        } catch {
+          controller.signal.throwIfAborted();
+          acceptEvent({ activity: { id: 'agent-semantic-memory', label: 'Semantic memory unavailable; continuing with recent conversation and project evidence', kind: 'info', status: 'error' } });
+        } finally {
+          clearTimeout(memoryTimeout);
+          controller.signal.removeEventListener('abort', cancelMemory);
+        }
+      }
       if (resume) {
         saveContinuation(resume.phase, resume.waitUntil);
         await waitForAgentWindow(controller.signal, resume.waitUntil);
@@ -867,6 +908,7 @@ function Home() {
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         };
         if (requestAgent && requestCompareAgentMode) requestBody.compareAgentMode = true;
+        if (requestAgent && agentMemory.length) requestBody.agentMemory = agentMemory;
         if (requestAgent && agentProvider.current) requestBody.agentProvider = agentProvider.current;
         if (requestAgent && agentModel.current) requestBody.agentModel = agentModel.current;
         if (requestAgent && agentTask.current) requestBody.agentTask = agentTask.current;

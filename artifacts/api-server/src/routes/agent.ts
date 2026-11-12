@@ -3,6 +3,8 @@ import { agentBuildPolicy, incompleteAgentHtml } from "../lib/agent-build-policy
 import Groq from "groq-sdk";
 import { StreamAgentChatBody, type AgentRateLimitRetry, type AgentToolExchange } from "@workspace/api-zod";
 import { AgentCompareError, compareAgentGeminiModel, runCompareAgentMode } from "../lib/agent-compare";
+import { createAgentMemoryRouter } from "./agent-memory";
+import { validAgentMemory } from "../lib/agent-request-context";
 import { isValidTimeZone } from "../lib/chat-request";
 import { GeminiSseDecoder, validateImageData } from "../lib/gemini-image";
 import { isPublicUrl } from "../lib/public-scraper";
@@ -162,6 +164,7 @@ export function createAgentRouter({
   feedbackBudgets = {},
 }: AgentRouterOptions = {}): IRouter {
   const router: IRouter = Router();
+  router.use(createAgentMemoryRouter({ getApiKey, fetchImpl }));
 
   router.post(["/agent", "/public/agent"], async (req, res): Promise<void> => {
     const receivedAt = Date.now();
@@ -172,6 +175,10 @@ export function createAgentRouter({
     }
     if (parsed.data.compareAgentMode && !parsed.data.deepthink) {
       res.status(400).json({ error: "Compare Agent Mode requires Deepthink to be enabled." });
+      return;
+    }
+    if (!validAgentMemory(parsed.data.agentMemory)) {
+      res.status(400).json({ error: "Agent memory must contain complete prior turns within the memory size limit." });
       return;
     }
     if (parsed.data.projectFiles?.length && !validateAgentProjectFiles(parsed.data.projectFiles)) {
@@ -263,7 +270,7 @@ export function createAgentRouter({
       : undefined;
     if (compareAgentEligible && !compareJudgeModel) {
       res.status(503).json({
-        error: "Compare Agent Mode needs a catalog-verified Gemini model for its final decision. Check Gemini access in Settings and try again.",
+        error: "Compare Agent Mode requires gemini-decision-1 in this Gemini account's model catalog. No other judge will be substituted; no drafts were started. Check the model ID and Gemini access.",
       });
       return;
     }
@@ -852,7 +859,7 @@ export function createAgentRouter({
             await emit({ model: activeModel, agentProvider: "groq", agentTask: "coding" });
             await emit({ notice: {
               id: "compare-agent-selection",
-              message: `Gemini selected ${modelLabel(activeModel)} after comparing ${compared.qwenCount} Qwen and ${compared.gptOssCount} GPT-OSS drafts.${compared.rationale ? ` ${compared.rationale}` : ""}`,
+              message: `Gemini Decision 1 scores: Qwen ${compared.totals.qwen}/25; GPT-OSS ${compared.totals["gpt-oss"]}/25. Selected ${modelLabel(activeModel)} from ${compared.qwenCount} Qwen and ${compared.gptOssCount} GPT-OSS drafts.${compared.rationale ? ` ${compared.rationale}` : ""} These are source-review scores, not proof of execution.`,
               model: activeModel,
             } });
             req.log.info({
@@ -860,6 +867,7 @@ export function createAgentRouter({
               winner: activeModel,
               qwenDrafts: compared.qwenCount,
               gptOssDrafts: compared.gptOssCount,
+              scores: compared.totals,
               durationMs: Date.now() - compareStartedAt,
             }, "Compare Agent Mode selected a coding finalist");
           } else if (activeProvider === "groq") {

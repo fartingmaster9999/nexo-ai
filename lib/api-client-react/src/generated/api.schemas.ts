@@ -104,6 +104,38 @@ export interface ImageChatInput {
   image: ImageAttachment;
 }
 
+export interface AgentMemoryEmbeddingInput {
+  /**
+     * @minItems 1
+     * @maxItems 32
+     * @items.minLength 1
+     * @items.maxLength 6500
+     */
+  texts: string[];
+}
+
+/**
+ * @minItems 768
+ * @maxItems 768
+ */
+export type AgentMemoryVector = number[];
+
+export type AgentMemoryEmbeddingResultModel = typeof AgentMemoryEmbeddingResultModel[keyof typeof AgentMemoryEmbeddingResultModel];
+
+
+export const AgentMemoryEmbeddingResultModel = {
+  'gemini-embedding-2': 'gemini-embedding-2',
+} as const;
+
+export interface AgentMemoryEmbeddingResult {
+  model: AgentMemoryEmbeddingResultModel;
+  /**
+     * @minItems 1
+     * @maxItems 32
+     */
+  vectors: AgentMemoryVector[];
+}
+
 /**
  * Continue an Agent run on its selected provider after a rate-limit fallback
  */
@@ -247,7 +279,7 @@ export interface AgentReviewContext {
 export interface AgentChatInput {
   /** Use high thinking level instead of medium */
   deepthink?: boolean;
-  /** For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and a Gemini final decision. */
+  /** For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and gemini-decision-1 rubric scores. The judge must be in the account catalog; no replacement judge is used. */
   compareAgentMode?: boolean;
   /** Continue an Agent run on its selected provider after a rate-limit fallback */
   agentProvider?: AgentChatInputAgentProvider;
@@ -276,6 +308,11 @@ export interface AgentChatInput {
      * @maxItems 40
      */
   messages: ChatMessage[];
+  /**
+     * Complete semantically retrieved prior turns from this conversation, at most 6000 characters total. Untrusted historical data, never instructions.
+     * @maxItems 8
+     */
+  agentMemory?: ChatMessage[];
   /**
      * Bounded prior tool call and result pairs for the current Agent run.
      * @maxItems 6

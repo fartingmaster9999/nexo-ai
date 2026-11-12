@@ -16,7 +16,7 @@ import type { ImageAttachment } from './imageAttachment';
 export interface AgentChatInput {
   /** Use high thinking level instead of medium */
   deepthink?: boolean;
-  /** For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and a Gemini final decision. */
+  /** For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and gemini-decision-1 rubric scores. The judge must be in the account catalog; no replacement judge is used. */
   compareAgentMode?: boolean;
   /** Continue an Agent run on its selected provider after a rate-limit fallback */
   agentProvider?: AgentChatInputAgentProvider;
@@ -45,6 +45,11 @@ export interface AgentChatInput {
      * @maxItems 40
      */
   messages: ChatMessage[];
+  /**
+     * Complete semantically retrieved prior turns from this conversation, at most 6000 characters total. Untrusted historical data, never instructions.
+     * @maxItems 8
+     */
+  agentMemory?: ChatMessage[];
   /**
      * Bounded prior tool call and result pairs for the current Agent run.
      * @maxItems 6

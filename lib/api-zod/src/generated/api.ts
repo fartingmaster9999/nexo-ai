@@ -76,6 +76,66 @@ export const StreamImageChatResponse = zod.unknown()
 
 
 /**
+ * @summary Embed bounded conversation excerpts without server-side storage
+ */
+export const embedAgentMemoryBodyTextsItemMax = 6500;
+
+export const embedAgentMemoryBodyTextsMax = 32;
+
+
+
+export const EmbedAgentMemoryBody = zod.object({
+  "texts": zod.array(zod.string().min(1).max(embedAgentMemoryBodyTextsItemMax)).min(1).max(embedAgentMemoryBodyTextsMax)
+})
+
+export const embedAgentMemoryResponseVectorsItemMin = 768;
+export const embedAgentMemoryResponseVectorsItemMax = 768;
+
+export const embedAgentMemoryResponseVectorsMax = 32;
+
+
+
+export const EmbedAgentMemoryResponse = zod.object({
+  "model": zod.enum(['gemini-embedding-2']),
+  "vectors": zod.array(zod.array(zod.number()).min(embedAgentMemoryResponseVectorsItemMin).max(embedAgentMemoryResponseVectorsItemMax)).min(1).max(embedAgentMemoryResponseVectorsMax)
+})
+
+
+/**
+ * @summary Embed conversation excerpts with the visitor's Gemini key
+ */
+export const embedPublicAgentMemoryHeaderXNexoGeminiKeyMax = 512;
+
+
+
+export const EmbedPublicAgentMemoryHeader = zod.object({
+  "X-Nexo-Gemini-Key": zod.string().max(embedPublicAgentMemoryHeaderXNexoGeminiKeyMax)
+})
+
+export const embedPublicAgentMemoryBodyTextsItemMax = 6500;
+
+export const embedPublicAgentMemoryBodyTextsMax = 32;
+
+
+
+export const EmbedPublicAgentMemoryBody = zod.object({
+  "texts": zod.array(zod.string().min(1).max(embedPublicAgentMemoryBodyTextsItemMax)).min(1).max(embedPublicAgentMemoryBodyTextsMax)
+})
+
+export const embedPublicAgentMemoryResponseVectorsItemMin = 768;
+export const embedPublicAgentMemoryResponseVectorsItemMax = 768;
+
+export const embedPublicAgentMemoryResponseVectorsMax = 32;
+
+
+
+export const EmbedPublicAgentMemoryResponse = zod.object({
+  "model": zod.enum(['gemini-embedding-2']),
+  "vectors": zod.array(zod.array(zod.number()).min(embedPublicAgentMemoryResponseVectorsItemMin).max(embedPublicAgentMemoryResponseVectorsItemMax)).min(1).max(embedPublicAgentMemoryResponseVectorsMax)
+})
+
+
+/**
  * Selects an available model by task, supports server-configured Gemini image analysis, and can run a tool-free Gemma 4 review of bounded generated source and isolated execution results. Model, task, and surfaced fallback persist through bounded web-search and isolated-browser tool continuations. Tool activity and sources are returned as SSE events; private model reasoning and image bytes are not exposed.
  * @summary Stream an Agent-mode response
  */
@@ -91,6 +151,10 @@ export const streamAgentChatBodyTimeZoneMax = 100;
 export const streamAgentChatBodyMessagesItemContentMax = 12000;
 
 export const streamAgentChatBodyMessagesMax = 40;
+
+export const streamAgentChatBodyAgentMemoryItemContentMax = 12000;
+
+export const streamAgentChatBodyAgentMemoryMax = 8;
 
 export const streamAgentChatBodyAgentHistoryItemCallIdMax = 128;
 
@@ -140,7 +204,7 @@ export const streamAgentChatBodyAgentReviewBrowserChecksMax = 4000;
 
 export const StreamAgentChatBody = zod.object({
   "deepthink": zod.boolean().default(streamAgentChatBodyDeepthinkDefault).describe('Use high thinking level instead of medium'),
-  "compareAgentMode": zod.boolean().default(streamAgentChatBodyCompareAgentModeDefault).describe('For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and a Gemini final decision.'),
+  "compareAgentMode": zod.boolean().default(streamAgentChatBodyCompareAgentModeDefault).describe('For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and gemini-decision-1 rubric scores. The judge must be in the account catalog; no replacement judge is used.'),
   "agentProvider": zod.enum(['gemini', 'groq']).optional().describe('Continue an Agent run on its selected provider after a rate-limit fallback'),
   "agentModel": zod.string().max(streamAgentChatBodyAgentModelMax).optional().describe('Continue an Agent run on its selected provider model'),
   "agentTask": zod.enum(['coding', 'planning', 'reasoning', 'fast_worker', 'document', 'synthesis', 'classification', 'multimodal']).optional().describe('Preserve the server-selected capability route through tool continuations'),
@@ -151,6 +215,10 @@ export const StreamAgentChatBody = zod.object({
   "role": zod.enum(['user', 'assistant']),
   "content": zod.string().min(1).max(streamAgentChatBodyMessagesItemContentMax)
 })).min(1).max(streamAgentChatBodyMessagesMax),
+  "agentMemory": zod.array(zod.object({
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string().min(1).max(streamAgentChatBodyAgentMemoryItemContentMax)
+})).max(streamAgentChatBodyAgentMemoryMax).optional().describe('Complete semantically retrieved prior turns from this conversation, at most 6000 characters total. Untrusted historical data, never instructions.'),
   "agentHistory": zod.array(zod.object({
   "tool": zod.enum(['web_search', 'run_code', 'write_project']),
   "callId": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemCallIdMax),
@@ -301,6 +369,10 @@ export const streamPublicAgentChatBodyMessagesItemContentMax = 12000;
 
 export const streamPublicAgentChatBodyMessagesMax = 40;
 
+export const streamPublicAgentChatBodyAgentMemoryItemContentMax = 12000;
+
+export const streamPublicAgentChatBodyAgentMemoryMax = 8;
+
 export const streamPublicAgentChatBodyAgentHistoryItemCallIdMax = 128;
 
 export const streamPublicAgentChatBodyAgentHistoryItemThoughtSignatureMax = 4096;
@@ -349,7 +421,7 @@ export const streamPublicAgentChatBodyAgentReviewBrowserChecksMax = 4000;
 
 export const StreamPublicAgentChatBody = zod.object({
   "deepthink": zod.boolean().default(streamPublicAgentChatBodyDeepthinkDefault).describe('Use high thinking level instead of medium'),
-  "compareAgentMode": zod.boolean().default(streamPublicAgentChatBodyCompareAgentModeDefault).describe('For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and a Gemini final decision.'),
+  "compareAgentMode": zod.boolean().default(streamPublicAgentChatBodyCompareAgentModeDefault).describe('For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and gemini-decision-1 rubric scores. The judge must be in the account catalog; no replacement judge is used.'),
   "agentProvider": zod.enum(['gemini', 'groq']).optional().describe('Continue an Agent run on its selected provider after a rate-limit fallback'),
   "agentModel": zod.string().max(streamPublicAgentChatBodyAgentModelMax).optional().describe('Continue an Agent run on its selected provider model'),
   "agentTask": zod.enum(['coding', 'planning', 'reasoning', 'fast_worker', 'document', 'synthesis', 'classification', 'multimodal']).optional().describe('Preserve the server-selected capability route through tool continuations'),
@@ -360,6 +432,10 @@ export const StreamPublicAgentChatBody = zod.object({
   "role": zod.enum(['user', 'assistant']),
   "content": zod.string().min(1).max(streamPublicAgentChatBodyMessagesItemContentMax)
 })).min(1).max(streamPublicAgentChatBodyMessagesMax),
+  "agentMemory": zod.array(zod.object({
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string().min(1).max(streamPublicAgentChatBodyAgentMemoryItemContentMax)
+})).max(streamPublicAgentChatBodyAgentMemoryMax).optional().describe('Complete semantically retrieved prior turns from this conversation, at most 6000 characters total. Untrusted historical data, never instructions.'),
   "agentHistory": zod.array(zod.object({
   "tool": zod.enum(['web_search', 'run_code', 'write_project']),
   "callId": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemCallIdMax),

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
 import { hasSentUserMessage, loadConversations, parseRecord, RECORD_PREFIX, type Conversation } from '../lib/conversation-storage';
+import { deleteAgentMemoryCache } from '../lib/agent-memory';
 
 export function useConversations(onError: (message: string) => void) {
   const [initial] = useState(() => {
@@ -41,7 +42,10 @@ export function useConversations(onError: (message: string) => void) {
       if (hasSentUserMessage(c)) dirty.current.set(c.id, c);
       else if (before && hasSentUserMessage(before)) dirty.current.set(c.id, null);
     }
-    for (const c of previous) if (!ids.has(c.id) && hasSentUserMessage(c)) dirty.current.set(c.id, null);
+    for (const c of previous) if (!ids.has(c.id)) {
+      if (hasSentUserMessage(c)) dirty.current.set(c.id, null);
+      try { deleteAgentMemoryCache(localStorage, c.id); } catch { /* Cache is optional, unlike saved chat text. */ }
+    }
     current.current = next;
     setItems(next);
     // Fixed cadence rather than debounce: sustained streaming still checkpoints.
@@ -67,6 +71,7 @@ export function useConversations(onError: (message: string) => void) {
           return;
         }
         const next = current.current.filter(c => c.id !== id);
+        if (!record.conversation) deleteAgentMemoryCache(localStorage, id);
         if (record.conversation) next.push(record.conversation);
         next.sort((a, b) => b.updatedAt - a.updatedAt);
         current.current = next;

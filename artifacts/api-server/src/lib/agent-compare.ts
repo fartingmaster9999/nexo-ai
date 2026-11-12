@@ -2,6 +2,7 @@ import Groq from "groq-sdk";
 import type { AgentChatInput } from "@workspace/api-zod";
 import {
   chooseGeminiCodingFinalist,
+  GEMINI_DECISION_MODEL,
   type AgentModelResponse,
 } from "./gemini-agent";
 import {
@@ -58,6 +59,7 @@ export async function runCompareAgentMode(options: {
   qwenCount: number;
   gptOssCount: number;
   rationale: string;
+  totals: { qwen: number; "gpt-oss": number };
 }> {
   const now = options.now ?? (() => new Date());
   const generateCandidate = options.dependencies?.generateCandidate ?? generateGroqCodingCandidate;
@@ -162,7 +164,6 @@ export async function runCompareAgentMode(options: {
     ]);
   } catch (error) {
     if (options.signal.aborted) throw error;
-    options.dependencies?.onGeminiFailure?.(options.geminiModel, error);
     await options.onProgress?.({
       label: "A model could not select its best draft; no code was applied",
       status: "error",
@@ -178,7 +179,7 @@ export async function runCompareAgentMode(options: {
     throw new AgentCompareError("Compare Agent Mode received an invalid finalist selection. No project changes were applied.");
   }
   await options.onProgress?.({
-    label: "Gemini is comparing the Qwen and GPT-OSS finalists",
+    label: "Gemini Decision 1 is scoring the Qwen and GPT-OSS finalists",
     status: "running",
   });
 
@@ -189,6 +190,9 @@ export async function runCompareAgentMode(options: {
       options.geminiModel,
       {
         messages: options.input.messages,
+        agentMemory: options.input.agentMemory,
+        projectFiles: options.input.projectFiles,
+        evidence: options.input.agentHistory,
         qwen: { response: qwenFinal.candidate.response, rationale: qwenSelection.rationale },
         gptOss: { response: gptOssFinal.candidate.response, rationale: gptOssSelection.rationale },
       },
@@ -197,8 +201,9 @@ export async function runCompareAgentMode(options: {
     );
   } catch (error) {
     if (options.signal.aborted) throw error;
+    options.dependencies?.onGeminiFailure?.(options.geminiModel, error);
     await options.onProgress?.({
-      label: "Gemini could not choose a finalist; no code was applied",
+      label: "Decision 1 could not score the finalists; no code was applied",
       status: "error",
     });
     const status = (error as { status?: unknown })?.status;
@@ -207,7 +212,11 @@ export async function runCompareAgentMode(options: {
         ? "Gemini is temporarily rate-limited, so Compare Agent Mode could not choose a winner. No project changes were applied; try again later."
         : status === 401 || status === 403
           ? "Gemini could not authorize the final comparison. Check the Gemini API key and its model access; no project changes were applied."
-          : "Gemini could not complete the final comparison. No project changes were applied; try again or turn Compare Agent Mode off.",
+          : status === 404
+            ? "gemini-decision-1 is not available with this Gemini key. No other judge was substituted and no code was applied."
+            : status === 400 || status === 413
+              ? "Decision 1 rejected the comparison input or configuration. Reduce the request size or check model support. No code was applied."
+            : "Decision 1 could not return valid, consistent scores. No project changes were applied; try again or turn Compare Agent Mode off.",
       status === 429 || status === 401 || status === 403 ? status : 503,
     );
   }
@@ -217,7 +226,7 @@ export async function runCompareAgentMode(options: {
     ? qwenSelection.rationale
     : gptOssSelection.rationale);
   await options.onProgress?.({
-    label: `Gemini selected ${decision.winner === "qwen" ? "Qwen" : "GPT-OSS"}'s finalist; sending it to the isolated code runner`,
+    label: `Decision 1 scores: Qwen ${decision.totals.qwen}/25, GPT-OSS ${decision.totals["gpt-oss"]}/25. ${decision.winner === "qwen" ? "Qwen" : "GPT-OSS"} selected for the isolated runner`,
     status: "complete",
   });
   return {
@@ -227,9 +236,10 @@ export async function runCompareAgentMode(options: {
     qwenCount: qwenDrafts.length,
     gptOssCount: gptOssDrafts.length,
     rationale,
+    totals: decision.totals,
   };
 }
 
 export function compareAgentGeminiModel(models: string[]): string | undefined {
-  return models.find((model) => model.startsWith("gemini-"));
+  return models.includes(GEMINI_DECISION_MODEL) ? GEMINI_DECISION_MODEL : undefined;
 }
