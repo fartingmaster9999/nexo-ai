@@ -27,11 +27,11 @@ Fail a Live call explicitly when the connection cannot keep up, rather than sile
 
 **How to apply:** Bound incoming messages, outgoing microphone data, and scheduled playback independently. On overflow, release the microphone and audio resources and offer a new call; do not reuse buffered audio in another session.
 
-Prefer Gemini for non-coding Agent work when configured, and for image understanding, review, and Live. For new coding requests, use a brief Groq GPT-OSS planning pass followed by Qwen for code generation and repair; coding must not depend on Gemini credentials or model discovery.
+Prefer Gemini for non-coding Agent work when configured, and for image understanding, independent code review, and Live. New coding requests must not depend on Gemini credentials or discovery, and should not make a separate planning-only Groq call.
 
-**Why:** The user reports that Qwen is the only model visibly called for coding, GPT-OSS is rarely called, and Gemini planning is slow or absent. They asked to use Groq GPT-OSS for planning because Groq calls are fast.
+**Why:** The user first asked to use fast Groq GPT-OSS planning, then chose to have GPT-OSS build a separate implementation alongside Qwen. Replacing the planning-only call with concurrent code generation avoids paying for a redundant model pass.
 
-**How to apply:** Keep the GPT-OSS planning pass tool-free, concise, and separately time-bounded; fall back from 120B to 20B, then let Qwen proceed directly if planning fails. Do not call Gemini for coding-plan discovery. Keep Gemini for configured non-coding Agent work, image routes, code review, and Live. Ordinary non-Agent chat remains on Groq.
+**How to apply:** For a new coding request, generate independent Qwen and GPT-OSS 120B candidates concurrently when both models are available. Do not execute either candidate until its tool shape, project paths, size, and code completeness pass validation. Select a valid candidate by structural checks, prefer Qwen on ties, and continue with either surviving model if the other fails. Reuse a completed parallel candidate if Qwen fails; do not repeat completed model work or create another pair on continuations. Keep Gemini out of coding generation and planning. Keep Gemini for configured non-coding Agent work, image routes, independent code review, and Live. Ordinary non-Agent chat remains on Groq.
 
 Optional feedback needs a fixed elapsed-time budget, not just an idle timeout that resets on every streamed chunk. A short advisory deadline expiring is not proof that a model is unhealthy.
 
@@ -51,11 +51,11 @@ Use only live-catalog Gemma 4 models for the Agent's independent post-run code r
 
 **How to apply:** Review generated source, runtime output, and sanitized structural preview checks. A generated plot image may be reviewed when supplied; do not claim visual screenshot inspection for HTML websites. If Gemma 4 is unavailable, let Qwen continue without the review and state that it was skipped. Never weaken preview isolation to capture content.
 
-Use GPT-OSS 120B for ordinary text chat, with GPT-OSS 20B as its quota fallback. Ordinary chat coding stays on Qwen. Agent coding may fall back from Qwen to Groq-hosted GPT-OSS 120B, then GPT-OSS 20B.
+Use GPT-OSS 120B for ordinary text chat, with GPT-OSS 20B as its quota fallback. Ordinary chat coding stays on Qwen. Agent coding uses Qwen and GPT-OSS 120B as parallel candidates when both are available, with GPT-OSS 20B remaining a sequential recovery model.
 
-**Why:** The user previously required Qwen-only coding, but explicitly superseded that restriction for Agent: “Make agent also call gpt-oss 120b and 20b for coding, not just qwen. Rate limits affect it and then you have a delay.” The no-OpenAI-API restriction still applies; all three models run through Groq.
+**Why:** The user explicitly chose a separate GPT-OSS implementation alongside Qwen. Parallel generation increases the chance of a usable candidate when either model is unavailable; the 20B model remains a recovery option rather than an additional routine parallel call. The no-OpenAI-API restriction still applies; all models run through Groq.
 
-**How to apply:** Agent starts coding on an available catalog-verified Qwen model, then tries ready GPT-OSS 120B and 20B before waiting on a 429. Keep a successful Groq fallback through tool continuations and retain completed tool results without rerunning actions. Use model-family-specific request options, and announce a switch only after it succeeds. Retain coding intent across follow-ups such as “add a filter.” Do not broaden ordinary chat coding or Gemini image routes. Never invent unavailable models or imply that switching bypasses shared provider quotas.
+**How to apply:** Start a new coding request with an available catalog-verified Qwen model and GPT-OSS 120B in parallel, compare only validated candidates, and preserve completed tool results through continuations. If one model is unavailable, let the other continue. If both candidates are unavailable, retain the existing bounded fallbacks through GPT-OSS 20B and model recovery. Use model-family-specific request options, announce only the selected model, and retain coding intent across follow-ups such as “add a filter.” Do not broaden ordinary chat coding or Gemini image routes. Never invent unavailable models or imply that parallel calls bypass shared provider quotas.
 
 Validate Groq model capabilities with a live request instead of trusting the SDK's general option types.
 

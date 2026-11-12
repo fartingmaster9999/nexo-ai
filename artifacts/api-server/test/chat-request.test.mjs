@@ -120,7 +120,7 @@ test("search is selective, honors the 2024 policy and does not waste searches on
   assert.match(buildSearchQuery([{role:"user",content:"Weather in Chicago"}, {role:"assistant",content:"Sunny"}, {role:"user",content:"What about tomorrow?"}]), /Weather in Chicago/);
 });
 
-test("coding uses Qwen only while ordinary chat retains GPT-OSS fallbacks", () => {
+test("Qwen remains the coding preference while ordinary chat keeps GPT-OSS fallbacks", () => {
   const ids = [PRIMARY_MODEL, SMALL_MODEL, CODING_FALLBACK];
   assert.deepEqual(chooseModels(ids, false), [PRIMARY_MODEL, SMALL_MODEL]);
   assert.deepEqual(chooseModels(ids, true), [CODING_FALLBACK]);

@@ -47,7 +47,8 @@ function createApp(
     getApiKey: agentOptions.getApiKey ?? (() => undefined),
     getGroqClient: agentOptions.getGroqClient ?? (() => client),
     getGroqModels: agentOptions.getGroqModels ?? (async (provider) => (await provider.models.list()).data),
-    generateGroqPlan: agentOptions.generateGroqPlan ?? (async () => undefined),
+    generateGroqCandidate: agentOptions.generateGroqCandidate,
+    parallelCoding: agentOptions.parallelCoding ?? false,
     search,
   }));
   return app;
@@ -679,7 +680,7 @@ test("legacy clients receive a clear quota error rather than an unsupported retr
   } finally { clearRateLimit(CODING_FALLBACK); }
 });
 
-test("an empty deferred coding run does not repeat the GPT-OSS planning pass", async () => {
+test("an empty deferred coding run does not restart parallel model generation", async () => {
   const client = {
     models: { list: async () => ({ data: catalog }) },
     chat: { completions: { create: async (request) => {
@@ -1075,6 +1076,89 @@ test("Agent routes coding to Qwen, exposes security signals, and preserves model
   assert.equal(modelRequests[1].messages.at(-2).tool_calls[0].id, "routed-code-call");
   assert.equal(modelRequests[1].messages.at(-1).tool_call_id, "routed-code-call");
   assert.deepEqual(securityCalls, ["prompt-guard", "safeguard", "prompt-guard"]);
+});
+
+test("new coding requests build with Qwen and GPT-OSS concurrently and choose the complete version", async () => {
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
+  const generationRequests = [];
+  let resolveBothStarted;
+  const bothStarted = new Promise((resolve) => { resolveBothStarted = resolve; });
+  const qwenProject = {
+    entrypoint: "index.html",
+    files: [{ path: "index.html", content: "<html><body><script>unfinished" }],
+  };
+  const gptProject = {
+    entrypoint: "index.html",
+    files: [{ path: "index.html", content: "<!doctype html><html><body><h1>Complete build</h1></body></html>" }],
+  };
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if (request.model === PROMPT_GUARD_MODEL) {
+        return { choices: [{ message: { content: "0.01" } }] };
+      }
+      if (request.model === SAFEGUARD_MODEL) {
+        return { choices: [{ message: { content: '{"violation":0}' } }] };
+      }
+      generationRequests.push(request);
+      if (generationRequests.length === 2) resolveBothStarted();
+      await bothStarted;
+      return request.model === CODING_FALLBACK
+        ? projectStream("qwen-incomplete", qwenProject)
+        : projectStream("gptoss-complete", gptProject);
+    } } },
+  };
+
+  await withServer(createApp(client, undefined, undefined, { parallelCoding: true }), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a simple HTML website" }] }),
+    }));
+    assert.equal(events.some((event) => event.error), false);
+    assert.deepEqual(generationRequests.map((request) => request.model).sort(), [CODING_FALLBACK, PRIMARY_MODEL].sort());
+    assert.equal(events.some((event) => event.model === PRIMARY_MODEL), true);
+    assert.equal(
+      events.find((event) => event.agentTool)?.agentTool.arguments.files[0].content,
+      gptProject.files[0].content,
+    );
+    assert.ok(events.some((event) => event.activity?.id === "agent-parallel-code" &&
+      event.activity.label.includes("passed the project checks")));
+  });
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
+});
+
+test("a successful GPT-OSS candidate is reused when Qwen is rejected", async () => {
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
+  const codeModels = [];
+  const project = {
+    entrypoint: "index.html",
+    files: [{ path: "index.html", content: "<!doctype html><h1>GPT-OSS build</h1>" }],
+  };
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if (request.model === PROMPT_GUARD_MODEL) return { choices: [{ message: { content: "0.01" } }] };
+      if (request.model === SAFEGUARD_MODEL) return { choices: [{ message: { content: '{"violation":0}' } }] };
+      codeModels.push(request.model);
+      if (request.model === CODING_FALLBACK) {
+        throw new Groq.APIError(429, { code: "rate_limit_exceeded" }, undefined, new Headers());
+      }
+      return projectStream("parallel-gptoss-fallback", project);
+    } } },
+  };
+  await withServer(createApp(client, undefined, undefined, { parallelCoding: true }), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a simple HTML website" }] }),
+    }));
+    assert.equal(events.some((event) => event.error), false);
+    assert.equal(events.find((event) => event.agentTool)?.agentTool.callId, "parallel-gptoss-fallback");
+    assert.deepEqual(codeModels.sort(), [CODING_FALLBACK, PRIMARY_MODEL].sort());
+    assert.ok(events.some((event) => event.activity?.label.includes("continuing after the other model was unavailable")));
+  });
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
 });
 
 test("Unavailable fast-worker specialists surface their compatible model fallback", async () => {
