@@ -14,3 +14,17 @@ mtime_ms = 1794315554640
 storage_uri = "gcs://replit-rams-assets-spock/rams/assets/repl:99143acd-8f67-4420-9275-411a6e1a3033/b6332033-2650-4707-9ac4-827fa61e9377/f1cf3980-5aee-4ead-9a09-6b2e7d109647"
 storage_version_token = "1794315597986675"
 content_type = "video/mp4"
+
+[[outputs]]
+id = "n9vSC2MTFalsXVz1-reMr"
+uri = "file://artifacts/ai-chat/public/nexo-chromebook-launcher.html"
+type = "html"
+title = "Nexo AI Chromebook launcher"
+description = "A copyable HTML launcher that opens the normal Nexo AI website in Chrome. Internet required; no iframe."
+logical_id = "a521c68a-7585-4860-9b23-16b57fc85dbc"
+content_hash = "sha256:96417d6fb2f4cb6f7dad223f80ad0fb88d69a7cdfac91ddb73b258ac0194b068"
+size = 2140
+mtime_ms = 1794526643670
+storage_uri = "gcs://replit-rams-assets-spock/rams/assets/repl:99143acd-8f67-4420-9275-411a6e1a3033/a521c68a-7585-4860-9b23-16b57fc85dbc/aef499d1-d9cb-4ba2-85eb-aec549533e7e"
+storage_version_token = "1794526668351084"
+content_type = "text/html"
