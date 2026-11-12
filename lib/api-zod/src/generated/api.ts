@@ -402,9 +402,15 @@ export const StreamPublicAgentChatResponse = zod.unknown()
 
 
 /**
- * Returns a one-use token constrained to Nexo's supported audio-only Gemini Live configuration. The server API key is never returned.
+ * Returns a one-use token constrained to Nexo's audio-only Gemini 3.8 Live model. Deepthink selects Gemini 3.8 Live Extended Thinking.
  * @summary Create a short-lived Gemini Live session token
  */
+export const createLiveSessionTokenBodyDeepthinkDefault = false;
+
+export const CreateLiveSessionTokenBody = zod.object({
+  "deepthink": zod.boolean().default(createLiveSessionTokenBodyDeepthinkDefault).describe('Use Gemini 3.8 Live Extended Thinking with high reasoning.')
+}).describe('Selects the high-reasoning Gemini Live model when Deepthink is enabled.')
+
 export const createLiveSessionTokenResponseTokenMax = 4096;
 
 
@@ -412,12 +418,12 @@ export const createLiveSessionTokenResponseTokenMax = 4096;
 export const CreateLiveSessionTokenResponse = zod.object({
   "token": zod.string().min(1).max(createLiveSessionTokenResponseTokenMax).describe('Ephemeral Gemini token; valid only for the constrained Live session'),
   "expiresAt": zod.coerce.date(),
-  "model": zod.enum(['gemini-3.8-live'])
+  "model": zod.enum(['gemini-3.8-live', 'gemini-3.8-live-extended-thinking'])
 })
 
 
 /**
- * The visitor's Gemini API key is forwarded only to create this constrained token and is never stored or returned.
+ * The visitor's Gemini API key is forwarded only to create a constrained Gemini 3.8 Live token and is never stored or returned. Deepthink selects the Extended Thinking model.
  * @summary Create a Live session token with the visitor's Gemini key
  */
 export const createPublicLiveSessionTokenHeaderXNexoGeminiKeyMax = 512;
@@ -428,6 +434,12 @@ export const CreatePublicLiveSessionTokenHeader = zod.object({
   "X-Nexo-Gemini-Key": zod.string().min(1).max(createPublicLiveSessionTokenHeaderXNexoGeminiKeyMax)
 })
 
+export const createPublicLiveSessionTokenBodyDeepthinkDefault = false;
+
+export const CreatePublicLiveSessionTokenBody = zod.object({
+  "deepthink": zod.boolean().default(createPublicLiveSessionTokenBodyDeepthinkDefault).describe('Use Gemini 3.8 Live Extended Thinking with high reasoning.')
+}).describe('Selects the high-reasoning Gemini Live model when Deepthink is enabled.')
+
 export const createPublicLiveSessionTokenResponseTokenMax = 4096;
 
 
@@ -435,7 +447,7 @@ export const createPublicLiveSessionTokenResponseTokenMax = 4096;
 export const CreatePublicLiveSessionTokenResponse = zod.object({
   "token": zod.string().min(1).max(createPublicLiveSessionTokenResponseTokenMax).describe('Ephemeral Gemini token; valid only for the constrained Live session'),
   "expiresAt": zod.coerce.date(),
-  "model": zod.enum(['gemini-3.8-live'])
+  "model": zod.enum(['gemini-3.8-live', 'gemini-3.8-live-extended-thinking'])
 })
 
 

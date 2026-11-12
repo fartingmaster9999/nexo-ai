@@ -1,8 +1,9 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { CreateLiveSessionTokenResponse } from "@workspace/api-zod";
+import { CreateLiveSessionTokenBody, CreateLiveSessionTokenResponse } from "@workspace/api-zod";
 import { getPublicProviderKey, isPublicApiRequest } from "../lib/public-api-keys";
 
 export const GEMINI_LIVE_MODEL = "gemini-3.8-live";
+export const GEMINI_LIVE_DEEPTHINK_MODEL = "gemini-3.8-live-extended-thinking";
 const TOKEN_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/auth_tokens";
 const TOKEN_REQUEST_TIMEOUT_MS = 10_000;
 const TOKEN_RATE_WINDOW_MS = 60_000;
@@ -54,6 +55,13 @@ export function createLiveRouter({
 
   const createToken = async (req: Request, res: Response): Promise<void> => {
     res.setHeader("Cache-Control", "no-store");
+    const parsedOptions = CreateLiveSessionTokenBody.safeParse(req.body ?? {});
+    if (!parsedOptions.success) {
+      res.status(400).json({ error: "Live session options must contain a boolean Deepthink setting." });
+      return;
+    }
+    const deepthink = parsedOptions.data.deepthink;
+    const model = deepthink ? GEMINI_LIVE_DEEPTHINK_MODEL : GEMINI_LIVE_MODEL;
     const publicApi = isPublicApiRequest(req);
     if (isRateLimited(clientKey(req), now().getTime(), rateLimit)) {
       res.status(429).json({ error: "Too many Live sessions were started. Wait a moment and try again." });
@@ -104,15 +112,18 @@ export function createLiveRouter({
             // The empty field mask locks the entire setup server-side. The
             // constrained WebSocket ignores the browser's setup configuration.
             // https://ai.google.dev/api/live#AuthToken
-            model: `models/${GEMINI_LIVE_MODEL}`,
+            model: `models/${model}`,
             generationConfig: {
               responseModalities: ["AUDIO"],
+              ...(deepthink ? { thinkingConfig: { thinkingLevel: "high" } } : {}),
             },
             inputAudioTranscription: {},
             outputAudioTranscription: {},
             systemInstruction: {
               parts: [{
-                text: "You are Nexo, a helpful conversational voice assistant. Be natural, clear, and concise. Do not claim to have performed actions outside this voice session.",
+                text: deepthink
+                  ? "You are Nexo, a helpful conversational voice assistant. Use high background reasoning for complex, multi-step requests, but speak naturally, clearly, and concisely. Do not reveal private reasoning or claim to have performed actions outside this voice session."
+                  : "You are Nexo, a helpful conversational voice assistant. Be natural, clear, and concise. Do not claim to have performed actions outside this voice session.",
               }],
             },
           },
@@ -154,7 +165,7 @@ export function createLiveRouter({
       const response = CreateLiveSessionTokenResponse.parse({
         token: payload.name,
         expiresAt: "expireTime" in payload && typeof payload.expireTime === "string" ? payload.expireTime : expiresAt,
-        model: GEMINI_LIVE_MODEL,
+        model,
       });
       res.status(200).json(response);
     } catch {

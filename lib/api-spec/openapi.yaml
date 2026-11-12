@@ -305,7 +305,13 @@ paths:
       operationId: createLiveSessionToken
       tags: [live]
       summary: Create a short-lived Gemini Live session token
-      description: Returns a one-use token constrained to Nexo's supported audio-only Gemini Live configuration. The server API key is never returned.
+      description: Returns a one-use token constrained to Nexo's audio-only Gemini 3.8 Live model. Deepthink selects Gemini 3.8 Live Extended Thinking.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LiveSessionTokenInput"
       responses:
         "200":
           description: Short-lived token for a single Live session
@@ -315,6 +321,12 @@ paths:
                 $ref: "#/components/schemas/LiveSessionToken"
         "429":
           description: Token creation is temporarily rate-limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "400":
+          description: Invalid Live session options
           content:
             application/json:
               schema:
@@ -342,7 +354,13 @@ paths:
       operationId: createPublicLiveSessionToken
       tags: [live]
       summary: Create a Live session token with the visitor's Gemini key
-      description: The visitor's Gemini API key is forwarded only to create this constrained token and is never stored or returned.
+      description: The visitor's Gemini API key is forwarded only to create a constrained Gemini 3.8 Live token and is never stored or returned. Deepthink selects the Extended Thinking model.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LiveSessionTokenInput"
       parameters:
         - name: X-Nexo-Gemini-Key
           in: header
@@ -370,6 +388,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+        "400":
+          description: Invalid Live session options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "502":
           description: Gemini could not create the session token
           content:
@@ -391,6 +415,15 @@ components:
           type: string
       required:
         - status
+    LiveSessionTokenInput:
+      type: object
+      additionalProperties: false
+      description: Selects the high-reasoning Gemini Live model when Deepthink is enabled.
+      properties:
+        deepthink:
+          type: boolean
+          default: false
+          description: Use Gemini 3.8 Live Extended Thinking with high reasoning.
     LiveSessionToken:
       type: object
       properties:
@@ -404,7 +437,7 @@ components:
           format: date-time
         model:
           type: string
-          enum: [gemini-3.8-live]
+          enum: [gemini-3.8-live, gemini-3.8-live-extended-thinking]
       required:
         - token
         - expiresAt

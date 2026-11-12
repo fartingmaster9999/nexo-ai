@@ -245,7 +245,7 @@ function Home() {
     }
   };
   const fetchLiveToken = useCallback(async (signal: AbortSignal): Promise<LiveSessionToken> => {
-    const headers: Record<string, string> = { Accept: 'application/json' };
+    const headers: Record<string, string> = { Accept: 'application/json', 'Content-Type': 'application/json' };
     if (PUBLIC_KEY_MODE) {
       const geminiKey = readPublicProviderKeys().gemini.trim();
       if (!geminiKey) {
@@ -256,7 +256,12 @@ function Home() {
       headers['X-Nexo-Gemini-Key'] = geminiKey;
     }
 
-    const response = await fetch(apiEndpoint('/api/live/token'), { method: 'POST', headers, signal });
+    const response = await fetch(apiEndpoint('/api/live/token'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ deepthink }),
+      signal,
+    });
     let body: unknown;
     try { body = await response.json(); } catch { body = null; }
     const payload = typeof body === 'object' && body !== null ? body as Record<string, unknown> : {};
@@ -272,7 +277,7 @@ function Home() {
       throw new Error('Nexo Live received an invalid session token. Please try again.');
     }
     return { token: payload.token, model: payload.model };
-  }, []);
+  }, [deepthink]);
   const openLiveVoice = () => {
     if (PUBLIC_KEY_MODE && !readPublicProviderKeys().gemini.trim()) {
       setProviderSettingsOpen(true);
@@ -1849,6 +1854,7 @@ function Home() {
         open={liveOpen}
         onOpenChange={setLiveOpen}
         fetchToken={fetchLiveToken}
+        deepthink={deepthink}
         onOpenSettings={() => { setLiveOpen(false); setProviderSettingsOpen(true); }}
       />
     </div>

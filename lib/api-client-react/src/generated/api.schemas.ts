@@ -9,11 +9,20 @@ export interface HealthStatus {
   status: string;
 }
 
+/**
+ * Selects the high-reasoning Gemini Live model when Deepthink is enabled.
+ */
+export interface LiveSessionTokenInput {
+  /** Use Gemini 3.8 Live Extended Thinking with high reasoning. */
+  deepthink?: boolean;
+}
+
 export type LiveSessionTokenModel = typeof LiveSessionTokenModel[keyof typeof LiveSessionTokenModel];
 
 
 export const LiveSessionTokenModel = {
   'gemini-38-live': 'gemini-3.8-live',
+  'gemini-38-live-extended-thinking': 'gemini-3.8-live-extended-thinking',
 } as const;
 
 export interface LiveSessionToken {

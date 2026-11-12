@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
-import { createLiveRouter, GEMINI_LIVE_MODEL } from "../src/routes/live.ts";
+import { createLiveRouter, GEMINI_LIVE_DEEPTHINK_MODEL, GEMINI_LIVE_MODEL } from "../src/routes/live.ts";
 
 const fixedNow = new Date("2026-11-10T18:00:00.000Z");
 
 async function withServer(router, run) {
   const app = express();
+  app.use(express.json());
   app.use("/api", router);
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
@@ -52,11 +53,65 @@ test("private Live token creation uses the server key and locks the session to a
   assert.equal(captured.body.uses, 1);
   assert.equal(captured.body.bidiGenerateContentSetup.model, `models/${GEMINI_LIVE_MODEL}`);
   assert.deepEqual(captured.body.bidiGenerateContentSetup.generationConfig.responseModalities, ["AUDIO"]);
+  assert.equal(captured.body.bidiGenerateContentSetup.generationConfig.thinkingConfig, undefined);
   assert.deepEqual(captured.body.bidiGenerateContentSetup.inputAudioTranscription, {});
   assert.deepEqual(captured.body.bidiGenerateContentSetup.outputAudioTranscription, {});
   assert.equal(captured.body.expireTime, "2026-11-10T18:30:00.000Z");
   assert.equal(captured.body.newSessionExpireTime, "2026-11-10T18:01:00.000Z");
   assert.equal(captured.body.bidiGenerateContentSetup.systemInstruction.parts[0].text.includes("Nexo"), true);
+});
+
+test("Deepthink Live selects Extended Thinking with high reasoning", async () => {
+  let captured;
+  const router = createLiveRouter({
+    getApiKey: () => "server-key",
+    fetchImpl: async (url, init) => {
+      captured = { url: String(url), init, body: JSON.parse(init.body) };
+      return okTokenResponse();
+    },
+    now: () => fixedNow,
+  });
+
+  await withServer(router, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/live/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deepthink: true }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      token: "ephemeral-live-session-token",
+      expiresAt: "2026-11-10T18:30:00.000Z",
+      model: GEMINI_LIVE_DEEPTHINK_MODEL,
+    });
+  });
+
+  const setup = captured.body.bidiGenerateContentSetup;
+  assert.equal(setup.model, `models/${GEMINI_LIVE_DEEPTHINK_MODEL}`);
+  assert.deepEqual(setup.generationConfig.thinkingConfig, { thinkingLevel: "high" });
+  assert.match(setup.systemInstruction.parts[0].text, /high background reasoning/i);
+});
+
+test("Live token request rejects non-boolean Deepthink values before contacting Gemini", async () => {
+  let calledProvider = false;
+  const router = createLiveRouter({
+    getApiKey: () => "server-key",
+    fetchImpl: async () => {
+      calledProvider = true;
+      return okTokenResponse();
+    },
+    now: () => fixedNow,
+  });
+  await withServer(router, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/live/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deepthink: "true" }),
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /boolean Deepthink setting/);
+  });
+  assert.equal(calledProvider, false);
 });
 
 test("public Live tokens use only the supplied Gemini key and never require Groq", async () => {
@@ -73,12 +128,15 @@ test("public Live tokens use only the supplied Gemini key and never require Groq
     const response = await fetch(`${baseUrl}/api/public/live/token`, {
       method: "POST",
       headers: {
+        "Content-Type": "application/json",
         "x-vercel-forwarded-for": "198.51.100.41",
         "x-nexo-gemini-key": "visitor-gemini-key",
       },
+      body: JSON.stringify({ deepthink: true }),
     });
     assert.equal(response.status, 200);
-    await response.json();
+    const payload = await response.json();
+    assert.equal(payload.model, GEMINI_LIVE_DEEPTHINK_MODEL);
   });
   assert.equal(keyHeader, "visitor-gemini-key");
 });

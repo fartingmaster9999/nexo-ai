@@ -26,7 +26,8 @@ import type {
   ChatInput,
   HealthStatus,
   ImageChatInput,
-  LiveSessionToken
+  LiveSessionToken,
+  LiveSessionTokenInput
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -676,17 +677,31 @@ export const getCreateLiveSessionTokenUrl = () => {
 }
 
 /**
- * Returns a one-use token constrained to Nexo's supported audio-only Gemini Live configuration. The server API key is never returned.
+ * Returns a one-use token constrained to Nexo's audio-only Gemini 3.8 Live model. Deepthink selects Gemini 3.8 Live Extended Thinking.
  * @summary Create a short-lived Gemini Live session token
  */
-export const createLiveSessionToken = async ( options?: Parameters<typeof customFetch>[1]): Promise<LiveSessionToken> => {
+export const createLiveSessionToken = async (liveSessionTokenInput?: LiveSessionTokenInput, options?: Parameters<typeof customFetch>[1]): Promise<LiveSessionToken> => {
 
-  return customFetch<LiveSessionToken>(getCreateLiveSessionTokenUrl(),
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<LiveSessionToken>(getCreateLiveSessionTokenUrl(),
   {
     ...options,
-    method: 'POST'
-
-
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(liveSessionTokenInput)
   }
 );}
 
@@ -697,8 +712,8 @@ export const createLiveSessionToken = async ( options?: Parameters<typeof custom
 export const getCreateLiveSessionTokenMutationKey = () => ['createLiveSessionToken'] as const;
 
 export const getCreateLiveSessionTokenMutationOptions = <TError = ErrorType<ApiError>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createLiveSessionToken>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof createLiveSessionToken>>, TError,void, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createLiveSessionToken>>, TError,CreateLiveSessionTokenMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createLiveSessionToken>>, TError,CreateLiveSessionTokenMutationVariables, TContext> => {
 
 const mutationKey = getCreateLiveSessionTokenMutationKey();
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -710,10 +725,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createLiveSessionToken>>, void> = () => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createLiveSessionToken>>, CreateLiveSessionTokenMutationVariables> = (props) => {
+          const {data} = props ?? {};
 
-
-          return  createLiveSessionToken(requestOptions)
+          return  createLiveSessionToken(data,requestOptions)
         }
 
 
@@ -724,19 +739,19 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
   return  { mutationFn, ...mutationOptions }}
 
     export type CreateLiveSessionTokenMutationResult = NonNullable<Awaited<ReturnType<typeof createLiveSessionToken>>>
-
+    export type CreateLiveSessionTokenMutationBody = BodyType<LiveSessionTokenInput> | undefined
     export type CreateLiveSessionTokenMutationError = ErrorType<ApiError>
-
+    export type CreateLiveSessionTokenMutationVariables = {data?: BodyType<LiveSessionTokenInput>}
 
     /**
  * @summary Create a short-lived Gemini Live session token
  */
 export const useCreateLiveSessionToken = <TError = ErrorType<ApiError>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createLiveSessionToken>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createLiveSessionToken>>, TError,CreateLiveSessionTokenMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createLiveSessionToken>>,
         TError,
-        void,
+        CreateLiveSessionTokenMutationVariables,
         TContext
       > => {
       return useMutation(getCreateLiveSessionTokenMutationOptions(options));
@@ -751,17 +766,31 @@ export const getCreatePublicLiveSessionTokenUrl = () => {
 }
 
 /**
- * The visitor's Gemini API key is forwarded only to create this constrained token and is never stored or returned.
+ * The visitor's Gemini API key is forwarded only to create a constrained Gemini 3.8 Live token and is never stored or returned. Deepthink selects the Extended Thinking model.
  * @summary Create a Live session token with the visitor's Gemini key
  */
-export const createPublicLiveSessionToken = async ( options?: Parameters<typeof customFetch>[1]): Promise<LiveSessionToken> => {
+export const createPublicLiveSessionToken = async (liveSessionTokenInput?: LiveSessionTokenInput, options?: Parameters<typeof customFetch>[1]): Promise<LiveSessionToken> => {
 
-  return customFetch<LiveSessionToken>(getCreatePublicLiveSessionTokenUrl(),
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<LiveSessionToken>(getCreatePublicLiveSessionTokenUrl(),
   {
     ...options,
-    method: 'POST'
-
-
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(liveSessionTokenInput)
   }
 );}
 
@@ -772,8 +801,8 @@ export const createPublicLiveSessionToken = async ( options?: Parameters<typeof 
 export const getCreatePublicLiveSessionTokenMutationKey = () => ['createPublicLiveSessionToken'] as const;
 
 export const getCreatePublicLiveSessionTokenMutationOptions = <TError = ErrorType<ApiError>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPublicLiveSessionToken>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof createPublicLiveSessionToken>>, TError,void, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPublicLiveSessionToken>>, TError,CreatePublicLiveSessionTokenMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createPublicLiveSessionToken>>, TError,CreatePublicLiveSessionTokenMutationVariables, TContext> => {
 
 const mutationKey = getCreatePublicLiveSessionTokenMutationKey();
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -785,10 +814,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createPublicLiveSessionToken>>, void> = () => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createPublicLiveSessionToken>>, CreatePublicLiveSessionTokenMutationVariables> = (props) => {
+          const {data} = props ?? {};
 
-
-          return  createPublicLiveSessionToken(requestOptions)
+          return  createPublicLiveSessionToken(data,requestOptions)
         }
 
 
@@ -799,19 +828,19 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
   return  { mutationFn, ...mutationOptions }}
 
     export type CreatePublicLiveSessionTokenMutationResult = NonNullable<Awaited<ReturnType<typeof createPublicLiveSessionToken>>>
-
+    export type CreatePublicLiveSessionTokenMutationBody = BodyType<LiveSessionTokenInput> | undefined
     export type CreatePublicLiveSessionTokenMutationError = ErrorType<ApiError>
-
+    export type CreatePublicLiveSessionTokenMutationVariables = {data?: BodyType<LiveSessionTokenInput>}
 
     /**
  * @summary Create a Live session token with the visitor's Gemini key
  */
 export const useCreatePublicLiveSessionToken = <TError = ErrorType<ApiError>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPublicLiveSessionToken>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPublicLiveSessionToken>>, TError,CreatePublicLiveSessionTokenMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createPublicLiveSessionToken>>,
         TError,
-        void,
+        CreatePublicLiveSessionTokenMutationVariables,
         TContext
       > => {
       return useMutation(getCreatePublicLiveSessionTokenMutationOptions(options));

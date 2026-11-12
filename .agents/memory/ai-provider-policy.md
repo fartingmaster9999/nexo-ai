@@ -15,7 +15,7 @@ The user chose their own Gemini API key for image understanding and Nexo Agent. 
 
 **How to apply:** Read `GEMINI_API_KEY` from the server environment only. Never pass it to the browser, write it into tracked configuration, or reuse it as a Groq credential.
 
-Gemini Live browser sessions must use a short-lived, one-use token created by the server and constrained to Nexo's supported Live model and audio configuration. In the public-key app, forward the visitor's Gemini key only to create that token; never send the long-lived key to the browser's WebSocket.
+Gemini Live browser sessions must use a short-lived, one-use token created by the server and constrained to Nexo's supported Live model and audio configuration. Normal Live uses `gemini-3.8-live`; Deepthink Live uses `gemini-3.8-live-extended-thinking` at high reasoning. In the public-key app, forward the visitor's Gemini key only to create that token; never send the long-lived key to the browser's WebSocket.
 
 **Why:** Live voice uses a browser-to-Google WebSocket, so sending the normal Gemini API key to the browser would expose a reusable credential.
 

@@ -19,7 +19,7 @@ import { startLiveCapture } from "@/lib/live-capture";
 import { createLiveMessageQueue, liveConnectionError, liveProviderError } from "@/lib/live-protocol";
 import "./live-voice-dialog.css";
 
-type LiveStatus = "idle" | "requesting" | "connecting" | "listening" | "speaking" | "ended" | "error";
+type LiveStatus = "idle" | "requesting" | "connecting" | "listening" | "thinking" | "speaking" | "ended" | "error";
 type TranscriptLine = { id: string; role: "user" | "assistant"; text: string; interim?: boolean };
 const MAX_TRANSCRIPT_LINES = 100;
 const MAX_TRANSCRIPT_LINE_CHARS = 4_000;
@@ -42,12 +42,14 @@ type LiveSession = {
   setupTimer?: number;
   setupComplete: boolean;
   turnComplete: boolean;
+  interactionStatus?: "IN_PROGRESS" | "IDLE";
 };
 
 type LiveVoiceDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   fetchToken: LiveTokenFetcher;
+  deepthink: boolean;
   onOpenSettings: () => void;
 };
 
@@ -108,7 +110,7 @@ function appendTranscript(
   setLines(linesRef.current);
 }
 
-export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings }: LiveVoiceDialogProps) {
+export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onOpenSettings }: LiveVoiceDialogProps) {
   const [status, setStatus] = useState<LiveStatus>("idle");
   const [error, setError] = useState("");
   const [needsSettings, setNeedsSettings] = useState(false);
@@ -210,8 +212,20 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
     }
 
     const serverContent = message.serverContent;
+    const serverContentObject = typeof serverContent === "object" && serverContent !== null
+      ? serverContent as Record<string, unknown>
+      : null;
+    const interactionStatus = message.interactionStatus ?? message.interaction_status ??
+      serverContentObject?.interactionStatus ?? serverContentObject?.interaction_status;
+    if (interactionStatus === "IN_PROGRESS" || interactionStatus === "IDLE") {
+      session.interactionStatus = interactionStatus;
+      if (session.playbackSources.size === 0) {
+        if (interactionStatus === "IN_PROGRESS") setStatus("thinking");
+        else if (session.turnComplete) setStatus("listening");
+      }
+    }
     if (typeof serverContent !== "object" || serverContent === null) return;
-    const content = serverContent as Record<string, unknown>;
+    const content = serverContentObject!;
     const interimInput = content.interimInputTranscription as { text?: unknown } | undefined;
     const finalInput = content.inputTranscription as { text?: unknown } | undefined;
     const output = content.outputTranscription as { text?: unknown } | undefined;
@@ -237,6 +251,7 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
       session.playbackSources.clear();
       session.nextPlaybackTime = 0;
       session.turnComplete = false;
+      session.interactionStatus = "IDLE";
       activeTranscriptIds.current.assistant = null;
       setStatus("listening");
     }
@@ -271,7 +286,7 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
             source.disconnect();
             session.playbackSources.delete(source);
             if (!session.stopped && session.playbackSources.size === 0 && session.turnComplete) {
-              setStatus("listening");
+              setStatus(session.interactionStatus === "IN_PROGRESS" ? "thinking" : "listening");
             }
           };
           const startAt = Math.max(session.nextPlaybackTime, session.audioContext.currentTime + 0.04);
@@ -290,9 +305,11 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
       session.turnComplete = true;
       activeTranscriptIds.current.assistant = null;
       activeTranscriptIds.current.user = null;
-      if (session.playbackSources.size === 0) setStatus("listening");
+      if (session.playbackSources.size === 0) {
+        setStatus(session.interactionStatus === "IN_PROGRESS" ? "thinking" : "listening");
+      }
     } else if (content.waitingForInput === true && session.playbackSources.size === 0) {
-      setStatus("listening");
+      setStatus(session.interactionStatus === "IN_PROGRESS" ? "thinking" : "listening");
     }
   }, [failSession]);
 
@@ -315,6 +332,7 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
       inputSamples: [],
       setupComplete: false,
       turnComplete: false,
+      interactionStatus: undefined,
     };
     sessionRef.current = session;
     const deadline = (milliseconds: number, message: string) => {
@@ -367,7 +385,10 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
         try { socket.send(JSON.stringify({
           setup: {
             model: `models/${model}`,
-            generationConfig: { responseModalities: ["AUDIO"] },
+              generationConfig: {
+                responseModalities: ["AUDIO"],
+                ...(deepthink ? { thinkingConfig: { thinkingLevel: "high" } } : {}),
+              },
             inputAudioTranscription: {},
             outputAudioTranscription: {},
           },
@@ -399,7 +420,7 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
       setStatus("error");
       releaseSession(session);
     }
-  }, [fetchToken, handleServerMessage, failSession]);
+  }, [deepthink, fetchToken, handleServerMessage, failSession]);
 
   const toggleMute = () => {
     const session = sessionRef.current;
@@ -422,6 +443,7 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
     requesting: "Preparing your microphone",
     connecting: "Connecting to Gemini Live",
     listening: "Listening",
+    thinking: "Thinking through your request",
     speaking: "Nexo is speaking",
     ended: "Session ended",
     error: "Could not connect",
@@ -437,7 +459,11 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, onOpenSettings
           <div className="live-brand-mark" aria-hidden="true"><Radio size={18} /></div>
           <div>
             <DialogTitle>Nexo Live</DialogTitle>
-            <DialogDescription>Talk with Nexo in real time. Your voice session is not saved to chat history.</DialogDescription>
+            <DialogDescription>
+              {deepthink
+                ? "Deepthink Live uses Gemini 3.8 Live Extended Thinking for complex, multi-step responses."
+                : "Standard Live uses Gemini 3.8 Live for low-latency conversation."} Your voice session is not saved to chat history.
+            </DialogDescription>
           </div>
         </DialogHeader>
 
