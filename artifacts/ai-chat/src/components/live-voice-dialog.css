@@ -45,6 +45,9 @@
 .live-control-button { width:38px; height:38px; border-radius:50%; color:hsl(var(--foreground)); background:hsl(var(--card)); }
 .live-control-button.is-muted { border-color:hsl(var(--destructive) / .4); color:hsl(var(--destructive)); background:hsl(var(--destructive) / .08); }
 .live-audio-note { display:flex; align-items:center; gap:6px; margin-right:auto; color:hsl(var(--muted-foreground)); font-size:10px; }
+.live-agent-button { width:100%; min-height:38px; display:inline-flex; justify-content:center; align-items:center; gap:8px; margin-top:10px; padding:0 14px; border:1px solid hsl(var(--primary) / .35); border-radius:10px; color:hsl(var(--primary)); background:hsl(var(--primary) / .08); font-size:12px; font-weight:600; cursor:pointer; transition:background .16s ease, border-color .16s ease, transform .16s ease; }
+.live-agent-button:hover { transform:translateY(-1px); border-color:hsl(var(--primary) / .6); background:hsl(var(--primary) / .14); }
+.live-agent-button:focus-visible { outline:2px solid hsl(var(--primary)); outline-offset:2px; }
 @keyframes live-orb-breathe { 0%,100% { transform:scale(.9); opacity:.6; } 50% { transform:scale(1.08); opacity:1; } }
 @keyframes live-spin { to { transform:rotate(360deg); } }
 @keyframes live-status-pulse { to { opacity:.4; transform:scale(.76); } }
@@ -52,6 +55,7 @@
   .live-dialog-content { padding:18px 15px; }
   .live-dialog-header p { max-width:260px; }
   .live-audio-note { font-size:9px; gap:4px; }
+  .live-agent-button { min-height:42px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .live-orb-halo,.live-status-dot,.live-orb-core svg { animation:none !important; }

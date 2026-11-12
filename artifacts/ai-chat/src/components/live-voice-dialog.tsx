@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import { Loader2, Mic, MicOff, PhoneOff, Radio, Volume2 } from "lucide-react";
+import { Bot, Loader2, Mic, MicOff, PhoneOff, Radio, Volume2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -17,6 +17,7 @@ import {
 } from "@/lib/live-audio";
 import { startLiveCapture } from "@/lib/live-capture";
 import { createLiveMessageQueue, liveConnectionError, liveProviderError } from "@/lib/live-protocol";
+import type { LiveTranscriptLine } from "@/lib/live-agent-handoff";
 import "./live-voice-dialog.css";
 
 type LiveStatus = "idle" | "requesting" | "connecting" | "listening" | "thinking" | "speaking" | "ended" | "error";
@@ -51,6 +52,7 @@ type LiveVoiceDialogProps = {
   fetchToken: LiveTokenFetcher;
   deepthink: boolean;
   onOpenSettings: () => void;
+  onBuildWithAgent: (transcript: LiveTranscriptLine[]) => void;
 };
 
 type LiveTokenError = Error & { openProviderSettings?: boolean };
@@ -110,7 +112,7 @@ function appendTranscript(
   setLines(linesRef.current);
 }
 
-export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onOpenSettings }: LiveVoiceDialogProps) {
+export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onOpenSettings, onBuildWithAgent }: LiveVoiceDialogProps) {
   const [status, setStatus] = useState<LiveStatus>("idle");
   const [error, setError] = useState("");
   const [needsSettings, setNeedsSettings] = useState(false);
@@ -438,6 +440,7 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
   };
 
   const canStart = status === "idle" || status === "ended" || status === "error";
+  const canBuildWithAgent = lines.some((line) => line.role === "user" && !line.interim && line.text.trim());
   const statusText: Record<LiveStatus, string> = {
     idle: "Ready when you are",
     requesting: "Preparing your microphone",
@@ -512,6 +515,25 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
             </>
           )}
         </div>
+        {canBuildWithAgent && (
+          <button
+            type="button"
+            className="live-agent-button"
+            data-testid="button-live-build-agent"
+            aria-label="Continue this voice request with Nexo Agent"
+            title="End Live and build from this conversation in the Agent workspace"
+            onClick={() => {
+              const transcript = transcriptLinesRef.current.filter((line) => !line.interim && line.text.trim());
+              if (!transcript.some((line) => line.role === "user")) return;
+              stopSession();
+              onOpenChange(false);
+              onBuildWithAgent(transcript);
+            }}
+          >
+            <Bot size={16} aria-hidden="true" />
+            Build with Agent
+          </button>
+        )}
       </DialogContent>
     </Dialog>
   );

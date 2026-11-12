@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { LiveVoiceDialog } from "../src/components/live-voice-dialog";
+import { buildLiveAgentPrompt } from "../src/lib/live-agent-handoff";
 
 type MockSocket = {
   readyState: number;
@@ -26,6 +27,8 @@ type TestWindow = Window & {
   __resolveMic?: () => void;
   __holdPlayback?: boolean;
   __tokenFailure?: boolean;
+  __agentHandoff?: unknown[];
+  __agentPrompt?: string;
 };
 
 const testWindow = window as TestWindow;
@@ -135,6 +138,11 @@ function Fixture() {
         return { token: "test-ephemeral-token", model: "gemini-3.8-live" };
       }}
       onOpenSettings={() => { (window as TestWindow).__settingsOpened = true; }}
+      onBuildWithAgent={(transcript) => {
+        testWindow.__agentHandoff = transcript;
+        testWindow.__agentPrompt = buildLiveAgentPrompt(transcript);
+        setOpen(false);
+      }}
     />
   </>);
 }

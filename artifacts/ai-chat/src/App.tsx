@@ -46,6 +46,7 @@ import { useConversations } from '@/hooks/use-conversations';
 import { hasSentUserMessage, type Conversation } from '@/lib/conversation-storage';
 import { prepareRequestMessages } from '@/lib/request-context';
 import { retrieveAgentMemory, MEMORY_MODEL, type MemoryMessage } from '@/lib/agent-memory';
+import { buildLiveAgentPrompt, type LiveTranscriptLine } from '@/lib/live-agent-handoff';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
 import { useFocusTrap } from '@/hooks/use-focus-trap';
@@ -596,7 +597,7 @@ function Home() {
     setAgentCodeTask((task) => task?.status === 'running' ? { ...task, status: 'error', error: 'Stopped by you.' } : task);
   };
 
-  const sendMessage = async (event?: FormEvent, suggestedText?: string, resume?: AgentCheckpoint) => {
+  const sendMessage = async (event?: FormEvent, suggestedText?: string, resume?: AgentCheckpoint, forceAgent = false) => {
     event?.preventDefault();
     if (abortRef.current || streaming || preparingImage) return;
     const prompt = (resume?.messages.at(-1)?.content ?? suggestedText ?? draft).trim();
@@ -628,7 +629,7 @@ function Home() {
         return;
       }
     }
-    const requestAgent = resume ? true : agentMode;
+    const requestAgent = resume ? true : forceAgent || agentMode;
     shouldAutoFollowMessages.current = true;
     const requestDeepthink = resume?.deepthink ?? deepthink;
     const requestCompareAgentMode = requestAgent && requestDeepthink &&
@@ -1898,6 +1899,10 @@ function Home() {
         fetchToken={fetchLiveToken}
         deepthink={deepthink}
         onOpenSettings={() => { setLiveOpen(false); setProviderSettingsOpen(true); }}
+        onBuildWithAgent={(transcript: LiveTranscriptLine[]) => {
+          const prompt = buildLiveAgentPrompt(transcript);
+          if (prompt) void sendMessage(undefined, prompt, undefined, true);
+        }}
       />
     </div>
   );
