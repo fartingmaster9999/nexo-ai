@@ -37,7 +37,7 @@ Compare Agent Mode is an explicit high-usage option and only works with Agent an
 
 **Why:** The user requested this multi-model comparison specifically as a Deepthink-only Agent mode. The comparison can use up to eight provider calls, so it must remain opt-in and make its provider requirements and usage clear.
 
-**How to apply:** Require Deepthink and a configured Gemini key at the UI and API boundary. Run only new coding requests, validate all tool outputs before self-review, show progress and partial-failure counts, never execute losing drafts, and do not expose private reasoning. Stop or fail clearly when either model has no usable finalist or Gemini cannot decide; do not silently substitute another winner.
+**How to apply:** Keep Compare Agent Mode as a separate setting in Agent settings, not a composer mode button or part of Deepthink itself. Require Agent and Deepthink at the UI and API boundary, and require a configured Gemini key in the public-key app. Run only new coding requests, validate all tool outputs before self-review, show progress and partial-failure counts, never execute losing drafts, and do not expose private reasoning. Stop or fail clearly when either model has no usable finalist or Gemini cannot decide; do not silently substitute another winner.
 
 Optional feedback needs a fixed elapsed-time budget, not just an idle timeout that resets on every streamed chunk. A short advisory deadline expiring is not proof that a model is unhealthy.
 

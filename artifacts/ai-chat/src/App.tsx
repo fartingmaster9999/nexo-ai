@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, GitCompare, ImagePlus, KeyRound, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SettingsDialog } from '@/components/settings-dialog';
+import { AgentSettingsDialog } from '@/components/agent-settings-dialog';
 import { ProviderSettingsDialog, type PublicProviderKeys } from '@/components/provider-settings-dialog';
 import { LiveVoiceDialog, type LiveSessionToken } from '@/components/live-voice-dialog';
 import { HomeLanding } from '@/components/home-landing';
@@ -142,6 +143,7 @@ function Home() {
   const closeIfMobile = () => { if (isMobile()) setSidebarOpen(false); };
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
   const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
   const [liveOpen, setLiveOpen] = useState(false);
   const [providerKeys, setProviderKeys] = useState<PublicProviderKeys>(readPublicProviderKeys);
@@ -150,7 +152,7 @@ function Home() {
   const [agentFull, setAgentFull] = useState(false);
   const keepWorkspaceFor = useRef<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
-  const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean((activeId || homeHistoryOpen) && sidebarOpen && !workspaceOpen && !settingsOpen && !providerSettingsOpen && !deleteTarget));
+  const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean((activeId || homeHistoryOpen) && sidebarOpen && !workspaceOpen && !settingsOpen && !agentSettingsOpen && !providerSettingsOpen && !deleteTarget));
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   const [agentMode, setAgentMode] = useState<boolean>(() => { try { return window.localStorage.getItem(AGENT_KEY) === '1'; } catch { return false; } });
@@ -206,10 +208,10 @@ function Home() {
       });
     }
   };
-  const toggleCompareAgentMode = () => {
-    if (!agentMode || !deepthink) return;
-    const next = !compareAgentMode;
+  const setCompareAgentModeEnabled = (next: boolean) => {
+    if (!agentMode || !deepthink || streaming) return;
     if (next && PUBLIC_KEY_MODE && !readPublicProviderKeys().gemini.trim()) {
+      setAgentSettingsOpen(false);
       setProviderSettingsOpen(true);
       toast({
         title: 'Gemini key needed',
@@ -232,6 +234,10 @@ function Home() {
       else window.localStorage.removeItem(PUBLIC_GROQ_KEY);
       if (keys.gemini.trim()) window.localStorage.setItem(PUBLIC_GEMINI_KEY, keys.gemini.trim());
       else window.localStorage.removeItem(PUBLIC_GEMINI_KEY);
+      if (!keys.gemini.trim()) {
+        setCompareAgentMode(false);
+        window.localStorage.removeItem(COMPARE_AGENT_KEY);
+      }
       setProviderKeys({ groq: keys.groq.trim(), gemini: keys.gemini.trim() });
       setError('');
     } catch {
@@ -1443,6 +1449,10 @@ function Home() {
             <Settings2 size={16} aria-hidden="true" />
             <span>Appearance</span>
           </button>
+          <button className="sidebar-settings agent-settings-button" type="button" onClick={() => setAgentSettingsOpen(true)} data-testid="button-open-agent-settings">
+            <Bot size={16} aria-hidden="true" />
+            <span>Agent settings</span>
+          </button>
           {PUBLIC_KEY_MODE && (
             <button className="sidebar-settings public-api-settings" type="button" onClick={() => setProviderSettingsOpen(true)}
               aria-label="Provider settings" title="Configure your Groq and Gemini API keys" data-testid="button-open-provider-settings">
@@ -1515,6 +1525,10 @@ function Home() {
               <Settings2 size={17} aria-hidden="true" />
             </button>
           )}
+          <button className="icon-btn agent-settings-trigger" type="button" onClick={() => setAgentSettingsOpen(true)}
+            aria-label="Agent settings" title="Agent settings" data-testid="button-home-agent-settings">
+            <Bot size={17} aria-hidden="true" />
+          </button>
           {PUBLIC_KEY_MODE && (
             <button className="icon-btn home-settings public-home-settings" type="button" onClick={() => setProviderSettingsOpen(true)}
               aria-label="Provider settings" title="Configure API keys" data-testid="button-home-provider-settings">
@@ -1745,23 +1759,6 @@ function Home() {
                   >
                     <span className="mode-toggle-icon agent-icon"><Bot size={15} aria-hidden="true" /></span><span>Agent</span>
                   </button>
-                  {agentMode && deepthink && (
-                    <button
-                      type="button"
-                      aria-pressed={compareAgentMode}
-                      aria-label="Compare Agent Mode"
-                      aria-description="Compares three Qwen drafts and two GPT-OSS drafts, then asks Gemini to select a winner. Uses up to eight comparison calls per coding request, plus normal safety checks."
-                      className={`mode-toggle compare-toggle ${compareAgentMode ? 'is-on' : ''}`}
-                      title={PUBLIC_KEY_MODE && !providerKeys.gemini.trim()
-                        ? 'Add a Gemini API key in Settings to use Compare Agent Mode.'
-                        : 'Compare three Qwen drafts and two GPT-OSS drafts with Gemini. Uses up to eight comparison calls per coding request, plus normal safety checks.'}
-                      onClick={toggleCompareAgentMode}
-                      disabled={streaming}
-                      data-testid="toggle-compare-agent"
-                    >
-                      <span className="mode-toggle-icon compare-icon"><GitCompare size={15} aria-hidden="true" /></span><span>Compare</span>
-                    </button>
-                  )}
                   <button
                     type="button"
                     className="mode-toggle live-toggle"
@@ -1833,6 +1830,18 @@ function Home() {
       </AlertDialog>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId={theme.themeId} accentId={theme.accentId}
         setTheme={theme.setTheme} setAccent={theme.setAccent} />
+      <AgentSettingsDialog
+        open={agentSettingsOpen}
+        onOpenChange={setAgentSettingsOpen}
+        agentMode={agentMode}
+        deepthink={deepthink}
+        compareAgentMode={compareAgentMode}
+        streaming={streaming}
+        publicKeyMode={PUBLIC_KEY_MODE}
+        geminiConfigured={Boolean(providerKeys.gemini.trim())}
+        onCompareChange={setCompareAgentModeEnabled}
+        onOpenProviderSettings={() => { setAgentSettingsOpen(false); setProviderSettingsOpen(true); }}
+      />
       {PUBLIC_KEY_MODE && (
         <ProviderSettingsDialog open={providerSettingsOpen} onOpenChange={setProviderSettingsOpen} keys={providerKeys} onSave={saveProviderKeys} />
       )}

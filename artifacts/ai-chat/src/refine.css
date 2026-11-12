@@ -127,8 +127,14 @@ svg.lucide { stroke-width: 1.75; flex-shrink: 0; }
 .deepthink-recommendation button { min-height: 28px; padding: 0 9px; border: 1px solid hsl(var(--primary) / .35); border-radius: 7px; color: hsl(var(--primary)); background: hsl(var(--primary) / .08); font-size: 10.5px; cursor: pointer; }
 .deepthink-recommendation button:hover { background: hsl(var(--primary) / .14); }
 .deepthink-recommendation .deepthink-dismiss { border-color: transparent; color: hsl(var(--foreground) / .52); background: transparent; }
-.compare-toggle.is-on { border-color: hsl(var(--primary) / .58); color: hsl(var(--primary)); background: hsl(var(--primary) / .11); box-shadow: 0 0 18px hsl(var(--primary) / .09); }
-.compare-toggle.is-on .compare-icon { color: hsl(var(--primary)); }
+.agent-settings-trigger { margin-left: 8px; }
+.agent-setting-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid hsl(var(--border)); border-radius: 12px; background: hsl(var(--foreground) / .018); }
+.agent-setting-copy { min-width: 0; }
+.agent-setting-title { color: hsl(var(--foreground)); font-size: 13px; font-weight: 600; }
+.agent-setting-copy p { margin: 7px 0 0; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.55; }
+.agent-setting-copy .agent-setting-note { color: hsl(var(--foreground) / .5); font-size: 11px; }
+.agent-setting-copy .agent-setting-requirement { color: hsl(var(--primary)); font-size: 11px; }
+.agent-setting-link { margin-top: 9px; padding: 0; border: 0; color: hsl(var(--primary)); background: none; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 @media (max-width: 640px) {
   .deepthink-recommendation { align-items: flex-start; flex-direction: column; gap: 8px; }
   .deepthink-recommendation-actions { width: 100%; }
