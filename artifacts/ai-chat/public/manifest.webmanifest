@@ -1,0 +1,33 @@
+{
+  "id": "./",
+  "name": "Nexo AI",
+  "short_name": "Nexo",
+  "description": "A focused AI assistant for questions, ideas, and building projects.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07090e",
+  "theme_color": "#0a0d14",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "nexo-pwa-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "nexo-pwa-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "nexo-pwa-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

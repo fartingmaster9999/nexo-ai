@@ -11,6 +11,16 @@ import './ux-polish.css';
 import './answer-format.css';
 import './motion.css';
 
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    const appBase = new URL(import.meta.env.BASE_URL, window.location.href);
+    const workerUrl = new URL('service-worker.js', appBase);
+    void navigator.serviceWorker.register(workerUrl, { scope: appBase.pathname }).catch((error: unknown) => {
+      console.warn('Nexo offline support could not be initialized.', error);
+    });
+  }, { once: true });
+}
+
 createRoot(document.getElementById('root')!, {
   // Keeps caught errors off reportError(), which would raise the dev overlay.
   onCaughtError: (error, errorInfo) => {
