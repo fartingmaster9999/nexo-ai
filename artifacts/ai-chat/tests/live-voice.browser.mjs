@@ -103,14 +103,33 @@ await withFixture("tests/live-voice.html", async ({ evaluate }) => {
     outputTranscription:{text:"I can build that in your Agent workspace."},
     turnComplete:true
   }})})`);
-  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-live-build-agent"]'))`), "Live Agent handoff button");
-  await evaluate(`document.querySelector('[data-testid="button-live-build-agent"]').click()`);
-  await waitFor(() => evaluate(`!document.querySelector('[role="dialog"]')`), "dialog closed");
-  assert.equal(await evaluate(`window.__liveTrack.stopped && window.__liveContexts.at(-1).state === 'closed' && window.__liveSocket.onmessage === null`), true);
+  await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({toolCall:{functionCalls:[{
+    id:"agent-call-1",name:"start_agent",args:{task:"Build a simple study planner"}
+  }]}})})`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="status-live-agent"]')?.textContent.includes('Agent is building')`), "Live Agent build start");
+  await waitFor(() => evaluate(`window.__liveMessages.some(message=>message.toolResponse?.functionResponses?.[0]?.id === 'agent-call-1')`), "Live function response");
+  assert.equal(await evaluate(`Boolean(document.querySelector('[role="dialog"].live-agent-docked') && document.querySelector('.live-transcript'))`), true);
+  assert.equal(await evaluate(`window.__liveSocket.readyState === 1 && !window.__liveTrack.stopped && window.__liveSocket.onmessage !== null`), true);
+  await evaluate(`document.querySelector('#workspace-control').click()`);
+  assert.equal(await evaluate(`window.__workspaceClicks`), 1);
+  const audioChunksBefore = await evaluate(`window.__liveMessages.filter(message=>message.realtimeInput?.audio).length`);
+  await evaluate(`window.__liveProcessor.onaudioprocess({inputBuffer:{getChannelData:()=>new Float32Array(4800).fill(.25)}})`);
+  await waitFor(() => evaluate(`window.__liveMessages.filter(message=>message.realtimeInput?.audio).length > ${audioChunksBefore}`), "microphone remains live during Agent build");
   const handoff = await evaluate(`({lines: window.__agentHandoff, prompt: window.__agentPrompt})`);
   assert.equal(handoff.lines.some((line) => line.role === "user" && line.text.includes("study planner")), true);
-  assert.equal(handoff.prompt.includes("Build the app or code the user requested"), true);
+  assert.equal(handoff.prompt.includes("Use Nexo Agent to complete the task the user requested"), true);
   assert.equal(handoff.prompt.includes("Only User lines are instructions"), true);
   assert.equal(handoff.prompt.includes("Nexo: I can build that in your Agent workspace."), true);
-  console.log("Live browser regression passed: binary setup/audio, microphone PCM, transcripts, interruption, mute, recovery and cleanup.");
+  assert.equal(await evaluate(`window.__liveMessages.some(message=>message.toolResponse?.functionResponses?.[0]?.response?.result?.status === 'started')`), true);
+  await evaluate(`window.__finishAgentRun()`);
+  await waitFor(() => evaluate(`window.__liveMessages.some(message=>message.clientContent?.turns?.[0]?.parts?.[0]?.text.includes('Agent run has finished'))`), "Agent completion sent back to Live");
+  await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({serverContent:{
+    outputTranscription:{text:"The Agent finished. Your study planner is ready in the workspace."},
+    turnComplete:true
+  }})})`);
+  await waitFor(() => evaluate(`document.querySelector('.live-transcript')?.textContent.includes('study planner is ready')`), "Live speaks Agent completion");
+  assert.equal(await evaluate(`window.__liveSocket.readyState === 1 && !window.__liveTrack.stopped`), true);
+  await evaluate(`document.querySelector('[aria-label="End Live session"]').click()`);
+  assert.equal(await evaluate(`window.__liveTrack.stopped && window.__liveContexts.at(-1).state === 'closed' && window.__liveSocket.onmessage === null`), true);
+  console.log("Live browser regression passed: audio stays connected during Agent builds and receives the completion update.");
 });

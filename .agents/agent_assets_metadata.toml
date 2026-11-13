@@ -28,3 +28,17 @@ mtime_ms = 1794539225885
 storage_uri = "gcs://replit-rams-assets-spock/rams/assets/repl:99143acd-8f67-4420-9275-411a6e1a3033/a521c68a-7585-4860-9b23-16b57fc85dbc/faa78a68-806a-4b4e-9701-c84105d020d8"
 storage_version_token = "1794539262642588"
 content_type = "text/html"
+
+[[outputs]]
+id = "FuML2ivWLQg8FduQCuCJP"
+uri = "file://generated-artifacts/nexo-class-links.json"
+type = "unspecified"
+title = "Nexo Classroom links"
+description = "Import this file from Nexo’s Class links panel. It contains your 20 course shortcuts and is excluded from the shared app source."
+logical_id = "c7fa2698-723c-44be-a2c1-6ba53de71d24"
+content_hash = "sha256:b0f11a585e93260345a7e0c380aa2ea54e1b7627e01c1ca0173eab5faeb91f8c"
+size = 3929
+mtime_ms = 1794540994618
+storage_uri = "gcs://replit-rams-assets-spock/rams/assets/repl:99143acd-8f67-4420-9275-411a6e1a3033/c7fa2698-723c-44be-a2c1-6ba53de71d24/5dfbd8ee-720b-4af8-94ce-7f949cd5cd88"
+storage_version_token = "1794541194681437"
+content_type = "application/octet-stream"

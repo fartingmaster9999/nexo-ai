@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, Link2, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -18,6 +18,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { SettingsDialog } from '@/components/settings-dialog';
 import { AgentSettingsDialog } from '@/components/agent-settings-dialog';
 import { ProviderSettingsDialog, type PublicProviderKeys } from '@/components/provider-settings-dialog';
+import { ClassLinksDialog } from '@/components/class-links-dialog';
 import { LiveVoiceDialog, type LiveSessionToken } from '@/components/live-voice-dialog';
 import { HomeLanding } from '@/components/home-landing';
 import NotFound from '@/pages/not-found';
@@ -46,7 +47,13 @@ import { useConversations } from '@/hooks/use-conversations';
 import { hasSentUserMessage, type Conversation } from '@/lib/conversation-storage';
 import { prepareRequestMessages } from '@/lib/request-context';
 import { retrieveAgentMemory, MEMORY_MODEL, type MemoryMessage } from '@/lib/agent-memory';
-import { buildLiveAgentPrompt, type LiveTranscriptLine } from '@/lib/live-agent-handoff';
+import {
+  buildLiveAgentPrompt,
+  type LiveAgentHandoffResult,
+  type LiveAgentRunState,
+  type LiveTranscriptLine,
+  type LiveWorkspaceOpenResult,
+} from '@/lib/live-agent-handoff';
 import { useThemeSettings } from '@/hooks/use-theme';
 import { useSidebar, isMobile, SIDEBAR_MIN, SIDEBAR_MAX } from '@/hooks/use-sidebar';
 import { useFocusTrap } from '@/hooks/use-focus-trap';
@@ -54,6 +61,7 @@ import { toast } from '@/hooks/use-toast';
 import { extractSnippets, type Snippet } from '@/lib/code-extract';
 import { imageFileToBase64, prepareImageFile, type PendingImage } from '@/lib/image-attachment';
 import type { QuizProgress } from '@/lib/interactive-widgets';
+import { readSavedClassLinks, writeSavedClassLinks, type ClassLink } from '@/lib/class-links';
 import { resolveWebsiteOpenRequest } from '@/lib/open-website';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 import '@/components/code-workspace.css';
@@ -146,6 +154,8 @@ function Home() {
   const closeIfMobile = () => { if (isMobile()) setSidebarOpen(false); };
   const theme = useThemeSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [classLinksOpen, setClassLinksOpen] = useState(false);
+  const [classLinks, setClassLinks] = useState<ClassLink[]>(readSavedClassLinks);
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
   const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
   const [liveOpen, setLiveOpen] = useState(false);
@@ -290,9 +300,16 @@ function Home() {
       });
       return;
     }
+    if (liveAgentWorkRef.current?.status !== 'running') {
+      liveAgentWorkRef.current = null;
+      setLiveAgentWork(null);
+    }
     setLiveOpen(true);
   };
   const [agentCodeTask, setAgentCodeTask] = useState<AgentWorkspaceTask | null>(null);
+  const [liveAgentWork, setLiveAgentWork] = useState<LiveAgentRunState | null>(null);
+  const liveAgentWorkRef = useRef<LiveAgentRunState | null>(liveAgentWork);
+  liveAgentWorkRef.current = liveAgentWork;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const longPasteEditRef = useRef<HTMLButtonElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -456,6 +473,10 @@ function Home() {
   const updateConversation = useCallback((id: string, updater: (conversation: Conversation) => Conversation) => {
     setConversations((items) => items.map((conversation) => conversation.id === id ? updater(conversation) : conversation));
   }, []);
+  const saveClassLinks = (nextLinks: ClassLink[]) => {
+    writeSavedClassLinks(nextLinks);
+    setClassLinks(nextLinks);
+  };
   const updateQuizProgress = useCallback((conversationId: string, messageId: string, widgetKey: string, progress: QuizProgress) => {
     updateConversation(conversationId, (conversation) => ({
       ...conversation, updatedAt: Date.now(),
@@ -598,22 +619,30 @@ function Home() {
     setAgentCodeTask((task) => task?.status === 'running' ? { ...task, status: 'error', error: 'Stopped by you.' } : task);
   };
 
-  const sendMessage = async (event?: FormEvent, suggestedText?: string, resume?: AgentCheckpoint, forceAgent = false) => {
+  const sendMessage = async (
+    event?: FormEvent,
+    suggestedText?: string,
+    resume?: AgentCheckpoint,
+    forceAgent = false,
+    onFinished?: (completed: boolean) => void,
+  ) => {
     event?.preventDefault();
-    if (abortRef.current || streaming || preparingImage) return;
+    const rejectCompletion = () => { try { onFinished?.(false); } catch {} };
+    if (abortRef.current || streaming || preparingImage) { rejectCompletion(); return; }
     const prompt = (resume?.messages.at(-1)?.content ?? suggestedText ?? draft).trim();
     const requestImage = resume && !resume.imageRequired ? null : pendingImage;
     if (resume?.imageRequired && !requestImage) {
       trackRecoveryEvent('agent_recovery_resume_blocked', { reason: 'image_required' });
-      setError('Reattach the original image before resuming. Image files are not saved in recovery records.'); return;
+      setError('Reattach the original image before resuming. Image files are not saved in recovery records.'); rejectCompletion(); return;
     }
     if (!prompt) {
       if (requestImage) setError('Add a message to send with your image.');
+      rejectCompletion();
       return;
     }
-    if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); return; }
-    if (!resume && !requestImage) {
-      const openTarget = resolveWebsiteOpenRequest(prompt);
+    if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); rejectCompletion(); return; }
+    if (!resume && !requestImage && !forceAgent) {
+      const openTarget = resolveWebsiteOpenRequest(prompt, classLinks);
       if (openTarget) {
         let openedWindow: Window | null = null;
         try {
@@ -658,6 +687,7 @@ function Home() {
         homeHistoryTriggerRef.current = null;
         closeIfMobile();
         persistConversations();
+        rejectCompletion();
         return;
       }
     }
@@ -666,16 +696,19 @@ function Home() {
       if (!keys.groq.trim()) {
         setProviderSettingsOpen(true);
         setError('Add a Groq API key in Settings to start chatting.');
+        rejectCompletion();
         return;
       }
       if (requestImage && !keys.gemini.trim()) {
         setProviderSettingsOpen(true);
         setError('Add a Gemini API key in Settings to analyze images.');
+        rejectCompletion();
         return;
       }
       if ((resume?.compareAgentMode ?? compareAgentMode) && !keys.gemini.trim()) {
         setProviderSettingsOpen(true);
         setError('Add a Gemini API key in Settings to use Compare Agent Mode.');
+        rejectCompletion();
         return;
       }
     }
@@ -686,7 +719,7 @@ function Home() {
       (resume?.compareAgentMode ?? compareAgentMode);
 
     let conversation = activeConversation;
-    if (resume && (!conversation || conversation.id !== resume.conversationId)) return;
+    if (resume && (!conversation || conversation.id !== resume.conversationId)) { rejectCompletion(); return; }
     if (!conversation) {
       conversation = {
         id: makeId(),
@@ -704,7 +737,7 @@ function Home() {
     const conversationId = conversation.id;
     if (!resume) {
       try { deleteAgentCheckpoint(localStorage, conversationId); }
-      catch { setError('The previous Agent recovery record could not be cleared. Free browser storage before starting another request.'); return; }
+      catch { setError('The previous Agent recovery record could not be cleared. Free browser storage before starting another request.'); rejectCompletion(); return; }
     }
     const userMessage: ChatMessage = {
       id: makeId(), role: 'user', content: prompt,
@@ -1386,6 +1419,7 @@ function Home() {
         }));
       }
     } finally {
+      const completed = recoveryResult === 'completed';
       if (resume) {
         const cancelled = controller.signal.aborted && controller.signal.reason?.name === 'AbortError';
         trackRecoveryEvent('agent_recovery_result', {
@@ -1409,7 +1443,49 @@ function Home() {
         setStreaming(false);
         checkpointRef.current = null;
       }
+      try { onFinished?.(completed); } catch { /* completion observers must not affect the request cleanup */ }
     }
+  };
+
+  const startAgentFromLive = (transcript: LiveTranscriptLine[], requestedTask?: string): LiveAgentHandoffResult => {
+    if (abortRef.current || streaming || preparingImage) {
+      return { accepted: false, reason: 'Another request is already running. Let it finish, then ask Live again.' };
+    }
+    const prompt = buildLiveAgentPrompt(transcript);
+    if (!prompt) return { accepted: false, reason: 'I could not hear a clear request. Please repeat it.' };
+    if (PUBLIC_KEY_MODE) {
+      const keys = readPublicProviderKeys();
+      if (!keys.groq.trim()) {
+        setProviderSettingsOpen(true);
+        return { accepted: false, reason: 'A Groq API key is needed to start Agent. Add it in Settings.' };
+      }
+      if (deepthink && compareAgentMode && !keys.gemini.trim()) {
+        setProviderSettingsOpen(true);
+        return { accepted: false, reason: 'Compare Agent needs a Gemini key. Add it in Settings or turn off Compare Agent.' };
+      }
+    }
+
+    const userRequest = [...transcript].reverse().find((line) => line.role === 'user')?.text ?? '';
+    const task = (requestedTask?.trim() || userRequest.trim() || 'Build requested in Live')
+      .replace(/\s+/g, ' ').slice(0, 180);
+    const run: LiveAgentRunState = { id: makeId(), status: 'running', task };
+    liveAgentWorkRef.current = run;
+    setLiveAgentWork(run);
+    void sendMessage(undefined, prompt, undefined, true, (completed) => {
+      if (liveAgentWorkRef.current?.id !== run.id) return;
+      const finished: LiveAgentRunState = { ...run, status: completed ? 'finished' : 'error' };
+      liveAgentWorkRef.current = finished;
+      setLiveAgentWork(finished);
+    });
+    return { accepted: true };
+  };
+
+  const openWorkspaceFromLive = (): LiveWorkspaceOpenResult => {
+    if (!activeId || !canReopenWorkspace) {
+      return { opened: false, reason: 'There is no saved workspace in this conversation yet. Ask me to build something and I will open it.' };
+    }
+    reopenWorkspace();
+    return { opened: true };
   };
 
   const dismissRecovery = () => {
@@ -1547,6 +1623,10 @@ function Home() {
             <Settings2 size={16} aria-hidden="true" />
             <span>Appearance</span>
           </button>
+          <button className="sidebar-settings" type="button" onClick={() => setClassLinksOpen(true)} data-testid="button-open-class-links">
+            <Link2 size={16} aria-hidden="true" />
+            <span>Class links</span>
+          </button>
           <button className="sidebar-settings agent-settings-button" type="button" onClick={() => setAgentSettingsOpen(true)} data-testid="button-open-agent-settings">
             <Bot size={16} aria-hidden="true" />
             <span>Agent settings</span>
@@ -1618,6 +1698,10 @@ function Home() {
               <PanelRightOpen size={16} aria-hidden="true" /> Workspace
             </button>
           )}
+          <button className="icon-btn class-links-trigger" type="button" onClick={() => setClassLinksOpen(true)}
+            aria-label="Class links" title="Class links" data-testid="button-home-class-links">
+            <Link2 size={17} aria-hidden="true" />
+          </button>
           {!activeId && (
             <button className="icon-btn home-settings" type="button" onClick={() => setSettingsOpen(true)} aria-label="Appearance" title="Appearance" data-testid="button-home-settings">
               <Settings2 size={17} aria-hidden="true" />
@@ -1928,6 +2012,7 @@ function Home() {
       </AlertDialog>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} themeId={theme.themeId} accentId={theme.accentId}
         setTheme={theme.setTheme} setAccent={theme.setAccent} />
+      <ClassLinksDialog open={classLinksOpen} onOpenChange={setClassLinksOpen} links={classLinks} onChange={saveClassLinks} />
       <AgentSettingsDialog
         open={agentSettingsOpen}
         onOpenChange={setAgentSettingsOpen}
@@ -1948,11 +2033,11 @@ function Home() {
         onOpenChange={setLiveOpen}
         fetchToken={fetchLiveToken}
         deepthink={deepthink}
+        workspaceOpen={workspaceOpen}
+        agentWork={liveAgentWork}
         onOpenSettings={() => { setLiveOpen(false); setProviderSettingsOpen(true); }}
-        onBuildWithAgent={(transcript: LiveTranscriptLine[]) => {
-          const prompt = buildLiveAgentPrompt(transcript);
-          if (prompt) void sendMessage(undefined, prompt, undefined, true);
-        }}
+        onOpenWorkspace={openWorkspaceFromLive}
+        onBuildWithAgent={startAgentFromLive}
       />
     </div>
   );

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { LiveVoiceDialog } from "../src/components/live-voice-dialog";
 import { buildLiveAgentPrompt } from "../src/lib/live-agent-handoff";
+import type { LiveAgentRunState, LiveTranscriptLine } from "../src/lib/live-agent-handoff";
 
 type MockSocket = {
   readyState: number;
@@ -19,6 +20,7 @@ type TestWindow = Window & {
   __liveMessages?: unknown[];
   __liveTrack?: { enabled: boolean; stopped: boolean; stop(): void };
   __settingsOpened?: boolean;
+  __workspaceClicks?: number;
   __liveContexts?: MockAudioContext[];
   __liveSources?: ReturnType<MockAudioContext["createBufferSource"]>[];
   __liveProcessor?: { onaudioprocess: ((event: { inputBuffer: { getChannelData(): Float32Array } }) => void) | null };
@@ -29,6 +31,7 @@ type TestWindow = Window & {
   __tokenFailure?: boolean;
   __agentHandoff?: unknown[];
   __agentPrompt?: string;
+  __finishAgentRun?: () => void;
 };
 
 const testWindow = window as TestWindow;
@@ -128,8 +131,11 @@ Object.defineProperty(navigator, "mediaDevices", {
 
 function Fixture() {
   const [open, setOpen] = useState(true);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [agentWork, setAgentWork] = useState<LiveAgentRunState | null>(null);
   return (<>
     <button type="button" id="reopen-live" onClick={() => setOpen(true)}>Reopen Live</button>
+    <button type="button" id="workspace-control" onClick={() => { testWindow.__workspaceClicks = (testWindow.__workspaceClicks ?? 0) + 1; }}>Workspace control</button>
     <LiveVoiceDialog
       open={open}
       onOpenChange={setOpen}
@@ -137,11 +143,20 @@ function Fixture() {
         if (testWindow.__tokenFailure) throw Object.assign(new Error("Add a Gemini API key in Settings to use Nexo Live."), { openProviderSettings: true });
         return { token: "test-ephemeral-token", model: "gemini-3.8-live" };
       }}
+      workspaceOpen={workspaceOpen}
+      agentWork={agentWork}
       onOpenSettings={() => { (window as TestWindow).__settingsOpened = true; }}
-      onBuildWithAgent={(transcript) => {
+      onOpenWorkspace={() => workspaceOpen
+        ? { opened: true }
+        : { opened: false, reason: "No saved workspace yet." }}
+      onBuildWithAgent={(transcript: LiveTranscriptLine[], task) => {
         testWindow.__agentHandoff = transcript;
         testWindow.__agentPrompt = buildLiveAgentPrompt(transcript);
-        setOpen(false);
+        setWorkspaceOpen(true);
+        const run: LiveAgentRunState = { id: "fixture-agent-run", status: "running", task: task ?? "Build request" };
+        setAgentWork(run);
+        testWindow.__finishAgentRun = () => setAgentWork({ ...run, status: "finished" });
+        return { accepted: true };
       }}
     />
   </>);

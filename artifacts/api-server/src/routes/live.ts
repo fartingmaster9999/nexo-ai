@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { CreateLiveSessionTokenBody, CreateLiveSessionTokenResponse } from "@workspace/api-zod";
 import { getPublicProviderKey, isPublicApiRequest } from "../lib/public-api-keys";
+import { GEMINI_LIVE_TOOLS, liveSystemInstruction } from "../lib/live-tools";
 
 export const GEMINI_LIVE_MODEL = "gemini-3.8-live";
 export const GEMINI_LIVE_DEEPTHINK_MODEL = "gemini-3.8-live-extended-thinking";
@@ -119,12 +120,9 @@ export function createLiveRouter({
             },
             inputAudioTranscription: {},
             outputAudioTranscription: {},
+            tools: GEMINI_LIVE_TOOLS,
             systemInstruction: {
-              parts: [{
-                text: deepthink
-                  ? "You are Nexo, a helpful conversational voice assistant. Use high background reasoning for complex, multi-step requests, but speak naturally, clearly, and concisely. Do not reveal private reasoning or claim to have performed actions outside this voice session."
-                  : "You are Nexo, a helpful conversational voice assistant. Be natural, clear, and concise. Do not claim to have performed actions outside this voice session.",
-              }],
+              parts: [{ text: liveSystemInstruction(deepthink) }],
             },
           },
         }),

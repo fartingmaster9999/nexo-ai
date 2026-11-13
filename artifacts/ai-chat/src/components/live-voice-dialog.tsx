@@ -17,7 +17,14 @@ import {
 } from "@/lib/live-audio";
 import { startLiveCapture } from "@/lib/live-capture";
 import { createLiveMessageQueue, liveConnectionError, liveProviderError } from "@/lib/live-protocol";
-import type { LiveTranscriptLine } from "@/lib/live-agent-handoff";
+import {
+  readLiveFunctionCalls,
+  type LiveAgentHandoffResult,
+  type LiveAgentRunState,
+  type LiveFunctionCall,
+  type LiveTranscriptLine,
+  type LiveWorkspaceOpenResult,
+} from "@/lib/live-agent-handoff";
 import "./live-voice-dialog.css";
 
 type LiveStatus = "idle" | "requesting" | "connecting" | "listening" | "thinking" | "speaking" | "ended" | "error";
@@ -40,6 +47,7 @@ type LiveSession = {
   playbackSources: Set<AudioBufferSourceNode>;
   nextPlaybackTime: number;
   inputSamples: number[];
+  pendingAgentMessages: string[];
   setupTimer?: number;
   setupComplete: boolean;
   turnComplete: boolean;
@@ -51,8 +59,11 @@ type LiveVoiceDialogProps = {
   onOpenChange: (open: boolean) => void;
   fetchToken: LiveTokenFetcher;
   deepthink: boolean;
+  workspaceOpen: boolean;
+  agentWork: LiveAgentRunState | null;
   onOpenSettings: () => void;
-  onBuildWithAgent: (transcript: LiveTranscriptLine[]) => void;
+  onOpenWorkspace: () => LiveWorkspaceOpenResult;
+  onBuildWithAgent: (transcript: LiveTranscriptLine[], task?: string) => LiveAgentHandoffResult;
 };
 
 type LiveTokenError = Error & { openProviderSettings?: boolean };
@@ -84,6 +95,7 @@ function releaseSession(session: LiveSession) {
     void session.audioContext.close().catch(() => {});
   }
   session.inputSamples.length = 0;
+  session.pendingAgentMessages.length = 0;
   session.resampler?.reset();
 }
 
@@ -112,7 +124,41 @@ function appendTranscript(
   setLines(linesRef.current);
 }
 
-export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onOpenSettings, onBuildWithAgent }: LiveVoiceDialogProps) {
+function flushPendingAgentMessage(session: LiveSession): "sent" | "waiting" | "failed" {
+  const socket = session.socket;
+  if (
+    session.stopped || !session.setupComplete || !session.turnComplete ||
+    session.playbackSources.size > 0 || !socket || socket.readyState !== WebSocket.OPEN ||
+    session.pendingAgentMessages.length === 0
+  ) return "waiting";
+
+  const text = session.pendingAgentMessages.shift()!;
+  try {
+    socket.send(JSON.stringify({
+      clientContent: {
+        turns: [{ role: "user", parts: [{ text }] }],
+        turnComplete: true,
+      },
+    }));
+    session.turnComplete = false;
+    session.interactionStatus = "IN_PROGRESS";
+    return "sent";
+  } catch {
+    session.pendingAgentMessages.unshift(text);
+    return "failed";
+  }
+}
+
+function queueAgentMessage(session: LiveSession, text: string): "queued" | "failed" {
+  if (session.pendingAgentMessages.length >= 4) session.pendingAgentMessages.shift();
+  session.pendingAgentMessages.push(text);
+  return flushPendingAgentMessage(session) === "failed" ? "failed" : "queued";
+}
+
+export function LiveVoiceDialog({
+  open, onOpenChange, fetchToken, deepthink, workspaceOpen, agentWork, onOpenSettings,
+  onOpenWorkspace, onBuildWithAgent,
+}: LiveVoiceDialogProps) {
   const [status, setStatus] = useState<LiveStatus>("idle");
   const [error, setError] = useState("");
   const [needsSettings, setNeedsSettings] = useState(false);
@@ -122,6 +168,11 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
   const sessionRef = useRef<LiveSession | null>(null);
   const activeTranscriptIds = useRef<{ user: string | null; assistant: string | null }>({ user: null, assistant: null });
   const transcriptRef = useRef<HTMLElement>(null);
+  const actionCallbacksRef = useRef({ onOpenWorkspace, onBuildWithAgent });
+  actionCallbacksRef.current = { onOpenWorkspace, onBuildWithAgent };
+  const agentWorkRef = useRef(agentWork);
+  agentWorkRef.current = agentWork;
+  const announcedAgentWorkRef = useRef<string | null>(null);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -153,6 +204,51 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
     releaseSession(session);
   }, []);
 
+  const handleToolCalls = useCallback((session: LiveSession, calls: LiveFunctionCall[]) => {
+    if (session.stopped || !session.socket || session.socket.readyState !== WebSocket.OPEN) return;
+    const functionResponses = calls.map((call) => {
+      let result: Record<string, unknown>;
+      try {
+        if (call.name === "open_workspace") {
+          const outcome = actionCallbacksRef.current.onOpenWorkspace();
+          result = outcome.opened
+            ? { status: "opened", message: "The existing workspace is open." }
+            : { status: "unavailable", message: outcome.reason };
+        } else if (call.name === "start_agent") {
+          if (agentWorkRef.current?.status === "running") {
+            result = { status: "already_running", message: "An Agent build is already running in the workspace." };
+          } else {
+            const transcript: LiveTranscriptLine[] = transcriptLinesRef.current
+              .filter((line) => !line.interim && line.text.trim())
+              .map((line) => ({ role: line.role, text: line.text }));
+            const requestedTask = typeof call.args.task === "string" ? call.args.task.trim().slice(0, 180) : "";
+            if (!transcript.some((line) => line.role === "user") && requestedTask) {
+              transcript.push({ role: "user", text: requestedTask });
+            }
+            const outcome = actionCallbacksRef.current.onBuildWithAgent(transcript, requestedTask || undefined);
+            result = outcome.accepted
+              ? { status: "started", message: "Nexo Agent is building in the workspace. Keep this Live session connected. Do not tell the user it is finished until the app sends a completion update." }
+              : { status: "unavailable", message: outcome.reason };
+          }
+        } else {
+          result = { status: "unsupported", message: "This Live action is not available." };
+        }
+      } catch {
+        result = { status: "error", message: "The requested workspace action could not be started." };
+      }
+      return {
+        name: call.name,
+        ...(call.id ? { id: call.id } : {}),
+        response: { result },
+      };
+    });
+    try {
+      session.socket.send(JSON.stringify({ toolResponse: { functionResponses } }));
+    } catch {
+      failSession(session, "Nexo Live could not hand the request to the workspace. Start a new call to continue.");
+    }
+  }, [failSession]);
+
   const handleServerMessage = useCallback((session: LiveSession, message: Record<string, unknown>) => {
     if (session.stopped || sessionRef.current !== session) return;
     if (message.error) {
@@ -160,6 +256,8 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
       failSession(session, liveProviderError(failure.code ?? failure.status));
       return;
     }
+    const functionCalls = readLiveFunctionCalls(message);
+    if (functionCalls.length) handleToolCalls(session, functionCalls);
 
     if (message.setupComplete) {
       if (session.setupComplete) return;
@@ -221,6 +319,10 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
       serverContentObject?.interactionStatus ?? serverContentObject?.interaction_status;
     if (interactionStatus === "IN_PROGRESS" || interactionStatus === "IDLE") {
       session.interactionStatus = interactionStatus;
+      if (interactionStatus === "IDLE" && flushPendingAgentMessage(session) === "failed") {
+        failSession(session, "Nexo Live could not receive the Agent update. Start a new call to continue.");
+        return;
+      }
       if (session.playbackSources.size === 0) {
         if (interactionStatus === "IN_PROGRESS") setStatus("thinking");
         else if (session.turnComplete) setStatus("listening");
@@ -289,6 +391,9 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
             session.playbackSources.delete(source);
             if (!session.stopped && session.playbackSources.size === 0 && session.turnComplete) {
               setStatus(session.interactionStatus === "IN_PROGRESS" ? "thinking" : "listening");
+              if (flushPendingAgentMessage(session) === "failed") {
+                failSession(session, "Nexo Live could not receive the Agent update. Start a new call to continue.");
+              }
             }
           };
           const startAt = Math.max(session.nextPlaybackTime, session.audioContext.currentTime + 0.04);
@@ -310,10 +415,26 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
       if (session.playbackSources.size === 0) {
         setStatus(session.interactionStatus === "IN_PROGRESS" ? "thinking" : "listening");
       }
+      if (flushPendingAgentMessage(session) === "failed") {
+        failSession(session, "Nexo Live could not receive the Agent update. Start a new call to continue.");
+      }
     } else if (content.waitingForInput === true && session.playbackSources.size === 0) {
       setStatus(session.interactionStatus === "IN_PROGRESS" ? "thinking" : "listening");
     }
-  }, [failSession]);
+  }, [failSession, handleToolCalls]);
+
+  useEffect(() => {
+    if (!agentWork || agentWork.status === "running" || announcedAgentWorkRef.current === agentWork.id) return;
+    announcedAgentWorkRef.current = agentWork.id;
+    const session = sessionRef.current;
+    if (!session || session.stopped) return;
+    const update = agentWork.status === "finished"
+      ? "Internal Nexo workspace update: the Agent run has finished. The generated code and any preview or run results are in the workspace. Tell the user the workspace is ready, without reading code aloud, and ask what they would like changed."
+      : "Internal Nexo workspace update: the Agent run ended without completing. Tell the user it did not finish, that any saved progress remains in the workspace, and ask whether they want to retry or revise the request.";
+    if (queueAgentMessage(session, update) === "failed") {
+      failSession(session, "Nexo Live could not announce the Agent result. Start a new call to continue.");
+    }
+  }, [agentWork, failSession]);
 
   const startSession = useCallback(async () => {
     if (sessionRef.current && !sessionRef.current.stopped) return;
@@ -332,6 +453,7 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
       playbackSources: new Set(),
       nextPlaybackTime: 0,
       inputSamples: [],
+      pendingAgentMessages: [],
       setupComplete: false,
       turnComplete: false,
       interactionStatus: undefined,
@@ -451,13 +573,26 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
     ended: "Session ended",
     error: "Could not connect",
   };
+  const openWorkspace = () => {
+    const result = actionCallbacksRef.current.onOpenWorkspace();
+    if (!result.opened) setError(result.reason);
+  };
+  const startAgentFromTranscript = (transcript: LiveTranscriptLine[]) => {
+    const task = [...transcript].reverse().find((line) => line.role === "user")?.text;
+    const result = actionCallbacksRef.current.onBuildWithAgent(transcript, task);
+    if (!result.accepted) setError(result.reason);
+  };
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => {
+    <Dialog open={open} modal={!workspaceOpen} onOpenChange={(nextOpen) => {
       if (!nextOpen) stopSession();
       onOpenChange(nextOpen);
     }}>
-      <DialogContent className="live-dialog-content">
+      <DialogContent
+        className={`live-dialog-content${workspaceOpen ? " live-agent-docked" : ""}`}
+        overlayClassName={workspaceOpen ? "live-agent-overlay" : undefined}
+        onPointerDownOutside={(event) => { if (workspaceOpen) event.preventDefault(); }}
+      >
         <DialogHeader className="live-dialog-header">
           <div className="live-brand-mark" aria-hidden="true"><Radio size={18} /></div>
           <div>
@@ -465,7 +600,7 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
             <DialogDescription>
               {deepthink
                 ? "Deepthink Live uses Gemini 3.8 Live Extended Thinking for complex, multi-step responses."
-                : "Standard Live uses Gemini 3.8 Live for low-latency conversation."} Your voice session is not saved to chat history.
+                : "Standard Live uses Gemini 3.8 Live for low-latency conversation."} Live audio is not saved; requests you send to Agent are added to chat history.
             </DialogDescription>
           </div>
         </DialogHeader>
@@ -483,6 +618,25 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
           <div className="live-error" role="alert">
             <span>{error}</span>
             {needsSettings && <button type="button" onClick={onOpenSettings}>Open Settings</button>}
+          </div>
+        )}
+
+        {agentWork && (
+          <div className={`live-agent-progress is-${agentWork.status}`} role="status" aria-live="polite" data-testid="status-live-agent">
+            <span className="live-agent-progress-dot" aria-hidden="true" />
+            <div className="live-agent-progress-copy">
+              <strong>{agentWork.status === "running" ? "Agent is building" : agentWork.status === "finished" ? "Agent run finished" : "Agent needs attention"}</strong>
+              <span>{agentWork.status === "running"
+                ? "The workspace is open. Keep talking while it works."
+                : agentWork.status === "finished"
+                  ? "The code and preview are in the workspace."
+                  : "Any saved progress remains in the workspace."}</span>
+            </div>
+            {!workspaceOpen && (
+              <button type="button" className="live-agent-open-workspace" onClick={openWorkspace}>
+                Open workspace
+              </button>
+            )}
           </div>
         )}
 
@@ -521,17 +675,16 @@ export function LiveVoiceDialog({ open, onOpenChange, fetchToken, deepthink, onO
             className="live-agent-button"
             data-testid="button-live-build-agent"
             aria-label="Continue this voice request with Nexo Agent"
-            title="End Live and build from this conversation in the Agent workspace"
+            title="Start Agent without ending the Live conversation"
+            disabled={agentWork?.status === "running"}
             onClick={() => {
               const transcript = transcriptLinesRef.current.filter((line) => !line.interim && line.text.trim());
               if (!transcript.some((line) => line.role === "user")) return;
-              stopSession();
-              onOpenChange(false);
-              onBuildWithAgent(transcript);
+              startAgentFromTranscript(transcript);
             }}
           >
             <Bot size={16} aria-hidden="true" />
-            Build with Agent
+            {agentWork?.status === "running" ? "Agent is working" : "Build with Agent"}
           </button>
         )}
       </DialogContent>

@@ -56,6 +56,44 @@ test("opens a supplied HTTPS URL and a bare domain", () => {
   );
 });
 
+test("opens a user-saved class link by label or alternate name", () => {
+  const classLinks = [{
+    id: "english-work",
+    label: "English classwork",
+    url: "https://classroom.google.com/u/3/w/course-id/t/all",
+    aliases: ["literacy assignments", "ela work"],
+  }];
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("Nexo, open English classwork", classLinks),
+    {
+      kind: "website",
+      label: "English classwork",
+      url: "https://classroom.google.com/u/3/w/course-id/t/all",
+    },
+  );
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("Open literacy assignments", classLinks),
+    {
+      kind: "website",
+      label: "English classwork",
+      url: "https://classroom.google.com/u/3/w/course-id/t/all",
+    },
+  );
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("Open the classroom calendar", [{
+      id: "class-calendar",
+      label: "Classroom calendar",
+      url: "https://classroom.google.com/u/3/calendar/this-week/course/all",
+      aliases: ["calendar"],
+    }]),
+    {
+      kind: "website",
+      label: "Classroom calendar",
+      url: "https://classroom.google.com/u/3/calendar/this-week/course/all",
+    },
+  );
+});
+
 test("searches for an unknown site only when the user says it is a website", () => {
   const target = resolveWebsiteOpenRequest("Open the website for Northside High");
   assert.equal(target?.kind, "search");

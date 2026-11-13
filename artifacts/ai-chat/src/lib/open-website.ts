@@ -1,3 +1,5 @@
+import type { ClassLink } from './class-links';
+
 export type WebsiteOpenTarget = {
   label: string;
   url: string;
@@ -54,6 +56,7 @@ function cleanTarget(raw: string) {
     .replace(/[.!?]+$/g, '')
     .replace(/^(?:the\s+)?(?:website|web\s*site|webpage|web\s*page|site)\s+(?:(?:for|called|named)\s+)?/i, '')
     .replace(/^(?:(?:this|the)\s+)?(?:link|url|address|web\s+address)\s*[:\-]?\s*/i, '')
+    .replace(/^(?:the|my)\s+/i, '')
     .replace(/\s+for\s+me\s*$/i, '')
     .replace(/\s+please\s*$/i, '')
     .replace(/\s+(?:in\s+(?:a\s+)?(?:new|separate)\s+(?:tab|window)|in\s+the\s+browser)\s*$/i, '')
@@ -77,7 +80,7 @@ function normalizeHttpUrl(value: string): string | null {
  * Recognize explicit "open this website" commands, resolve familiar site names,
  * and use a search page when a named website has no confident direct mapping.
  */
-export function resolveWebsiteOpenRequest(prompt: string): WebsiteOpenTarget | null {
+export function resolveWebsiteOpenRequest(prompt: string, classLinks: readonly ClassLink[] = []): WebsiteOpenTarget | null {
   const command = prompt.trim().match(
     /^(?:hey\s+)?(?:nexo(?:\s*[,.:]\s*|\s+))?(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:open|visit|go\s+to|launch|navigate\s+to|take\s+me\s+to)\s+(.+)$/i,
   );
@@ -99,7 +102,16 @@ export function resolveWebsiteOpenRequest(prompt: string): WebsiteOpenTarget | n
     return { kind: 'website', label: new URL(url).hostname.replace(/^www\./i, ''), url };
   }
 
-  const alias = WEBSITE_ALIASES[target.toLocaleLowerCase()];
+  const normalizedTarget = target.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const customLink = classLinks.find((link) =>
+    [link.label, ...link.aliases].some((name) => name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === normalizedTarget),
+  );
+  if (customLink) {
+    const url = normalizeHttpUrl(customLink.url);
+    if (url) return { kind: 'website', label: customLink.label, url };
+  }
+
+  const alias = WEBSITE_ALIASES[normalizedTarget];
   if (alias) return { ...alias, kind: 'website' };
 
   if (!mentionsWebsite) return null;
