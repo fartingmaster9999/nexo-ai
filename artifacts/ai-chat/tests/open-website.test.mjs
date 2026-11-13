@@ -112,10 +112,18 @@ test("opens the built-in literacy stream or classwork with classroom wording", (
       url: "https://classroom.google.com/u/3/w/ODU1OTI2OTUwOTY2/t/all",
     },
   );
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("Can you open the literacy classwork instead?", DEFAULT_CLASS_LINKS),
+    {
+      kind: "website",
+      label: "Literacy classwork",
+      url: "https://classroom.google.com/u/3/w/ODU1OTI2OTUwOTY2/t/all",
+    },
+  );
 });
 
-test("searches for an unknown site only when the user says it is a website", () => {
-  const target = resolveWebsiteOpenRequest("Open the website for Northside High");
+test("opens search results for an unknown website name instead of falling through to chat", () => {
+  const target = resolveWebsiteOpenRequest("Open Northside High");
   assert.equal(target?.kind, "search");
   assert.match(target?.url ?? "", /^https:\/\/www\.google\.com\/search\?/);
   assert.equal(target?.label, "Northside High");

@@ -59,6 +59,7 @@ function cleanTarget(raw: string) {
     .replace(/^(?:the|my)\s+/i, '')
     .replace(/\s+for\s+me\s*$/i, '')
     .replace(/\s+please\s*$/i, '')
+    .replace(/\s+(?:instead|rather)\s*$/i, '')
     .replace(/\s+(?:in\s+(?:a\s+)?(?:new|separate)\s+(?:tab|window)|in\s+the\s+browser)\s*$/i, '')
     .replace(/^[\s"'“`]+|[\s"'”`]+$/g, '')
     .replace(/[.!?,;:]+$/g, '')
@@ -111,6 +112,7 @@ export function resolveWebsiteOpenRequest(prompt: string, classLinks: readonly C
     if (!url) return null;
     return { kind: 'website', label: new URL(url).hostname.replace(/^www\./i, ''), url };
   }
+  if (/^[a-z][a-z\d+.-]*:/i.test(target)) return null;
 
   const normalizedTarget = target.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const normalizedClassTarget = normalizeClassLinkName(target);
@@ -125,7 +127,9 @@ export function resolveWebsiteOpenRequest(prompt: string, classLinks: readonly C
   const alias = WEBSITE_ALIASES[normalizedTarget];
   if (alias) return { ...alias, kind: 'website' };
 
-  if (!mentionsWebsite) return null;
+  const isClearlyNotAWebsite = /\b(?:conversation|chat|message|file|folder|document|spreadsheet|presentation|project|workspace|editor|code|settings|sidebar|notes?)\b/i.test(target);
+  if (!mentionsWebsite && isClearlyNotAWebsite) return null;
+
   const searchUrl = new URL('https://www.google.com/search');
   searchUrl.searchParams.set('q', `${target} official website`);
   return { kind: 'search', label: target, url: searchUrl.href };
