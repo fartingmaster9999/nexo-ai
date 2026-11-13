@@ -53,16 +53,17 @@ function cleanTarget(raw: string) {
     .trim()
     .replace(/[.!?]+$/g, '')
     .replace(/^(?:the\s+)?(?:website|web\s*site|webpage|web\s*page|site)\s+(?:(?:for|called|named)\s+)?/i, '')
+    .replace(/^(?:(?:this|the)\s+)?(?:link|url|address|web\s+address)\s*[:\-]?\s*/i, '')
     .replace(/\s+for\s+me\s*$/i, '')
     .replace(/\s+please\s*$/i, '')
     .replace(/\s+(?:in\s+(?:a\s+)?(?:new|separate)\s+(?:tab|window)|in\s+the\s+browser)\s*$/i, '')
     .replace(/^[\s"'“`]+|[\s"'”`]+$/g, '')
-    .replace(/[.!?]+$/g, '')
+    .replace(/[.!?,;:]+$/g, '')
     .trim();
 }
 
 function normalizeHttpUrl(value: string): string | null {
-  const candidate = value.startsWith('www.') ? `https://${value}` : value;
+  const candidate = /^https?:\/\//i.test(value) ? value : `https://${value}`;
   try {
     const url = new URL(candidate);
     if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) return null;

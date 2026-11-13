@@ -30,6 +30,30 @@ test("opens a supplied HTTPS URL and a bare domain", () => {
       url: "https://www.example.org/",
     },
   );
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("Open chatgpt.com"),
+    {
+      kind: "website",
+      label: "chatgpt.com",
+      url: "https://chatgpt.com/",
+    },
+  );
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("Open example.net/docs"),
+    {
+      kind: "website",
+      label: "example.net",
+      url: "https://example.net/docs",
+    },
+  );
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("Open this link: https://example.net/a-page"),
+    {
+      kind: "website",
+      label: "example.net",
+      url: "https://example.net/a-page",
+    },
+  );
 });
 
 test("searches for an unknown site only when the user says it is a website", () => {
