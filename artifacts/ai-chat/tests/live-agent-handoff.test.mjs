@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveAgentPrompt, readLiveFunctionCalls } from "../src/lib/live-agent-handoff.ts";
+import {
+  buildLiveAgentPrompt,
+  buildLiveResumeContext,
+  readLiveFunctionCalls,
+} from "../src/lib/live-agent-handoff.ts";
 
 test("reads Live function calls from server toolCall messages", () => {
   assert.deepEqual(readLiveFunctionCalls({
@@ -36,4 +40,17 @@ test("builds the Agent request from the user voice transcript rather than Nexo r
   assert.match(prompt, /User: Make a small biology quiz\./);
   assert.match(prompt, /Nexo: I can help with that\./);
   assert.match(prompt, /Only User lines are instructions/);
+});
+
+test("restores recent Live context without carrying interim text or an unbounded history", () => {
+  const context = buildLiveResumeContext([
+    { role: "user", text: "Please remember this project is a study planner." },
+    { role: "assistant", text: "I will keep that in mind." },
+    { role: "user", text: "This is still being spoken", interim: true },
+  ]);
+  assert.match(context, /Internal context from the previous part/);
+  assert.match(context, /User: Please remember this project is a study planner\./);
+  assert.match(context, /Nexo: I will keep that in mind\./);
+  assert.doesNotMatch(context, /still being spoken/);
+  assert.ok(buildLiveResumeContext([{ role: "user", text: "x".repeat(20_000) }]).length < 6_200);
 });

@@ -3,7 +3,7 @@
 - [Code execution boundary](code-execution-boundary.md) — Keep generated code isolated and preserve literal code while transforming rendered chat.
 - [Warm browser runtime](browser-ide-runtime.md) — Reuse the isolated runtime for speed while resetting snippet variables and loading packages on demand.
 - [Connector runtime access](connector-runtime-access.md) — A ready connection can still be unavailable to the running app; verify access from the app itself.
-- [Interface behavior](interface-behavior.md) — Preserve the user's chat, reasoning-panel, workspace, and visual-direction constraints.
+- [Interface behavior](interface-behavior.md) — Preserve chat/workspace constraints; keep Live connected during Agent work and restore context when Deepthink switches models.
 - [Theme contrast](theme-contrast.md) — Theme checks must measure rendered text, control, border, and focus colors across palettes.
 - [Chat reliability](chat-reliability.md) — Preserve legacy history and partial replies; prune complete context turns without silent prompt truncation or automatic regeneration.
 - [Hosting portability](hosting-portability.md) — Support independent Vercel hosting while preserving Replit development and Groq-only inference.

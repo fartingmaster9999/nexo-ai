@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import { Bot, Loader2, Mic, MicOff, PhoneOff, Radio, Volume2 } from "lucide-react";
+import { Bot, Brain, ExternalLink, Loader2, Mic, MicOff, PhoneOff, Radio, Volume2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -18,10 +18,13 @@ import {
 import { startLiveCapture } from "@/lib/live-capture";
 import { createLiveMessageQueue, liveConnectionError, liveProviderError } from "@/lib/live-protocol";
 import {
+  buildLiveResumeContext,
   readLiveFunctionCalls,
   type LiveAgentHandoffResult,
   type LiveAgentRunState,
+  type LiveExternalLinkResult,
   type LiveFunctionCall,
+  type LiveModeUpdateResult,
   type LiveTranscriptLine,
   type LiveWorkspaceOpenResult,
 } from "@/lib/live-agent-handoff";
@@ -52,6 +55,16 @@ type LiveSession = {
   setupComplete: boolean;
   turnComplete: boolean;
   interactionStatus?: "IN_PROGRESS" | "IDLE";
+  deepthink: boolean;
+  pendingModeRestart: boolean;
+  resumeContext?: string;
+};
+
+type StartSessionOptions = {
+  preserveTranscript?: boolean;
+  resumeContext?: string;
+  pendingAgentMessages?: string[];
+  modeSwitch?: boolean;
 };
 
 type LiveVoiceDialogProps = {
@@ -59,11 +72,15 @@ type LiveVoiceDialogProps = {
   onOpenChange: (open: boolean) => void;
   fetchToken: LiveTokenFetcher;
   deepthink: boolean;
+  agentMode: boolean;
   workspaceOpen: boolean;
   agentWork: LiveAgentRunState | null;
   onOpenSettings: () => void;
   onOpenWorkspace: () => LiveWorkspaceOpenResult;
   onBuildWithAgent: (transcript: LiveTranscriptLine[], task?: string) => LiveAgentHandoffResult;
+  onSetDeepthink: (enabled: boolean) => LiveModeUpdateResult;
+  onSetAgentMode: (enabled: boolean) => LiveModeUpdateResult;
+  onOpenExternalLink: (target: string) => LiveExternalLinkResult;
 };
 
 type LiveTokenError = Error & { openProviderSettings?: boolean };
@@ -127,7 +144,7 @@ function appendTranscript(
 function flushPendingAgentMessage(session: LiveSession): "sent" | "waiting" | "failed" {
   const socket = session.socket;
   if (
-    session.stopped || !session.setupComplete || !session.turnComplete ||
+    session.stopped || !session.setupComplete || !session.turnComplete || session.interactionStatus === "IN_PROGRESS" ||
     session.playbackSources.size > 0 || !socket || socket.readyState !== WebSocket.OPEN ||
     session.pendingAgentMessages.length === 0
   ) return "waiting";
@@ -156,20 +173,25 @@ function queueAgentMessage(session: LiveSession, text: string): "queued" | "fail
 }
 
 export function LiveVoiceDialog({
-  open, onOpenChange, fetchToken, deepthink, workspaceOpen, agentWork, onOpenSettings,
-  onOpenWorkspace, onBuildWithAgent,
+  open, onOpenChange, fetchToken, deepthink, agentMode, workspaceOpen, agentWork, onOpenSettings,
+  onOpenWorkspace, onBuildWithAgent, onSetDeepthink, onSetAgentMode, onOpenExternalLink,
 }: LiveVoiceDialogProps) {
   const [status, setStatus] = useState<LiveStatus>("idle");
   const [error, setError] = useState("");
   const [needsSettings, setNeedsSettings] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [externalLink, setExternalLink] = useState<{ label: string; url: string } | null>(null);
+  const [switchingMode, setSwitchingMode] = useState(false);
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const transcriptLinesRef = useRef<TranscriptLine[]>([]);
   const sessionRef = useRef<LiveSession | null>(null);
   const activeTranscriptIds = useRef<{ user: string | null; assistant: string | null }>({ user: null, assistant: null });
   const transcriptRef = useRef<HTMLElement>(null);
-  const actionCallbacksRef = useRef({ onOpenWorkspace, onBuildWithAgent });
-  actionCallbacksRef.current = { onOpenWorkspace, onBuildWithAgent };
+  const actionCallbacksRef = useRef({ onOpenWorkspace, onBuildWithAgent, onSetDeepthink, onSetAgentMode, onOpenExternalLink });
+  actionCallbacksRef.current = { onOpenWorkspace, onBuildWithAgent, onSetDeepthink, onSetAgentMode, onOpenExternalLink };
+  const modeStateRef = useRef({ deepthink, agentMode });
+  modeStateRef.current = { deepthink, agentMode };
+  const restartModeRef = useRef<((session: LiveSession) => void) | null>(null);
   const agentWorkRef = useRef(agentWork);
   agentWorkRef.current = agentWork;
   const announcedAgentWorkRef = useRef<string | null>(null);
@@ -201,6 +223,7 @@ export function LiveVoiceDialog({
     if (session.stopped || sessionRef.current !== session) return;
     setError(message);
     setStatus("error");
+    setSwitchingMode(false);
     releaseSession(session);
   }, []);
 
@@ -214,6 +237,45 @@ export function LiveVoiceDialog({
           result = outcome.opened
             ? { status: "opened", message: "The existing workspace is open." }
             : { status: "unavailable", message: outcome.reason };
+        } else if (call.name === "open_external_link") {
+          const target = typeof call.args.target === "string" ? call.args.target.trim().slice(0, 2048) : "";
+          const outcome = actionCallbacksRef.current.onOpenExternalLink(target);
+          if (outcome.opened) {
+            setExternalLink(null);
+            result = { status: "opened", label: outcome.label, url: outcome.url, message: `Opened ${outcome.label} in a new tab.` };
+          } else if ("url" in outcome) {
+            setExternalLink({ label: outcome.label, url: outcome.url });
+            result = { status: "popup_blocked", label: outcome.label, message: "The browser blocked the new tab. Tell the user to tap the open-link button visible in the Live panel." };
+          } else {
+            result = { status: "invalid_target", message: "Ask the user for a website name or valid HTTP(S) link." };
+          }
+        } else if (call.name === "set_deepthink") {
+          if (typeof call.args.enabled !== "boolean") {
+            result = { status: "invalid", message: "The Deepthink setting needs an on or off value." };
+          } else {
+            const outcome = actionCallbacksRef.current.onSetDeepthink(call.args.enabled);
+            session.pendingModeRestart = session.deepthink !== outcome.enabled;
+            result = {
+              status: outcome.changed ? "updated" : "unchanged",
+              enabled: outcome.enabled,
+              message: outcome.changed
+                ? `Deepthink is ${outcome.enabled ? "on" : "off"}. The app will reconnect this Live call with the selected model and restore the conversation.`
+                : `Deepthink is already ${outcome.enabled ? "on" : "off"}.`,
+            };
+          }
+        } else if (call.name === "set_agent_mode") {
+          if (typeof call.args.enabled !== "boolean") {
+            result = { status: "invalid", message: "The Agent setting needs an on or off value." };
+          } else {
+            const outcome = actionCallbacksRef.current.onSetAgentMode(call.args.enabled);
+            result = {
+              status: outcome.changed ? "updated" : "unchanged",
+              enabled: outcome.enabled,
+              message: `Agent mode is ${outcome.enabled ? "on" : "off"}. Explicit build requests can still be delegated while this voice session stays connected.`,
+            };
+          }
+        } else if (call.name === "get_nexo_modes") {
+          result = { status: "ok", ...modeStateRef.current };
         } else if (call.name === "start_agent") {
           if (agentWorkRef.current?.status === "running") {
             result = { status: "already_running", message: "An Agent build is already running in the workspace." };
@@ -257,7 +319,11 @@ export function LiveVoiceDialog({
       return;
     }
     const functionCalls = readLiveFunctionCalls(message);
-    if (functionCalls.length) handleToolCalls(session, functionCalls);
+    if (functionCalls.length) {
+      session.turnComplete = false;
+      session.interactionStatus = "IN_PROGRESS";
+      handleToolCalls(session, functionCalls);
+    }
 
     if (message.setupComplete) {
       if (session.setupComplete) return;
@@ -301,6 +367,27 @@ export function LiveVoiceDialog({
         if (session.setupTimer !== undefined) window.clearTimeout(session.setupTimer);
         if (session.playbackSources.size === 0) setStatus("listening");
       }).catch(() => failSession(session, "Nexo Live could not capture microphone audio. Try another browser or microphone."));
+      if (session.resumeContext) {
+        try {
+          socket.send(JSON.stringify({
+            clientContent: {
+              turns: [{ role: "user", parts: [{ text: session.resumeContext }] }],
+              turnComplete: true,
+            },
+          }));
+          session.resumeContext = undefined;
+          session.turnComplete = false;
+          session.interactionStatus = "IN_PROGRESS";
+          setStatus("thinking");
+          setSwitchingMode(false);
+        } catch {
+          failSession(session, "Nexo Live could not restore the previous conversation after switching modes.");
+          return;
+        }
+      } else {
+        setSwitchingMode(false);
+      }
+      restartModeRef.current?.(session);
       return;
     }
 
@@ -328,7 +415,10 @@ export function LiveVoiceDialog({
         else if (session.turnComplete) setStatus("listening");
       }
     }
-    if (typeof serverContent !== "object" || serverContent === null) return;
+    if (typeof serverContent !== "object" || serverContent === null) {
+      restartModeRef.current?.(session);
+      return;
+    }
     const content = serverContentObject!;
     const interimInput = content.interimInputTranscription as { text?: unknown } | undefined;
     const finalInput = content.inputTranscription as { text?: unknown } | undefined;
@@ -394,6 +484,7 @@ export function LiveVoiceDialog({
               if (flushPendingAgentMessage(session) === "failed") {
                 failSession(session, "Nexo Live could not receive the Agent update. Start a new call to continue.");
               }
+              restartModeRef.current?.(session);
             }
           };
           const startAt = Math.max(session.nextPlaybackTime, session.audioContext.currentTime + 0.04);
@@ -421,6 +512,7 @@ export function LiveVoiceDialog({
     } else if (content.waitingForInput === true && session.playbackSources.size === 0) {
       setStatus(session.interactionStatus === "IN_PROGRESS" ? "thinking" : "listening");
     }
+    restartModeRef.current?.(session);
   }, [failSession, handleToolCalls]);
 
   useEffect(() => {
@@ -436,13 +528,16 @@ export function LiveVoiceDialog({
     }
   }, [agentWork, failSession]);
 
-  const startSession = useCallback(async () => {
+  const startSession = useCallback(async (options: StartSessionOptions = {}) => {
     if (sessionRef.current && !sessionRef.current.stopped) return;
     setError("");
     setNeedsSettings(false);
     setMuted(false);
-    transcriptLinesRef.current = [];
-    setLines([]);
+    setSwitchingMode(options.modeSwitch === true);
+    if (!options.preserveTranscript) {
+      transcriptLinesRef.current = [];
+      setLines([]);
+    }
     activeTranscriptIds.current = { user: null, assistant: null };
     setStatus("requesting");
 
@@ -453,10 +548,13 @@ export function LiveVoiceDialog({
       playbackSources: new Set(),
       nextPlaybackTime: 0,
       inputSamples: [],
-      pendingAgentMessages: [],
+      pendingAgentMessages: options.pendingAgentMessages ?? [],
       setupComplete: false,
       turnComplete: false,
       interactionStatus: undefined,
+      deepthink,
+      pendingModeRestart: false,
+      resumeContext: options.resumeContext,
     };
     sessionRef.current = session;
     const deadline = (milliseconds: number, message: string) => {
@@ -511,7 +609,7 @@ export function LiveVoiceDialog({
             model: `models/${model}`,
               generationConfig: {
                 responseModalities: ["AUDIO"],
-                ...(deepthink ? { thinkingConfig: { thinkingLevel: "high" } } : {}),
+            ...(session.deepthink ? { thinkingConfig: { thinkingLevel: "high" } } : {}),
               },
             inputAudioTranscription: {},
             outputAudioTranscription: {},
@@ -542,9 +640,52 @@ export function LiveVoiceDialog({
             : failure.message);
       setNeedsSettings(failure.openProviderSettings === true);
       setStatus("error");
+      setSwitchingMode(false);
       releaseSession(session);
     }
   }, [deepthink, fetchToken, handleServerMessage, failSession]);
+
+  const restartSessionForMode = useCallback((session: LiveSession) => {
+    if (session.stopped || sessionRef.current !== session || session.deepthink === deepthink) return;
+    const hasTranscript = transcriptLinesRef.current.some((line) => !line.interim && line.text.trim());
+    const safeToRestart = session.setupComplete &&
+      session.playbackSources.size === 0 &&
+      session.interactionStatus !== "IN_PROGRESS" &&
+      (session.turnComplete || !hasTranscript);
+    if (!safeToRestart) return;
+
+    const resumeContext = buildLiveResumeContext(transcriptLinesRef.current);
+    const pendingAgentMessages = [...session.pendingAgentMessages];
+    session.pendingModeRestart = false;
+    setExternalLink(null);
+    setError("");
+    setSwitchingMode(true);
+    appendTranscript(
+      transcriptLinesRef,
+      setLines,
+      activeTranscriptIds,
+      "assistant",
+      `Switching to ${deepthink ? "Deepthink Live" : "standard Live"} and keeping our conversation.`,
+      "append",
+    );
+    releaseSession(session);
+    if (sessionRef.current === session) sessionRef.current = null;
+    activeTranscriptIds.current = { user: null, assistant: null };
+    void startSession({
+      preserveTranscript: true,
+      resumeContext,
+      pendingAgentMessages,
+      modeSwitch: true,
+    });
+  }, [deepthink, startSession]);
+  restartModeRef.current = restartSessionForMode;
+
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!open || !session || session.stopped || session.deepthink === deepthink) return;
+    session.pendingModeRestart = true;
+    restartModeRef.current?.(session);
+  }, [deepthink, lines, open, status]);
 
   const toggleMute = () => {
     const session = sessionRef.current;
@@ -565,8 +706,8 @@ export function LiveVoiceDialog({
   const canBuildWithAgent = lines.some((line) => line.role === "user" && !line.interim && line.text.trim());
   const statusText: Record<LiveStatus, string> = {
     idle: "Ready when you are",
-    requesting: "Preparing your microphone",
-    connecting: "Connecting to Gemini Live",
+    requesting: switchingMode ? "Switching Live mode" : "Preparing your microphone",
+    connecting: switchingMode ? `Connecting to ${deepthink ? "Deepthink Live" : "standard Live"}` : "Connecting to Gemini Live",
     listening: "Listening",
     thinking: "Thinking through your request",
     speaking: "Nexo is speaking",
@@ -605,6 +746,41 @@ export function LiveVoiceDialog({
           </div>
         </DialogHeader>
 
+        <div className="live-mode-controls" role="group" aria-label="Live mode and workspace controls">
+          <button
+            type="button"
+            className={`live-mode-button${deepthink ? " is-on" : ""}`}
+            aria-pressed={deepthink}
+            aria-label="Deepthink mode"
+            title={deepthink ? "Deepthink is on. Select to turn it off." : "Deepthink is off. Select to use extended thinking."}
+            data-testid="toggle-live-deepthink"
+            onClick={() => actionCallbacksRef.current.onSetDeepthink(!deepthink)}
+          >
+            <Brain size={14} aria-hidden="true" /> Deepthink
+          </button>
+          <button
+            type="button"
+            className={`live-mode-button${agentMode ? " is-on" : ""}`}
+            aria-pressed={agentMode}
+            aria-label="Agent mode"
+            title={agentMode ? "Agent mode is on. Select to turn it off." : "Agent mode is off. Select to turn it on."}
+            data-testid="toggle-live-agent"
+            onClick={() => actionCallbacksRef.current.onSetAgentMode(!agentMode)}
+          >
+            <Bot size={14} aria-hidden="true" /> Agent
+          </button>
+          <button
+            type="button"
+            className="live-mode-button"
+            aria-label="Open workspace"
+            title="Open the current conversation's workspace"
+            data-testid="button-live-open-workspace"
+            onClick={openWorkspace}
+          >
+            <ExternalLink size={13} aria-hidden="true" /> Workspace
+          </button>
+        </div>
+
         <div className={`live-voice-orb is-${status}`} aria-hidden="true">
           <span className="live-orb-halo" />
           <span className="live-orb-core">{status === "requesting" || status === "connecting" ? <Loader2 size={28} /> : <Radio size={28} />}</span>
@@ -618,6 +794,15 @@ export function LiveVoiceDialog({
           <div className="live-error" role="alert">
             <span>{error}</span>
             {needsSettings && <button type="button" onClick={onOpenSettings}>Open Settings</button>}
+          </div>
+        )}
+
+        {externalLink && (
+          <div className="live-external-link" role="status" data-testid="status-live-external-link">
+            <span>The browser blocked the new tab. Open the page here:</span>
+            <a href={externalLink.url} target="_blank" rel="noopener noreferrer" onClick={() => setExternalLink(null)}>
+              <ExternalLink size={13} aria-hidden="true" /> {externalLink.label}
+            </a>
           </div>
         )}
 

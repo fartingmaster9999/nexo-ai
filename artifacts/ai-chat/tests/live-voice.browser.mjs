@@ -34,6 +34,38 @@ await withFixture("tests/live-voice.html", async ({ evaluate }) => {
   await waitFor(() => evaluate(`document.querySelector('.live-transcript')?.textContent.includes('Hello Nexo') && document.querySelector('.live-transcript')?.textContent.includes('Hi there')`), "Live transcript");
   await waitFor(() => evaluate(`document.querySelector('.live-status')?.textContent === 'Listening'`), "audio playback completion");
 
+  await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({toolCall:{functionCalls:[{
+    id:"deepthink-call",name:"set_deepthink",args:{enabled:true}
+  }]}})})`);
+  await waitFor(() => evaluate(`window.__liveMessages.some(message=>message.toolResponse?.functionResponses?.[0]?.id === 'deepthink-call')`), "Deepthink tool response");
+  await waitFor(() => evaluate(`window.__liveSockets.length === 2 && window.__liveMessages.some(message=>message.setup?.model === 'models/gemini-3.8-live-extended-thinking') && document.querySelector('.live-status')?.textContent === 'Listening'`), "Deepthink Live reconnect");
+  const resumedContext = await evaluate(`window.__liveMessages.filter(message=>message.clientContent).map(message=>message.clientContent)`);
+  assert.equal(resumedContext[0]?.turns?.[0]?.parts?.[0]?.text?.includes("Hello Nexo"), true);
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-live-deepthink"]')?.getAttribute('aria-pressed')`), "true");
+
+  await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({toolCall:{functionCalls:[{
+    id:"agent-mode-call",name:"set_agent_mode",args:{enabled:true}
+  }]}})})`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-live-agent"]')?.getAttribute('aria-pressed') === 'true'`), "Agent mode voice toggle");
+  await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({toolCall:{functionCalls:[{
+    id:"modes-call",name:"get_nexo_modes",args:{}
+  }]}})})`);
+  await waitFor(() => evaluate(`window.__liveMessages.some(message=>message.toolResponse?.functionResponses?.[0]?.id === 'modes-call' && message.toolResponse.functionResponses[0].response.result.deepthink === true && message.toolResponse.functionResponses[0].response.result.agentMode === true)`), "Live mode status");
+  await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({toolCall:{functionCalls:[{
+    id:"agent-mode-off-call",name:"set_agent_mode",args:{enabled:false}
+  }]}})})`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="toggle-live-agent"]')?.getAttribute('aria-pressed') === 'false'`), "Agent mode voice disable");
+
+  await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({toolCall:{functionCalls:[{
+    id:"link-call",name:"open_external_link",args:{target:"chatgpt.com"}
+  }]}})})`);
+  await waitFor(() => evaluate(`document.querySelector('[data-testid="status-live-external-link"] a')?.textContent.includes('chatgpt.com')`), "blocked website link fallback");
+  assert.equal(await evaluate(`window.__externalTarget`), "chatgpt.com");
+
+  await evaluate(`document.querySelector('[data-testid="toggle-live-deepthink"]').click()`);
+  await waitFor(() => evaluate(`window.__liveSockets.length === 3 && window.__liveMessages.some(message=>message.setup?.model === 'models/gemini-3.8-live') && document.querySelector('.live-status')?.textContent === 'Listening'`), "standard Live reconnect");
+  assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-live-deepthink"]')?.getAttribute('aria-pressed')`), "false");
+
   await evaluate(`(() => {
     for (let index = 0; index < 55; index += 1) {
       window.__liveSocket.onmessage({data: JSON.stringify({serverContent:{inputTranscription:{text:'user '+index}}})});
@@ -110,8 +142,14 @@ await withFixture("tests/live-voice.html", async ({ evaluate }) => {
   await waitFor(() => evaluate(`window.__liveMessages.some(message=>message.toolResponse?.functionResponses?.[0]?.id === 'agent-call-1')`), "Live function response");
   assert.equal(await evaluate(`Boolean(document.querySelector('[role="dialog"].live-agent-docked') && document.querySelector('.live-transcript'))`), true);
   assert.equal(await evaluate(`window.__liveSocket.readyState === 1 && !window.__liveTrack.stopped && window.__liveSocket.onmessage !== null`), true);
+  await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({toolCall:{functionCalls:[{
+    id:"open-workspace-call",name:"open_workspace",args:{}
+  }]}})})`);
+  await waitFor(() => evaluate(`window.__liveMessages.some(message=>message.toolResponse?.functionResponses?.[0]?.id === 'open-workspace-call' && message.toolResponse.functionResponses[0].response.result.status === 'opened')`), "Live workspace tool");
+  await evaluate(`document.querySelector('[data-testid="button-live-open-workspace"]').click()`);
+  assert.equal(await evaluate(`window.__workspaceClicks`), 2);
   await evaluate(`document.querySelector('#workspace-control').click()`);
-  assert.equal(await evaluate(`window.__workspaceClicks`), 1);
+  assert.equal(await evaluate(`window.__workspaceClicks`), 3);
   const audioChunksBefore = await evaluate(`window.__liveMessages.filter(message=>message.realtimeInput?.audio).length`);
   await evaluate(`window.__liveProcessor.onaudioprocess({inputBuffer:{getChannelData:()=>new Float32Array(4800).fill(.25)}})`);
   await waitFor(() => evaluate(`window.__liveMessages.filter(message=>message.realtimeInput?.audio).length > ${audioChunksBefore}`), "microphone remains live during Agent build");

@@ -45,6 +45,12 @@ Sync mode preferences across tabs by applying storage events to UI state without
 
 **How to apply:** Keep storage writes in the local toggle handlers and keep storage-event listeners read-only; preserve the request's captured mode values while the visible preferences change.
 
+Nexo Live must remain connected while Agent works. Changing Deepthink during a Live call requires switching to the other Live model; preserve recent voice context and wait for playback and the extended model's interaction status to become idle before reconnecting.
+
+**Why:** The user wants to keep speaking with Nexo while it delegates project work. Gemini Live's standard and extended-thinking modes use separate models, and extended thinking can continue after an audio utterance reports turn completion.
+
+**How to apply:** Keep Agent handoff independent from the Live socket. For Deepthink changes, drain queued audio, wait until `interactionStatus` is idle, reconnect with the selected model, and restore a bounded transcript context without reading it aloud.
+
 The visual direction is a premium, modern SaaS chat interface inspired by DeepSeek, v0, and Bolt, while retaining Nexo's own logo and black-and-blue identity.
 
 **Why:** The user supplied an explicit refinement brief emphasizing restrained rich-black surfaces, balanced spacing, readable hierarchy, subtle card feedback, and tactile composer controls.

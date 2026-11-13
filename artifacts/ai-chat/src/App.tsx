@@ -51,6 +51,8 @@ import {
   buildLiveAgentPrompt,
   type LiveAgentHandoffResult,
   type LiveAgentRunState,
+  type LiveExternalLinkResult,
+  type LiveModeUpdateResult,
   type LiveTranscriptLine,
   type LiveWorkspaceOpenResult,
 } from '@/lib/live-agent-handoff';
@@ -196,17 +198,21 @@ function Home() {
     window.addEventListener('storage', syncModePreferences);
     return () => window.removeEventListener('storage', syncModePreferences);
   }, []);
-  const toggleDeepthink = () => {
-    const next = !deepthink;
+  const setDeepthinkPreference = (next: boolean): LiveModeUpdateResult => {
+    const changed = deepthink !== next;
+    if (!changed) return { enabled: deepthink, changed: false };
     setDeepthink(next);
     if (!next) setCompareAgentMode(false);
     try {
       window.localStorage.setItem(DEEPTHINK_KEY, next ? '1' : '0');
       if (!next) window.localStorage.removeItem(COMPARE_AGENT_KEY);
     } catch { /* ignore */ }
+    return { enabled: next, changed: true };
   };
-  const toggleAgentMode = () => {
-    const next = !agentMode;
+  const toggleDeepthink = () => { setDeepthinkPreference(!deepthink); };
+  const setAgentModePreference = (next: boolean): LiveModeUpdateResult => {
+    const changed = agentMode !== next;
+    if (!changed) return { enabled: agentMode, changed: false };
     setAgentMode(next);
     setDeepthinkSuggestionDismissed(false);
     if (!next) setCompareAgentMode(false);
@@ -220,7 +226,9 @@ function Home() {
         description: 'Add a Gemini API key in Settings to unlock image understanding and expanded Agent capabilities.',
       });
     }
+    return { enabled: next, changed: true };
   };
+  const toggleAgentMode = () => { setAgentModePreference(!agentMode); };
   const setCompareAgentModeEnabled = (next: boolean) => {
     if (!agentMode || !deepthink || streaming) return;
     if (next && PUBLIC_KEY_MODE && !readPublicProviderKeys().gemini.trim()) {
@@ -1488,6 +1496,26 @@ function Home() {
     return { opened: true };
   };
 
+  const openExternalLinkFromLive = (rawTarget: string): LiveExternalLinkResult => {
+    const target = rawTarget.trim().slice(0, 2048);
+    if (!target) return { opened: false, reason: 'invalid_target' };
+    const openRequest = /^(?:open|visit|go\s+to|launch|navigate\s+to|take\s+me\s+to)\b/i.test(target)
+      ? target
+      : `open ${target}`;
+    const resolved = resolveWebsiteOpenRequest(openRequest, classLinks);
+    if (!resolved) return { opened: false, reason: 'invalid_target' };
+    try {
+      const opened = window.open(resolved.url, '_blank');
+      if (opened) {
+        opened.opener = null;
+        return { opened: true, label: resolved.label, url: resolved.url };
+      }
+    } catch {
+      // A voice tool call may not retain browser user activation; expose a manual link below.
+    }
+    return { opened: false, label: resolved.label, url: resolved.url, reason: 'popup_blocked' };
+  };
+
   const dismissRecovery = () => {
     if (!activeId) return;
     try {
@@ -2038,6 +2066,10 @@ function Home() {
         onOpenSettings={() => { setLiveOpen(false); setProviderSettingsOpen(true); }}
         onOpenWorkspace={openWorkspaceFromLive}
         onBuildWithAgent={startAgentFromLive}
+        agentMode={agentMode}
+        onSetDeepthink={setDeepthinkPreference}
+        onSetAgentMode={setAgentModePreference}
+        onOpenExternalLink={openExternalLinkFromLive}
       />
     </div>
   );

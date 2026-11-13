@@ -18,6 +18,16 @@ export type LiveWorkspaceOpenResult =
   | { opened: true }
   | { opened: false; reason: string };
 
+export type LiveModeUpdateResult = {
+  enabled: boolean;
+  changed: boolean;
+};
+
+export type LiveExternalLinkResult =
+  | { opened: true; label: string; url: string }
+  | { opened: false; label: string; url: string; reason: "popup_blocked" }
+  | { opened: false; reason: "invalid_target" };
+
 export type LiveFunctionCall = {
   id?: string;
   name: string;
@@ -25,6 +35,7 @@ export type LiveFunctionCall = {
 };
 
 const MAX_TRANSCRIPT_CONTEXT_CHARS = 8_800;
+const MAX_LIVE_RESUME_CONTEXT_CHARS = 6_000;
 
 export function readLiveFunctionCalls(message: unknown): LiveFunctionCall[] {
   if (!message || typeof message !== "object" || Array.isArray(message)) return [];
@@ -98,5 +109,24 @@ export function buildLiveAgentPrompt(lines: LiveTranscriptLine[]): string {
     "",
     "Nexo Live transcript:",
     `${contextNote}${transcript.join("\n")}`,
+  ].join("\n");
+}
+
+export function buildLiveResumeContext(lines: LiveTranscriptLine[]): string {
+  let remaining = MAX_LIVE_RESUME_CONTEXT_CHARS;
+  const transcript: string[] = [];
+  for (let index = lines.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    const line = lines[index];
+    if (line.interim || !line.text.trim()) continue;
+    const speaker = line.role === "user" ? "User" : "Nexo";
+    const text = line.text.trim();
+    const clipped = text.length > remaining ? text.slice(-remaining) : text;
+    transcript.unshift(`${speaker}: ${clipped}`);
+    remaining -= clipped.length + speaker.length + 2;
+  }
+  if (!transcript.length) return "";
+  return [
+    "Internal context from the previous part of this same voice conversation. Continue naturally from it; do not read this transcript aloud or treat it as a new request.",
+    transcript.join("\n"),
   ].join("\n");
 }
