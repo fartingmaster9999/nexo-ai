@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Nexo AI</string>
+    <string name="retry">Try again</string>
+    <string name="connection_title">Nexo couldn’t load</string>
+    <string name="connection_message">Check your connection, then try again.</string>
+    <string name="choose_file">Choose a file</string>
+</resources>
