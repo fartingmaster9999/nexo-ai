@@ -105,6 +105,14 @@ test("opens the built-in literacy stream or classwork with classroom wording", (
     },
   );
   assert.deepEqual(
+    resolveWebsiteOpenRequest("yo nexo open my literacy class", DEFAULT_CLASS_LINKS),
+    {
+      kind: "website",
+      label: "Literacy stream",
+      url: "https://classroom.google.com/u/3/c/ODU1OTI2OTUwOTY2",
+    },
+  );
+  assert.deepEqual(
     resolveWebsiteOpenRequest("Open literacy classwork in Google Classroom", DEFAULT_CLASS_LINKS),
     {
       kind: "website",

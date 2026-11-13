@@ -93,7 +93,7 @@ function normalizeHttpUrl(value: string): string | null {
  */
 export function resolveWebsiteOpenRequest(prompt: string, classLinks: readonly ClassLink[] = []): WebsiteOpenTarget | null {
   const command = prompt.trim().match(
-    /^(?:hey\s+)?(?:nexo(?:\s*[,.:]\s*|\s+))?(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:open|visit|go\s+to|launch|navigate\s+to|take\s+me\s+to)\s+(.+)$/i,
+    /^(?:(?:hey|yo)\s+)?(?:nexo(?:\s*[,.:]\s*|\s+))?(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:open|visit|go\s+to|launch|navigate\s+to|take\s+me\s+to)\s+(.+)$/i,
   );
   if (!command) return null;
 

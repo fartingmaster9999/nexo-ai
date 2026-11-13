@@ -11,7 +11,7 @@ const MAX_IMPORT_BYTES = 512_000;
 const CLASS_LINKS_DEFAULTS_KEY = 'nexo-class-links-defaults-v1';
 
 export const DEFAULT_CLASS_LINKS: ClassLink[] = [
-  { id: 'default-literacy-stream', label: 'Literacy stream', url: 'https://classroom.google.com/u/3/c/ODU1OTI2OTUwOTY2', aliases: ['literacy', 'english', 'english stream', 'english/literacy', 'lit', 'lit stream'] },
+  { id: 'default-literacy-stream', label: 'Literacy stream', url: 'https://classroom.google.com/u/3/c/ODU1OTI2OTUwOTY2', aliases: ['literacy', 'literacy class', 'english', 'english class', 'english stream', 'english/literacy', 'lit', 'lit stream'] },
   { id: 'default-literacy-classwork', label: 'Literacy classwork', url: 'https://classroom.google.com/u/3/w/ODU1OTI2OTUwOTY2/t/all', aliases: ['lit classwork', 'english classwork', 'literacy assignments', 'lit assignments'] },
   { id: 'default-science-stream', label: 'Science stream', url: 'https://classroom.google.com/u/3/c/ODU1OTgyMzI2MTU0', aliases: ['science'] },
   { id: 'default-science-classwork', label: 'Science classwork', url: 'https://classroom.google.com/u/3/w/ODU1OTgyMzI2MTU0/t/all', aliases: ['science assignments'] },
