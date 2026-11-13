@@ -65,6 +65,16 @@ function cleanTarget(raw: string) {
     .trim();
 }
 
+function normalizeClassLinkName(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\b(?:on|in|via)\s+(?:google\s+)?classroom\b/g, ' ')
+    .replace(/\bgoogle\s+classroom\b/g, ' ')
+    .replace(/\bclassroom\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 function normalizeHttpUrl(value: string): string | null {
   const candidate = /^https?:\/\//i.test(value) ? value : `https://${value}`;
   try {
@@ -103,8 +113,9 @@ export function resolveWebsiteOpenRequest(prompt: string, classLinks: readonly C
   }
 
   const normalizedTarget = target.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const normalizedClassTarget = normalizeClassLinkName(target);
   const customLink = classLinks.find((link) =>
-    [link.label, ...link.aliases].some((name) => name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === normalizedTarget),
+    [link.label, ...link.aliases].some((name) => normalizeClassLinkName(name) === normalizedClassTarget),
   );
   if (customLink) {
     const url = normalizeHttpUrl(customLink.url);

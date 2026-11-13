@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { DEFAULT_CLASS_LINKS } from "../src/lib/class-links.ts";
 import { resolveWebsiteOpenRequest } from "../src/lib/open-website.ts";
 
 test("opens common site names from a direct Nexo command", () => {
@@ -90,6 +91,25 @@ test("opens a user-saved class link by label or alternate name", () => {
       kind: "website",
       label: "Classroom calendar",
       url: "https://classroom.google.com/u/3/calendar/this-week/course/all",
+    },
+  );
+});
+
+test("opens the built-in literacy stream or classwork with classroom wording", () => {
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("Nexo, open literacy on Google Classroom", DEFAULT_CLASS_LINKS),
+    {
+      kind: "website",
+      label: "Literacy stream",
+      url: "https://classroom.google.com/u/3/c/ODU1OTI2OTUwOTY2",
+    },
+  );
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("Open literacy classwork in Google Classroom", DEFAULT_CLASS_LINKS),
+    {
+      kind: "website",
+      label: "Literacy classwork",
+      url: "https://classroom.google.com/u/3/w/ODU1OTI2OTUwOTY2/t/all",
     },
   );
 });
