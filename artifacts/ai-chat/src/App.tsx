@@ -54,6 +54,7 @@ import { toast } from '@/hooks/use-toast';
 import { extractSnippets, type Snippet } from '@/lib/code-extract';
 import { imageFileToBase64, prepareImageFile, type PendingImage } from '@/lib/image-attachment';
 import type { QuizProgress } from '@/lib/interactive-widgets';
+import { resolveWebsiteOpenRequest } from '@/lib/open-website';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 import '@/components/code-workspace.css';
 
@@ -611,6 +612,55 @@ function Home() {
       return;
     }
     if (prompt.length > 12000) { setError('Your message is too long. Please keep it under 12,000 characters.'); return; }
+    if (!resume && !requestImage) {
+      const openTarget = resolveWebsiteOpenRequest(prompt);
+      if (openTarget) {
+        let openedWindow: Window | null = null;
+        try {
+          // Keep this synchronous with the submit gesture so browser popup blockers allow it.
+          openedWindow = window.open(openTarget.url, '_blank');
+          if (openedWindow) openedWindow.opener = null;
+        } catch {
+          openedWindow = null;
+        }
+
+        const safeLabel = openTarget.label.replace(/[`\\]/g, '\\$&').replace(/\s+/g, ' ').slice(0, 120);
+        const reply = !openedWindow
+          ? `Your browser blocked the new tab. [Open the requested page manually](<${openTarget.url}>).`
+          : openTarget.kind === 'search'
+            ? `I couldn't identify an exact address for \`${safeLabel}\`, so I opened Google search results in a new tab.`
+            : `Opening \`${safeLabel}\` in a new tab.`;
+        const now = Date.now();
+        const conversation = activeConversation ?? {
+          id: makeId(),
+          title: 'New conversation',
+          messages: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        const conversationId = conversation.id;
+        const userMessage: ChatMessage = { id: makeId(), role: 'user', content: prompt };
+        const assistantMessage: ChatMessage = { id: makeId(), role: 'assistant', content: reply };
+        const updatedConversation: Conversation = {
+          ...conversation,
+          title: conversation.messages.length === 0 ? titleFromPrompt(prompt) : conversation.title,
+          messages: [...conversation.messages, userMessage, assistantMessage],
+          updatedAt: now,
+        };
+
+        shouldAutoFollowMessages.current = true;
+        setConversations((items) => [updatedConversation, ...items.filter((item) => item.id !== conversationId)]);
+        setActiveId(conversationId);
+        setDraft('');
+        setError('');
+        setDeepthinkSuggestionDismissed(false);
+        setHomeHistoryOpen(false);
+        homeHistoryTriggerRef.current = null;
+        closeIfMobile();
+        persistConversations();
+        return;
+      }
+    }
     if (PUBLIC_KEY_MODE) {
       const keys = readPublicProviderKeys();
       if (!keys.groq.trim()) {
