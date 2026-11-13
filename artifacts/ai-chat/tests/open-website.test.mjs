@@ -128,6 +128,14 @@ test("opens the built-in literacy stream or classwork with classroom wording", (
       url: "https://classroom.google.com/u/3/w/ODU1OTI2OTUwOTY2/t/all",
     },
   );
+  assert.deepEqual(
+    resolveWebsiteOpenRequest("actually can you open science classwork", DEFAULT_CLASS_LINKS),
+    {
+      kind: "website",
+      label: "Science classwork",
+      url: "https://classroom.google.com/u/3/w/ODU1OTgyMzI2MTU0/t/all",
+    },
+  );
 });
 
 test("opens search results for an unknown website name instead of falling through to chat", () => {
