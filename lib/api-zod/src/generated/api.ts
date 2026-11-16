@@ -21,6 +21,7 @@ export const HealthCheckResponse = zod.object({
  * @summary Stream an AI chat response
  */
 export const streamChatBodyDeepthinkDefault = false;
+export const streamChatBodyResearchDefault = false;
 export const streamChatBodyTimeZoneMax = 100;
 
 export const streamChatBodyMessagesItemContentMax = 12000;
@@ -31,6 +32,7 @@ export const streamChatBodyMessagesMax = 40;
 
 export const StreamChatBody = zod.object({
   "deepthink": zod.boolean().default(streamChatBodyDeepthinkDefault).describe('Use high reasoning effort instead of medium'),
+  "research": zod.boolean().default(streamChatBodyResearchDefault).describe('Search the web and produce a sourced research brief.'),
   "timeZone": zod.string().max(streamChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
   "messages": zod.array(zod.object({
   "role": zod.enum(['user', 'assistant']),
@@ -276,6 +278,7 @@ export const StreamPublicChatHeader = zod.object({
 })
 
 export const streamPublicChatBodyDeepthinkDefault = false;
+export const streamPublicChatBodyResearchDefault = false;
 export const streamPublicChatBodyTimeZoneMax = 100;
 
 export const streamPublicChatBodyMessagesItemContentMax = 12000;
@@ -286,6 +289,7 @@ export const streamPublicChatBodyMessagesMax = 40;
 
 export const StreamPublicChatBody = zod.object({
   "deepthink": zod.boolean().default(streamPublicChatBodyDeepthinkDefault).describe('Use high reasoning effort instead of medium'),
+  "research": zod.boolean().default(streamPublicChatBodyResearchDefault).describe('Search the web and produce a sourced research brief.'),
   "timeZone": zod.string().max(streamPublicChatBodyTimeZoneMax).optional().describe('Browser IANA timezone, validated by the server for current-time context'),
   "messages": zod.array(zod.object({
   "role": zod.enum(['user', 'assistant']),

@@ -22,6 +22,7 @@ export type ChatMessage = {
   model?: string;
   agentTask?: AgentTask;
   quizProgress?: Record<string, QuizProgress>;
+  researchMode?: boolean;
 };
 
 export type ReplyMode = 'search' | 'deep' | 'agent' | 'normal';

@@ -19,6 +19,10 @@ export function needsWebSearch(text: string): boolean {
   return years.some((year) => year >= 2024) || current.test(text);
 }
 
+export function shouldSearchWeb(researchRequested: boolean, text: string): boolean {
+  return researchRequested || needsWebSearch(text);
+}
+
 export function buildSearchQuery(messages: InputMessage[]): string {
   const last = messages.at(-1)?.content ?? "";
   const previous = messages.slice(0, -1).reverse().find((message) => message.role === "user")?.content;

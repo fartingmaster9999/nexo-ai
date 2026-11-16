@@ -15,6 +15,12 @@ Agent requests should open a full-screen workspace inside Nexo immediately, hide
 
 **How to apply:** Prioritize preview space while retaining reachable chat, code, console, cancellation, and a safe return to ordinary chat. Preserve saved projects and edits across view changes. This is an Agent-specific exception to opening the ordinary IDE only after code arrives.
 
+Research-only requests should open a sourced Research Brief panel, not the coding workspace, even when Agent mode is selected. Requests that combine research with building or editing remain Agent builds.
+
+**Why:** The user asked to separate research work from coding so a research request does not take over the code workspace.
+
+**How to apply:** Route explicit research-only prompts through the regular web-search answer flow, show the answer and verified returned links in a reopenable panel, and keep generated code or mixed research-and-build requests in the Agent workspace.
+
 Show the full provider-returned reasoning trace in the Thinking panel, rather than replacing it with activity summaries. Do not show the “Current date and time included” activity entry.
 
 **Why:** The user explicitly requested the model's full available reasoning history and removal of the clock status line.

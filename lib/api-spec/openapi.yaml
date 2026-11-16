@@ -559,6 +559,10 @@ components:
           type: boolean
           default: false
           description: Use high reasoning effort instead of medium
+        research:
+          type: boolean
+          default: false
+          description: Search the web and produce a sourced research brief.
         timeZone:
           type: string
           maxLength: 100

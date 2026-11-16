@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import Groq from "groq-sdk";
 import { StreamChatBody } from "@workspace/api-zod";
 import { buildChatRequest, isValidTimeZone } from "../lib/chat-request";
-import { buildSearchQuery, isCodingRequest, needsWebSearch } from "../lib/chat-policy";
+import { buildSearchQuery, isCodingRequest, shouldSearchWeb } from "../lib/chat-policy";
 import { searchWeb } from "../lib/web-search";
 import { createUserChatClient, getChatClient, writeChatEvent, CHAT_DEADLINE_MS, PROVIDER_IDLE_MS } from "../lib/chat-runtime";
 import { getPublicProviderKey, isPublicApiRequest } from "../lib/public-api-keys";
@@ -60,10 +60,11 @@ router.post(["/chat", "/public/chat"], async (req, res): Promise<void> => {
     }, 10000);
 
     const lastPrompt = parsed.data.messages.at(-1)!.content;
-    const coding = isCodingRequest(lastPrompt);
+    const researchRequested = parsed.data.research === true;
+    const coding = !researchRequested && isCodingRequest(lastPrompt);
     let webContext: string | undefined;
     let searchFailed = false;
-    if (needsWebSearch(lastPrompt)) {
+    if (shouldSearchWeb(researchRequested, lastPrompt)) {
       await activity("search", "Searching the web and reading public pages…", "search", "running");
       try {
         const result = await searchWeb(buildSearchQuery(parsed.data.messages));

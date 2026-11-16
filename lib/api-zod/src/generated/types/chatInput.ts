@@ -10,6 +10,8 @@ import type { ChatMessage } from './chatMessage';
 export interface ChatInput {
   /** Use high reasoning effort instead of medium */
   deepthink?: boolean;
+  /** Search the web and produce a sourced research brief. */
+  research?: boolean;
   /**
      * Browser IANA timezone, validated by the server for current-time context
      * @maxLength 100

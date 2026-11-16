@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, Link2, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, Link2, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Search, Settings2, Trash2, X } from 'lucide-react';
 import { MessageMarkdown } from '@/components/message-markdown';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -21,6 +21,7 @@ import { ProviderSettingsDialog, type PublicProviderKeys } from '@/components/pr
 import { ClassLinksDialog } from '@/components/class-links-dialog';
 import { LiveVoiceDialog, type LiveSessionToken } from '@/components/live-voice-dialog';
 import { HomeLanding } from '@/components/home-landing';
+import { ResearchBriefPanel } from '@/components/research-brief-panel';
 import NotFound from '@/pages/not-found';
 import { LiveReplyIndicator, NoticeBanner, ThinkingPanel, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
@@ -65,6 +66,7 @@ import { imageFileToBase64, prepareImageFile, type PendingImage } from '@/lib/im
 import type { QuizProgress } from '@/lib/interactive-widgets';
 import { readSavedClassLinks, writeSavedClassLinks, type ClassLink } from '@/lib/class-links';
 import { resolveWebsiteOpenRequest } from '@/lib/open-website';
+import { isResearchOnlyRequest } from '@/lib/research-intent';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 import '@/components/code-workspace.css';
 
@@ -165,6 +167,8 @@ function Home() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceVisited, setWorkspaceVisited] = useState(false);
   const [agentFull, setAgentFull] = useState(false);
+  const [researchBriefOpen, setResearchBriefOpen] = useState(false);
+  const [researchBriefMessageId, setResearchBriefMessageId] = useState<string | null>(null);
   const keepWorkspaceFor = useRef<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
   const sidebarPanelRef = useFocusTrap<HTMLElement>(Boolean((activeId || homeHistoryOpen) && sidebarOpen && !workspaceOpen && !settingsOpen && !agentSettingsOpen && !providerSettingsOpen && !deleteTarget));
@@ -396,6 +400,19 @@ function Home() {
   const savedConversations = conversations.filter(hasSentUserMessage);
   const currentMessages = activeConversation?.messages ?? [];
   const lastAssistantIndex = currentMessages.map((m) => m.role).lastIndexOf('assistant');
+  const latestResearchMessage = [...currentMessages].reverse().find((message) => message.role === 'assistant' && message.researchMode);
+  const researchBriefMessage = currentMessages.find((message, index) =>
+    message.role === 'assistant' && message.researchMode && (message.id ?? `legacy-${index}`) === researchBriefMessageId,
+  ) ?? latestResearchMessage;
+  const researchBriefMessageIndex = researchBriefMessage
+    ? currentMessages.findIndex((message) => message === researchBriefMessage)
+    : -1;
+  const researchBriefContent = researchBriefMessage
+    ? streaming && activeStreamId.current === activeId && visibleReply?.id === activeId &&
+      (researchBriefMessage.id ?? `legacy-${researchBriefMessageIndex}`) === researchBriefMessageId
+      ? visibleReply.content
+      : researchBriefMessage.content
+    : '';
   const codeSource = useMemo(() => {
     for (let i = currentMessages.length - 1; i >= 0; i--) {
       const m = currentMessages[i];
@@ -418,6 +435,7 @@ function Home() {
   const canReopenWorkspace = Boolean(activeId && (workspaceVisited || savedWorkspace.hasProject ||
     savedWorkspace.hasDraft || snippets.length || agentCodeTask));
   const reopenWorkspace = () => {
+    setResearchBriefOpen(false);
     const immersive = savedWorkspace.hasProject || Boolean(agentCodeTask) ||
       currentMessages.some((message) => message.role === 'assistant' && message.agentMode);
     setAgentFull(immersive);
@@ -426,6 +444,13 @@ function Home() {
       setSidebarOpen(false);
       setHomeHistoryOpen(false);
     }
+  };
+  const reopenResearchBrief = () => {
+    if (!researchBriefMessage) return;
+    setResearchBriefMessageId(researchBriefMessage.id ?? `legacy-${researchBriefMessageIndex}`);
+    setResearchBriefOpen(true);
+    setWorkspaceOpen(false);
+    setAgentFull(false);
   };
 
   useEffect(() => { if (workspaceOpen) setWorkspaceVisited(true); }, [workspaceOpen]);
@@ -436,20 +461,25 @@ function Home() {
   }, [pendingImage]);
 
   useEffect(() => {
-    if (activeId && keepWorkspaceFor.current === activeId) return;
+    if (activeId && (keepWorkspaceFor.current === activeId ||
+        currentMessages.some((message) => message.role === 'assistant' && message.researchMode &&
+          (message.id ?? `legacy-${currentMessages.indexOf(message)}`) === researchBriefMessageId))) return;
     keepWorkspaceFor.current = null;
     setWorkspaceOpen(false);
     setWorkspaceVisited(false);
     setAgentFull(false);
-  }, [activeId]);
+    setResearchBriefOpen(false);
+    setResearchBriefMessageId(null);
+  }, [activeId, currentMessages, researchBriefMessageId]);
   const closeWorkspace = useCallback(() => { setWorkspaceOpen(false); keepWorkspaceFor.current = null; }, []);
   useEffect(() => {
-    if (!streaming || !activeId || !snippets.length || !codeSource || codeSource.index !== lastAssistantIndex) return;
+    if (!streaming || !activeId || !snippets.length || !codeSource || codeSource.index !== lastAssistantIndex ||
+        currentMessages[lastAssistantIndex]?.researchMode) return;
     const key = `${activeId}:${codeSource.index}`;
     if (autoOpened.current === key) return;
     autoOpened.current = key;
     setWorkspaceOpen(true);
-  }, [streaming, activeId, snippets.length, codeSource?.index, lastAssistantIndex]);
+  }, [streaming, activeId, snippets.length, codeSource?.index, lastAssistantIndex, currentMessages]);
 
   useEffect(() => {
     const flush = () => { flushRef.current?.(); persistConversations(); };
@@ -472,11 +502,15 @@ function Home() {
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || document.querySelector('[role="dialog"], [role="alertdialog"]') || workspaceOpen) return;
+      if (researchBriefOpen) {
+        setResearchBriefOpen(false);
+        return;
+      }
       if (isMobile() && sidebarOpen && (activeId || homeHistoryOpen)) closeHistorySidebar();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeId, closeHistorySidebar, homeHistoryOpen, sidebarOpen, workspaceOpen]);
+  }, [activeId, closeHistorySidebar, homeHistoryOpen, researchBriefOpen, sidebarOpen, workspaceOpen]);
 
   const updateConversation = useCallback((id: string, updater: (conversation: Conversation) => Conversation) => {
     setConversations((items) => items.map((conversation) => conversation.id === id ? updater(conversation) : conversation));
@@ -720,7 +754,8 @@ function Home() {
         return;
       }
     }
-    const requestAgent = resume ? true : forceAgent || agentMode;
+    const requestResearch = !resume && !requestImage && !forceAgent && isResearchOnlyRequest(prompt);
+    const requestAgent = resume ? true : forceAgent || (!requestResearch && agentMode);
     shouldAutoFollowMessages.current = true;
     const requestDeepthink = resume?.deepthink ?? deepthink;
     const requestCompareAgentMode = requestAgent && requestDeepthink &&
@@ -754,7 +789,14 @@ function Home() {
     const fullMessages = [...conversation.messages.filter((m) => m.content.trim()), userMessage];
     const requestMessages = resume?.messages ?? prepareRequestMessages(fullMessages);
     const priorAssistant = resume ? conversation.messages.find(m => m.id === resume.assistantId && m.role === 'assistant') : undefined;
-    const assistantMessage: ChatMessage = priorAssistant ?? { id: resume?.assistantId ?? makeId(), role: 'assistant', content: '', deepthink: requestDeepthink, agentMode: requestAgent };
+    const assistantMessage: ChatMessage = priorAssistant ?? {
+      id: resume?.assistantId ?? makeId(),
+      role: 'assistant',
+      content: '',
+      deepthink: requestDeepthink,
+      agentMode: requestAgent,
+      ...(requestResearch ? { researchMode: true } : {}),
+    };
     setConversations((items) => {
       const exists = items.some((item) => item.id === conversationId);
       const updated: Conversation = {
@@ -772,6 +814,14 @@ function Home() {
     setAgentCodeTask(null);
     setStreaming(true);
     setVisibleReply({ id: conversationId, content: assistantMessage.content });
+    if (requestResearch) {
+      setResearchBriefMessageId(assistantMessage.id!);
+      setResearchBriefOpen(true);
+      setWorkspaceOpen(false);
+      setAgentFull(false);
+    } else {
+      setResearchBriefOpen(false);
+    }
     if (requestAgent) {
       keepWorkspaceFor.current = conversationId;
       setAgentFull(true);
@@ -997,6 +1047,7 @@ function Home() {
         const requestBody: Record<string, unknown> = {
           messages: requestMessages,
           deepthink: requestDeepthink,
+          ...(requestResearch ? { research: true } : {}),
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         };
         if (requestAgent && requestCompareAgentMode) requestBody.compareAgentMode = true;
@@ -1606,7 +1657,7 @@ function Home() {
   };
 
   return (
-    <div className={`app-shell ${workspaceOpen && agentFull ? 'is-agent-full' : ''}`}>
+    <div className={`app-shell ${workspaceOpen && agentFull ? 'is-agent-full' : ''}${researchBriefOpen ? ' is-research-brief' : ''}`}>
       {(activeId || homeHistoryOpen) && (
         <aside ref={sidebarPanelRef} id="history-sidebar" data-testid="history-sidebar" className={`sidebar ${sidebarOpen ? 'is-open' : 'is-collapsed'}`} style={{ ['--sb-w' as string]: `${sidebar.width}px` }} aria-label="Conversation history" tabIndex={-1}>
           <div className="brand">
@@ -1726,6 +1777,13 @@ function Home() {
               <PanelRightOpen size={16} aria-hidden="true" /> Workspace
             </button>
           )}
+          {latestResearchMessage && !researchBriefOpen && (
+            <button type="button" className="ws-btn research-brief-trigger" onClick={reopenResearchBrief}
+              aria-label="Open research brief" title="Reopen this conversation's research brief"
+              aria-controls="panel-research-brief" data-testid="button-open-research-brief">
+              <Search size={15} aria-hidden="true" /> Research brief
+            </button>
+          )}
           <button className="icon-btn class-links-trigger" type="button" onClick={() => setClassLinksOpen(true)}
             aria-label="Class links" title="Class links" data-testid="button-home-class-links">
             <Link2 size={17} aria-hidden="true" />
@@ -1815,7 +1873,14 @@ function Home() {
                         {message.role === 'assistant' && <NoticeBanner notices={message.notices} index={index} />}
                         {message.role === 'assistant' && <ThinkingPanel message={message} live={isLive} index={index} onOpenWorkspace={reopenWorkspace} />}
                         <div className={`message-text ${message.role === 'assistant' ? 'markdown' : ''}`} data-testid={`message-content-${index}`}>
-                          {isPending ? <LiveReplyIndicator message={{ ...message, deepthink: replyDeepthink }} live={isLive} /> : message.role === 'assistant' ? (
+                          {isPending ? <LiveReplyIndicator message={{ ...message, deepthink: replyDeepthink }} live={isLive} /> : message.role === 'assistant' && message.researchMode && researchBriefOpen &&
+                            (message.id ?? `legacy-${index}`) === researchBriefMessageId ? (
+                            <div className="research-chat-reference" data-testid={`research-brief-reference-${index}`}>
+                              <Search size={16} aria-hidden="true" />
+                              <span>The sourced findings are open in the Research Brief panel.</span>
+                              <button type="button" onClick={reopenResearchBrief}>View brief</button>
+                            </div>
+                          ) : message.role === 'assistant' ? (
                             <MessageMarkdown content={displayContent} live={isLive} conversationId={activeConversation!.id}
                               messageId={message.id ?? `legacy-${index}`} quizProgress={message.quizProgress}
                               onQuizProgress={updateQuizProgress} sources={message.sources} />
@@ -1997,6 +2062,18 @@ function Home() {
           </div>
         </section>
       </main>
+      {researchBriefOpen && researchBriefMessage && activeId && (
+        <ResearchBriefPanel
+          content={researchBriefContent}
+          sources={researchBriefMessage.sources ?? []}
+          isStreaming={streaming && activeStreamId.current === activeId && researchBriefMessageIndex === lastAssistantIndex}
+          isSearching={(researchBriefMessage.activity ?? []).some((activity) => activity.kind === 'search' && activity.status === 'running')}
+          failed={(researchBriefMessage.activity ?? []).some((activity) => activity.kind === 'search' && activity.status === 'error')}
+          conversationId={activeId}
+          messageId={researchBriefMessage.id ?? `legacy-${researchBriefMessageIndex}`}
+          onClose={() => setResearchBriefOpen(false)}
+        />
+      )}
       {activeId && (workspaceOpen || workspaceVisited) && (
         <div style={{ display: workspaceOpen ? 'contents' : 'none' }} hidden={!workspaceOpen}>
         <Suspense fallback={agentFull ? (

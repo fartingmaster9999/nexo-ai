@@ -22,6 +22,7 @@ export function estimateTokens(content: string): number {
 type ChatInput = {
   messages: { role: "user" | "assistant"; content: string }[];
   deepthink?: boolean;
+  research?: boolean;
   timeZone?: string;
 };
 type RequestContext = { model?: string; webContext?: string; searchFailed?: boolean; coding?: boolean };
@@ -86,7 +87,9 @@ export function buildChatRequest(input: ChatInput, now = new Date(), context: Re
           outputBudgetInstruction(context.model ?? CHAT_MODEL),
           `The server's current UTC date and time is ${now.toISOString()}. The user's timezone is ${timeZone}; their current local date and time is ${localTime}. Use this clock context, not your training date.`,
           context.webContext
-            ? "The application searched and scraped the web externally for this question. Use the supplied public-source excerpts for changing facts. Check dates, distinguish forecasts from confirmed events, and cite actual source URLs with Markdown links."
+            ? input.research
+              ? "The user requested research. Produce a well-organized research brief using only the supplied public-source excerpts for factual claims. Cite relevant source URLs inline, distinguish verified findings from uncertainty, and do not invent sources."
+              : "The application searched and scraped the web externally for this question. Use the supplied public-source excerpts for changing facts. Check dates, distinguish forecasts from confirmed events, and cite actual source URLs with Markdown links."
             : context.searchFailed
               ? "External web search failed for this request. Tell the user you could not verify the current information. Do not invent recent facts or sources."
               : "No web search was performed for this request. Use your knowledge for stable facts, and say clearly when you cannot verify a changing fact. Do not claim to have browsed or searched.",
