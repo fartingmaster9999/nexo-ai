@@ -25,7 +25,7 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
       const sse = events => new Response(events.map(event => 'data: ' + JSON.stringify(event) + '\\n\\n').join(''), { headers: { 'Content-Type': 'text/event-stream' } });
       if (scenario === 'wait') {
         return sse([{ model: 'qwen', agentProvider: 'groq', agentTask: 'coding' },
-          { agentRetry: { afterMs: 30000, history: body.agentHistory || [] } }, { done: true }]);
+          { agentRetry: { afterMs: 60000, history: body.agentHistory || [] } }, { done: true }]);
       }
       if (scenario === 'write' && !body.agentHistory?.length && !body.agentReview) {
         return sse([{ model: 'qwen', agentProvider: 'groq', agentTask: 'coding' }, { agentTool: {
@@ -276,6 +276,7 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
     'both stored values must remain the choices made in the other tab',
   );
   await evaluate(`Object.defineProperty(localStorage, 'setItem', { configurable: true, value: window.modeWakeOriginalSetItem }); delete window.modeWakeOriginalSetItem`);
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="toggle-deepthink"]')) && Boolean(document.querySelector('[data-testid="toggle-agent"]'))`), 'mode controls remain available after waking');
   await evaluate(`(() => {
     const deepthink = document.querySelector('[data-testid="toggle-deepthink"]');
     const agent = document.querySelector('[data-testid="toggle-agent"]');
@@ -313,6 +314,38 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   await pressKey('[data-testid="toggle-agent"]', ' ', 'Space', 32);
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-deepthink"]').getAttribute('aria-pressed')`), 'false');
   assert.equal(await evaluate(`document.querySelector('[data-testid="toggle-agent"]').getAttribute('aria-pressed')`), 'true');
+
+  await pressKey('[data-testid="toggle-deepthink"]', 'Enter', 'Enter', 13);
+  await waitFor(() => evaluate(`localStorage.getItem('nexo-deepthink') === '1' && localStorage.getItem('nexo-agent') === '1'`), 'both mode preferences saved before reload');
+  const agentRequestsBeforeModeReload = (await requests()).length;
+  const chatRequestsBeforeModeReload = await evaluate(`JSON.parse(localStorage.getItem('test-chat-requests') || '[]').length`);
+  await cdp('Page.reload');
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-start-from-home"]'))`), 'home after mode reload');
+  await evaluate(`document.querySelector('[data-testid="button-start-from-home"]').click()`);
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="conversation-${waiting.conversationId}"]'))`), 'saved conversation after mode reload');
+  await evaluate(`document.querySelector('[data-testid="select-conversation-${waiting.conversationId}"]').click()`);
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="toggle-deepthink"]')) && Boolean(document.querySelector('[data-testid="toggle-agent"]'))`), 'mode controls after reload');
+  const restoredModes = await evaluate(`(() => {
+    const read = id => {
+      const button = document.querySelector('[data-testid="toggle-' + id + '"]');
+      return {
+        stored: localStorage.getItem('nexo-' + id),
+        pressed: button.getAttribute('aria-pressed'),
+        selected: button.classList.contains('is-on'),
+      };
+    };
+    return { deepthink: read('deepthink'), agent: read('agent') };
+  })()`);
+  for (const mode of [restoredModes.deepthink, restoredModes.agent]) {
+    assert.deepEqual([mode.stored, mode.pressed, mode.selected], ['1', 'true', true], 'restored mode state, pressed state, and selected styling must agree');
+  }
+  await send('Use the restored Deepthink and Agent preferences');
+  await waitFor(async () => (await requests()).length === agentRequestsBeforeModeReload + 1, 'next message routed to Agent after reload');
+  const restoredRequest = (await requests()).at(-1);
+  assert.equal(restoredRequest.deepthink, true, 'the next Agent request must use restored Deepthink');
+  assert.equal(await evaluate(`JSON.parse(localStorage.getItem('test-chat-requests') || '[]').length`), chatRequestsBeforeModeReload, 'the next message must use Agent rather than the regular chat route');
+  await waitFor(() => evaluate(`document.body.textContent.includes('Recovered build complete.')`), 'response to restored-mode Agent request');
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-send-message"]'))`), 'restored-mode Agent request completion');
 
   // Start a separate request, complete the real browser runner, reload during its optional review.
   await evaluate(`document.querySelector('[data-testid="button-close-workspace"]')?.click()`);
@@ -466,5 +499,5 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   assert.equal(clearEvents.first.filter(event => event.key === null && event.trusted).length, 1, 'the first app tab must receive the real storage-clear event');
   assert.equal(clearEvents.second.filter(event => event.key === null && event.trusted).length, 1, 'the second app tab must receive the real storage-clear event');
   await evaluate(`window.modeClearTab.close(); window.modeClearTab = null`);
-  console.log('PASS: provider wait and completed tool reload; explicit resume; no automatic execution or write replay; source privacy; cancellation; corrupt/versioned records; cross-tab mode removal and storage clear.');
+  console.log('PASS: mode controls and Agent routing restore after reload; provider wait and completed tool reload; explicit resume; no automatic execution or write replay; source privacy; cancellation; corrupt/versioned records; cross-tab mode removal and storage clear.');
 });
