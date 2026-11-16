@@ -173,7 +173,23 @@ export const AgentToolExchangeTool = {
   web_search: 'web_search',
   run_code: 'run_code',
   write_project: 'write_project',
+  edit_project: 'edit_project',
 } as const;
+
+export interface AgentProjectEdit {
+  /**
+     * @minLength 1
+     * @maxLength 160
+     */
+  path: string;
+  /**
+     * @minLength 1
+     * @maxLength 2000
+     */
+  oldText: string;
+  /** @maxLength 2000 */
+  newText: string;
+}
 
 export type AgentToolArgumentsLanguage = typeof AgentToolArgumentsLanguage[keyof typeof AgentToolArgumentsLanguage];
 
@@ -195,6 +211,11 @@ export interface AgentProjectFile {
 }
 
 export interface AgentToolArguments {
+  /**
+     * @minItems 1
+     * @maxItems 16
+     */
+  edits?: AgentProjectEdit[];
   /**
      * @minLength 2
      * @maxLength 300

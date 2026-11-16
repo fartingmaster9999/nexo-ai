@@ -5,10 +5,16 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AgentProjectEdit } from './agentProjectEdit';
 import type { AgentProjectFile } from './agentProjectFile';
 import type { AgentToolArgumentsLanguage } from './agentToolArgumentsLanguage';
 
 export interface AgentToolArguments {
+  /**
+     * @minItems 1
+     * @maxItems 16
+     */
+  edits?: AgentProjectEdit[];
   /**
      * @minLength 2
      * @maxLength 300

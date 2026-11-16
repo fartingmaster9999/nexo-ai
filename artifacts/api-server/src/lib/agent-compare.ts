@@ -92,7 +92,7 @@ export async function runCompareAgentMode(options: {
       );
       const score = scoreGroqCodingCandidate(options.input, candidate.response);
       const tool = candidate.response.calls[0]?.tool;
-      if (score.valid && (tool === "write_project" || tool === "run_code")) {
+      if (score.valid && (tool === "write_project" || tool === "edit_project" || tool === "run_code")) {
         if (spec.model === CODING_FALLBACK) validQwen++;
         else validGptOss++;
         return { id: spec.id, model: spec.model, candidate };

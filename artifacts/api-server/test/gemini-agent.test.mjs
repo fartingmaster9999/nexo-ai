@@ -22,6 +22,83 @@ const input = {
   timeZone: "America/Chicago",
 };
 
+test("Qwen exact edits dispatch a compact tool and complete with browser diagnostics", async () => {
+  const projectFiles = [
+    { path: "index.html", content: "<h1>Old title</h1><script src=\"app.js\"></script>" },
+    { path: "app.js", content: 'const keep = "untouched";\n'.repeat(150) },
+  ];
+  const args = { entrypoint: "index.html", edits: [{ path: "index.html", oldText: "Old title", newText: "New title" }] };
+  let calls = 0;
+  const requests = [];
+  const groqClient = { chat: { completions: { create: async (request) => {
+    requests.push(request);
+    calls++;
+    return (async function* () {
+      if (calls === 1) yield { choices: [{ delta: { tool_calls: [{
+        index: 0, id: "small-edit", function: { name: "edit_project", arguments: JSON.stringify(args) },
+      }] }, finish_reason: "tool_calls" }] };
+      else yield { choices: [{ delta: { content: "Updated the title; unrelated code is preserved." }, finish_reason: "stop" }] };
+    })();
+  } } } };
+  await withServer(createSseApp({
+    getApiKey: () => undefined, getGroqClient: () => groqClient,
+    getGroqModels: async () => [{ id: CODING_FALLBACK, active: true, context_window: 131072, max_completion_tokens: 16384 }],
+  }), async url => {
+    const payload = { messages: [{ role: "user", content: "Change the title to New title" }], projectFiles };
+    const events = await readEvents(await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }));
+    assert.ok(!events.some(event => event.error), JSON.stringify(events));
+    const tool = events.find(event => event.agentTool)?.agentTool;
+    assert.equal(tool?.tool, "edit_project");
+    assert.deepEqual(tool.arguments, args);
+    assert.equal(tool.arguments.files, undefined);
+    assert.ok(JSON.stringify(args).length < JSON.stringify(projectFiles).length / 15);
+    const result = "Nexo execution status: completed.\nPreview checks: completed. No runtime errors.";
+    const continuation = await readEvents(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payload, agentProvider: "groq", agentTask: "coding", agentModel: CODING_FALLBACK,
+        projectFiles: projectFiles.map(file => ({ ...file, content: file.content.replace("Old title", "New title") })),
+        agentHistory: [{ ...tool, history: undefined, result }],
+      }),
+    }));
+    assert.ok(continuation.some(event => event.content?.includes("Updated the title")), JSON.stringify(continuation));
+    assert.equal(calls, 2);
+    assert.ok(JSON.stringify(requests[1].messages).includes("No runtime errors"));
+    assert.ok(requests.every(request => request.model === CODING_FALLBACK));
+  });
+});
+
+test("Qwen missing or ambiguous exact edits are rejected without dispatching a browser action", async () => {
+  for (const source of ["<h1>Other title</h1>", "<h1>Old title Old title</h1>"]) {
+    let calls = 0;
+    const groqClient = { chat: { completions: { create: async request => {
+      calls++;
+      return (async function* () {
+        if (calls === 1) yield { choices: [{ delta: { tool_calls: [{
+          index: 0, id: "bad-edit", function: { name: "edit_project", arguments: JSON.stringify({
+            entrypoint: "index.html", edits: [{ path: "index.html", oldText: "Old title", newText: "New title" }],
+          }) },
+        }] }, finish_reason: "tool_calls" }] };
+        else {
+          assert.match(JSON.stringify(request.messages), /Project update was not applied/);
+          yield { choices: [{ delta: { content: "I could not safely match that edit." }, finish_reason: "stop" }] };
+        }
+      })();
+    } } } };
+    await withServer(createSseApp({
+      getApiKey: () => undefined, getGroqClient: () => groqClient,
+      getGroqModels: async () => [{ id: CODING_FALLBACK, active: true, context_window: 131072, max_completion_tokens: 16384 }],
+    }), async url => {
+      const events = await readEvents(await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "Change the title" }], projectFiles: [{ path: "index.html", content: source }] }),
+      }));
+      assert.ok(!events.some(event => event.agentTool));
+      assert.ok(events.some(event => event.error?.includes("still has errors")), JSON.stringify(events));
+      assert.equal(calls, 2);
+    });
+  }
+});
+
 test("Gemini model discovery checks exact IDs, streaming, context, and server-side key headers", async () => {
   const requests = [];
   const models = await availableGeminiAgentModels("never-in-url", async (url, init) => {
@@ -885,8 +962,7 @@ test("Qwen Agent request enables bounded autonomous build-and-test tools", () =>
   assert.equal(request.tool_choice, "auto");
   assert.equal(request.parallel_tool_calls, false);
   assert.match(request.messages[0].content, /small app or multi-file project, use write_project/);
-  assert.deepEqual(request.tools.map((tool) => tool.function.name), ["web_search", "run_code", "write_project"]);
-  assert.deepEqual(request.tools.map((tool) => tool.function.name), ["web_search", "run_code", "write_project"]);
+  assert.deepEqual(request.tools.map((tool) => tool.function.name), ["edit_project", "web_search", "run_code", "write_project"]);
 });
 
 test("Qwen Agent decoder collects streamed tool arguments and rejects invalid JSON", async () => {

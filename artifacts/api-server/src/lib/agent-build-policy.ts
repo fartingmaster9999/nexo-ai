@@ -26,7 +26,7 @@ export function incompleteAgentHtml(source: string): boolean {
 export function agentBuildPolicy(input: AgentChatInput) {
   const latest = input.messages.at(-1)?.content ?? "";
   const history = input.agentHistory ?? [];
-  const runs = history.filter((entry) => entry.tool === "write_project" || entry.tool === "run_code");
+  const runs = history.filter((entry) => entry.tool === "write_project" || entry.tool === "edit_project" || entry.tool === "run_code");
   const lastRun = runs.at(-1);
   const failed = Boolean(lastRun && (
     /^Nexo execution status: failed\./.test(lastRun.result) ||

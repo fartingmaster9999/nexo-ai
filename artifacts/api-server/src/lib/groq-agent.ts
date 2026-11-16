@@ -13,6 +13,7 @@ import {
 import { CODING_FALLBACK, outputTokenBudget, outputBudgetInstruction } from "./model-routing";
 import { agentMemoryContext, compactAgentContext, isAppliedProject } from "./agent-request-context";
 import { agentBuildPolicy, incompleteAgentHtml } from "./agent-build-policy";
+import { applyProjectEdits, projectEditDescription, projectEditParameters } from "@workspace/api-zod";
 
 export const GROQ_AGENT_MODEL = CODING_FALLBACK;
 export class AgentOutputLimitError extends Error {
@@ -132,6 +133,17 @@ export function scoreGroqCodingCandidate(
     ? { valid: false, score: -1, reason: "missing_build_action" }
     : { valid: true, score: 0, reason: "complete_text_response" };
 
+  if (call.tool === "edit_project") {
+    try {
+      const files = input.projectFiles ?? [];
+      const updated = applyProjectEdits(files, files.map(file => file.path), call.arguments.edits);
+      if (typeof call.arguments.entrypoint !== "string" ||
+          !updated.some(file => file.path === call.arguments.entrypoint) ||
+          !validateAgentProjectFiles(updated) ||
+          updated.some(file => /\.html?$/i.test(file.path) && incompleteAgentHtml(file.content))) throw new Error("invalid");
+      return { valid: true, score: 100, reason: "exact_project_edit" };
+    } catch { return { valid: false, score: -1, reason: "invalid_project_edit" }; }
+  }
   if (call.tool === "write_project") {
     const files = validateAgentProjectFiles(call.arguments.files);
     const entrypoint = call.arguments.entrypoint;
@@ -208,6 +220,9 @@ export function groqAgentFailure(error: unknown) {
 }
 
 const agentTools: ChatCompletionTool[] = [{
+  type: "function",
+  function: { name: "edit_project", description: projectEditDescription, parameters: projectEditParameters },
+}, {
   type: "function",
   function: {
     name: "web_search",
@@ -340,8 +355,8 @@ export function buildGroqAgentRequest(
     ...(allowTools && buildPolicy.requireTool ? [{
       role: "system" as const,
       content: buildPolicy.failed
-        ? "The last browser execution or project validation failed. Repair the observed defect with write_project or run_code. Preserve unrelated files and requested features. Do not describe a fix as completed without applying it. If the sandbox cannot support the requirement, explain the limitation rather than inventing a working backend."
-        : "The user requested an implementation. Use write_project for a browser app or website, or run_code for a standalone program. Produce and run a complete small first version now; do not stop at instructions, a promise, or a Markdown code listing. Use reasonable defaults for nonessential choices.",
+        ? "The last browser execution or project validation failed. Repair the observed defect with edit_project for small exact source changes, write_project for larger rewrites, or run_code. Preserve unrelated files and requested features. Do not describe a fix as completed without applying it. If the sandbox cannot support the requirement, explain the limitation rather than inventing a working backend."
+        : "The user requested an implementation. Prefer edit_project for a small follow-up to existing selected source, write_project for a new browser app or website, or run_code for a standalone program. Produce and run a complete small version now; do not stop at instructions, a promise, or a Markdown code listing. Use reasonable defaults for nonessential choices.",
     }] : []),
   ];
   return {
@@ -412,12 +427,12 @@ export async function collectGroqAgentResponse(
       throw new AgentToolFormatError("invalid_tool_json");
     }
     if (!call.callId || call.callId.length > 128 ||
-        (call.name !== "web_search" && call.name !== "run_code" && call.name !== "write_project") ||
+        (call.name !== "web_search" && call.name !== "run_code" && call.name !== "write_project" && call.name !== "edit_project") ||
         !args || typeof args !== "object" || Array.isArray(args)) {
       throw new AgentToolFormatError("incomplete_tool_request");
     }
     return {
-      tool: call.name as "web_search" | "run_code" | "write_project",
+      tool: call.name as "web_search" | "run_code" | "write_project" | "edit_project",
       callId: call.callId,
       thoughtSignature: "groq-agent-v1",
       arguments: args as Record<string, unknown>,

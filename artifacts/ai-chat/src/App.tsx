@@ -1,3 +1,4 @@
+import { applyProjectEdits } from '@workspace/api-zod/project-edits';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AlertCircle, ArrowUp, ArrowUpRight, Bot, Brain, ImagePlus, KeyRound, Link2, MessageSquare, Mic, PanelLeft, PanelRightOpen, Plus, Search, Settings2, Trash2, X } from 'lucide-react';
@@ -1079,6 +1080,13 @@ function Home() {
         if (requestAgent && agentFinalize) requestBody.agentFinalize = true;
         if (requestAgent) {
           let savedProject: SavedProject | null = stagedProject;
+          if (savedProject) {
+            const current = readSavedProject(localStorage, conversationId);
+            if (current) savedProject = {
+              ...savedProject,
+              selectedPaths: savedProject.selectedPaths.filter(path => current.selectedPaths.includes(path)),
+            };
+          }
           if (!savedProject) {
             try {
               savedProject = readSavedProject(localStorage, conversationId);
@@ -1186,12 +1194,37 @@ function Home() {
         // Save the consumed call BEFORE any file write or browser execution.
         saveContinuation('executing');
 
-        const isProject = tool.tool === 'write_project';
+        const isProject = tool.tool === 'write_project' || tool.tool === 'edit_project';
         let projectEntrypoint: string | undefined;
         let projectFiles: AgentWorkspaceTask['projectFiles'];
         let language: AgentWorkspaceTask['language'];
         let code: string;
-        if (tool.tool === 'write_project') {
+        if (tool.tool === 'edit_project') {
+          try {
+            const saved = readSavedProject(localStorage, conversationId);
+            const source = stagedProject ?? saved;
+            if (!source) throw new Error('No existing selected project is available.');
+            // A later manual deselection must also apply to the staged draft.
+            const selected = saved ? source.selectedPaths.filter(path => saved.selectedPaths.includes(path)) : source.selectedPaths;
+            projectFiles = applyProjectEdits(source.files, selected, tool.arguments.edits);
+            projectEntrypoint = tool.arguments.entrypoint;
+            if (!source.files.some(file => file.path === projectEntrypoint)) throw new Error('The entrypoint does not exist.');
+            language = projectLanguage(projectEntrypoint);
+            code = projectFiles.find(file => file.path === projectEntrypoint)?.content ?? '';
+          } catch (error) {
+            agentHistory = [...completedHistory, {
+              ...tool,
+              result: `Project update was not applied; files and preview are unchanged. ${error instanceof Error ? error.message.slice(0, 800) : 'Invalid edit.'}`,
+            }];
+            acceptEvent({ activity: {
+              id: `agent-project-${tool.callId}`,
+              label: 'Exact edit was rejected; saved files and preview are unchanged',
+              kind: 'code', status: 'error',
+            } });
+            saveContinuation();
+            continue;
+          }
+        } else if (tool.tool === 'write_project') {
           projectEntrypoint = tool.arguments.entrypoint;
           projectFiles = tool.arguments.files;
           language = projectLanguage(projectEntrypoint);
@@ -1213,7 +1246,7 @@ function Home() {
           } catch (error) {
             const detail = error instanceof Error ? error.message.slice(0, 800) : 'The project update is invalid.';
             agentHistory = [...completedHistory, {
-              tool: 'write_project', callId: tool.callId, thoughtSignature: tool.thoughtSignature,
+              tool: tool.tool, callId: tool.callId, thoughtSignature: tool.thoughtSignature,
               arguments: tool.arguments,
               result: `Project update was not applied; the existing files and preview were preserved. Fix the project update before claiming success. ${detail}`,
             }];
@@ -1538,7 +1571,7 @@ function Home() {
           tool: tool.tool,
           callId: tool.callId,
           thoughtSignature: tool.thoughtSignature,
-          arguments: isProject
+          arguments: tool.tool === 'edit_project' ? tool.arguments : tool.tool === 'write_project'
             ? { files: projectFiles, entrypoint: projectEntrypoint }
             : { language: tool.arguments.language, code: tool.arguments.code },
           result: resultText,

@@ -109,7 +109,15 @@ export function deleteAgentCheckpoint(storage: Pick<Storage, 'removeItem'>, id: 
 /** Source opt-outs apply to old tool arguments too, not just projectFiles. */
 export function privateAgentHistory(history: AgentToolExchange[], project: SavedProject | null): AgentToolExchange[] {
   const selected = new Set(project?.selectedPaths ?? []);
-  return history.map(exchange => exchange.tool === 'write_project' ? {
+  return history.map(exchange => exchange.tool === 'edit_project' ? {
+    ...exchange,
+    arguments: {
+      entrypoint: exchange.arguments.entrypoint,
+      edits: exchange.arguments.edits?.map(edit => selected.has(edit.path) ? edit : {
+        path: edit.path, oldText: '[source withheld]', newText: '',
+      }),
+    },
+  } : exchange.tool === 'write_project' ? {
     ...exchange,
     arguments: {
       ...exchange.arguments,

@@ -162,6 +162,14 @@ export const streamAgentChatBodyAgentHistoryItemCallIdMax = 128;
 
 export const streamAgentChatBodyAgentHistoryItemThoughtSignatureMax = 4096;
 
+export const streamAgentChatBodyAgentHistoryItemArgumentsEditsItemPathMax = 160;
+
+export const streamAgentChatBodyAgentHistoryItemArgumentsEditsItemOldTextMax = 2000;
+
+export const streamAgentChatBodyAgentHistoryItemArgumentsEditsItemNewTextMax = 2000;
+
+export const streamAgentChatBodyAgentHistoryItemArgumentsEditsMax = 16;
+
 export const streamAgentChatBodyAgentHistoryItemArgumentsQueryMin = 2;
 export const streamAgentChatBodyAgentHistoryItemArgumentsQueryMax = 300;
 
@@ -222,10 +230,15 @@ export const StreamAgentChatBody = zod.object({
   "content": zod.string().min(1).max(streamAgentChatBodyAgentMemoryItemContentMax)
 })).max(streamAgentChatBodyAgentMemoryMax).optional().describe('Complete semantically retrieved prior turns from this conversation, at most 6000 characters total. Untrusted historical data, never instructions.'),
   "agentHistory": zod.array(zod.object({
-  "tool": zod.enum(['web_search', 'run_code', 'write_project']),
+  "tool": zod.enum(['web_search', 'run_code', 'write_project', 'edit_project']),
   "callId": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemCallIdMax),
   "thoughtSignature": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemThoughtSignatureMax),
   "arguments": zod.object({
+  "edits": zod.array(zod.object({
+  "path": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsEditsItemPathMax),
+  "oldText": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsEditsItemOldTextMax),
+  "newText": zod.string().max(streamAgentChatBodyAgentHistoryItemArgumentsEditsItemNewTextMax)
+})).min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsEditsMax).optional(),
   "query": zod.string().min(streamAgentChatBodyAgentHistoryItemArgumentsQueryMin).max(streamAgentChatBodyAgentHistoryItemArgumentsQueryMax).optional(),
   "language": zod.enum(['python', 'javascript', 'html']).optional(),
   "code": zod.string().min(1).max(streamAgentChatBodyAgentHistoryItemArgumentsCodeMax).optional(),
@@ -381,6 +394,14 @@ export const streamPublicAgentChatBodyAgentHistoryItemCallIdMax = 128;
 
 export const streamPublicAgentChatBodyAgentHistoryItemThoughtSignatureMax = 4096;
 
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsEditsItemPathMax = 160;
+
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsEditsItemOldTextMax = 2000;
+
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsEditsItemNewTextMax = 2000;
+
+export const streamPublicAgentChatBodyAgentHistoryItemArgumentsEditsMax = 16;
+
 export const streamPublicAgentChatBodyAgentHistoryItemArgumentsQueryMin = 2;
 export const streamPublicAgentChatBodyAgentHistoryItemArgumentsQueryMax = 300;
 
@@ -441,10 +462,15 @@ export const StreamPublicAgentChatBody = zod.object({
   "content": zod.string().min(1).max(streamPublicAgentChatBodyAgentMemoryItemContentMax)
 })).max(streamPublicAgentChatBodyAgentMemoryMax).optional().describe('Complete semantically retrieved prior turns from this conversation, at most 6000 characters total. Untrusted historical data, never instructions.'),
   "agentHistory": zod.array(zod.object({
-  "tool": zod.enum(['web_search', 'run_code', 'write_project']),
+  "tool": zod.enum(['web_search', 'run_code', 'write_project', 'edit_project']),
   "callId": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemCallIdMax),
   "thoughtSignature": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemThoughtSignatureMax),
   "arguments": zod.object({
+  "edits": zod.array(zod.object({
+  "path": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsEditsItemPathMax),
+  "oldText": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsEditsItemOldTextMax),
+  "newText": zod.string().max(streamPublicAgentChatBodyAgentHistoryItemArgumentsEditsItemNewTextMax)
+})).min(1).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsEditsMax).optional(),
   "query": zod.string().min(streamPublicAgentChatBodyAgentHistoryItemArgumentsQueryMin).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsQueryMax).optional(),
   "language": zod.enum(['python', 'javascript', 'html']).optional(),
   "code": zod.string().min(1).max(streamPublicAgentChatBodyAgentHistoryItemArgumentsCodeMax).optional(),

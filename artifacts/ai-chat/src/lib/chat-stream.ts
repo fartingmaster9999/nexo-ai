@@ -1,16 +1,23 @@
 import type { Activity, AgentTask, Source, Notice } from '../components/answer-details';
 import type { RunLanguage } from './code-runner';
+import { validateProjectEdits, type ProjectEdit } from '@workspace/api-zod/project-edits';
 import { validateProjectFiles, type ProjectFile } from './project-workspace.ts';
 
 export type AgentToolExchange = {
-  tool: 'web_search' | 'run_code' | 'write_project';
+  tool: 'web_search' | 'run_code' | 'write_project' | 'edit_project';
   callId: string;
   thoughtSignature: string;
-  arguments: { query?: string; language?: RunLanguage; code?: string; entrypoint?: string; files?: ProjectFile[] };
+  arguments: { query?: string; language?: RunLanguage; code?: string; entrypoint?: string; files?: ProjectFile[]; edits?: ProjectEdit[] };
   result: string;
   sources?: Source[];
 };
 export type AgentToolRequest = {
+  tool: 'edit_project';
+  callId: string;
+  thoughtSignature: string;
+  arguments: { entrypoint: string; edits: ProjectEdit[] };
+  history: AgentToolExchange[];
+} | {
   tool: 'run_code';
   callId: string;
   thoughtSignature: string;
@@ -30,7 +37,7 @@ export function isAgentHistory(history: unknown): history is AgentToolExchange[]
   return Array.isArray(history) && history.length <= 6 && history.every((entry) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
     const exchange = entry as Record<string, unknown>;
-    const common = (exchange.tool === 'web_search' || exchange.tool === 'run_code' || exchange.tool === 'write_project')
+    const common = (exchange.tool === 'web_search' || exchange.tool === 'run_code' || exchange.tool === 'write_project' || exchange.tool === 'edit_project')
       && typeof exchange.callId === 'string' && Boolean(exchange.callId) && exchange.callId.length <= 128
       && typeof exchange.thoughtSignature === 'string' && Boolean(exchange.thoughtSignature) && exchange.thoughtSignature.length <= 4096
       && exchange.arguments !== null && typeof exchange.arguments === 'object' && !Array.isArray(exchange.arguments)
@@ -43,6 +50,10 @@ export function isAgentHistory(history: unknown): history is AgentToolExchange[]
     }
     if (exchange.tool === 'web_search') return typeof args.query === 'string' && args.query.trim().length >= 2 && args.query.length <= 300;
     try {
+      if (exchange.tool === 'edit_project') {
+        validateProjectEdits(args.edits);
+        return typeof args.entrypoint === 'string' && !!args.entrypoint && args.entrypoint.length <= 160;
+      }
       const files = validateProjectFiles(args.files);
       return typeof args.entrypoint === 'string' && files.some(file => file.path === args.entrypoint);
     } catch { return false; }
@@ -52,7 +63,7 @@ export function isAgentHistory(history: unknown): history is AgentToolExchange[]
 function isAgentToolRequest(value: unknown): value is AgentToolRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const tool = value as Record<string, unknown>;
-  if ((tool.tool !== 'run_code' && tool.tool !== 'write_project') ||
+  if ((tool.tool !== 'run_code' && tool.tool !== 'write_project' && tool.tool !== 'edit_project') ||
       typeof tool.callId !== 'string' || !tool.callId || tool.callId.length > 128 ||
       typeof tool.thoughtSignature !== 'string' || !tool.thoughtSignature || tool.thoughtSignature.length > 4096 ||
       !tool.arguments || typeof tool.arguments !== 'object' || Array.isArray(tool.arguments) ||
@@ -61,6 +72,9 @@ function isAgentToolRequest(value: unknown): value is AgentToolRequest {
   if (tool.tool === 'run_code') {
     if (!['python', 'javascript', 'html'].includes(String(args.language)) ||
         typeof args.code !== 'string' || !args.code.trim() || args.code.length > 20_000) return false;
+  } else if (tool.tool === 'edit_project') {
+    try { validateProjectEdits(args.edits); } catch { return false; }
+    if (typeof args.entrypoint !== 'string' || !args.entrypoint || args.entrypoint.length > 160) return false;
   } else {
     try {
       const files = validateProjectFiles(args.files);

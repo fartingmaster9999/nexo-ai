@@ -755,7 +755,7 @@ components:
       properties:
         tool:
           type: string
-          enum: [web_search, run_code, write_project]
+          enum: [web_search, run_code, write_project, edit_project]
         callId:
           type: string
           minLength: 1
@@ -783,6 +783,12 @@ components:
     AgentToolArguments:
       type: object
       properties:
+        edits:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/AgentProjectEdit"
         query:
           type: string
           minLength: 2
@@ -805,6 +811,22 @@ components:
           maxItems: 8
           items:
             $ref: "#/components/schemas/AgentProjectFile"
+      additionalProperties: false
+    AgentProjectEdit:
+      type: object
+      properties:
+        path:
+          type: string
+          minLength: 1
+          maxLength: 160
+        oldText:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        newText:
+          type: string
+          maxLength: 2000
+      required: [path, oldText, newText]
       additionalProperties: false
     AgentProjectFile:
       type: object

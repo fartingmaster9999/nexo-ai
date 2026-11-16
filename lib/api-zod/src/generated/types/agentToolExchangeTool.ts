@@ -13,4 +13,5 @@ export const AgentToolExchangeTool = {
   web_search: 'web_search',
   run_code: 'run_code',
   write_project: 'write_project',
+  edit_project: 'edit_project',
 } as const;

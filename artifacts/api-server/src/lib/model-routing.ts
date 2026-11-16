@@ -168,7 +168,7 @@ export function classifyAgentTask(input: {
   const recentCodingIntent = input.messages.filter((message) => message.role === "user").slice(-6)
     .some((message) => isCodingRequest(message.content));
   if (input.projectFiles?.length || recentCodingIntent ||
-      input.agentHistory?.some((exchange) => exchange.tool === "write_project") ||
+      input.agentHistory?.some((exchange) => exchange.tool === "write_project" || exchange.tool === "edit_project") ||
       /\b(bug|build|implement|test|refactor|run)\b/i.test(prompt)) {
     return "coding";
   }

@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request } from "express";
 import { agentBuildPolicy, incompleteAgentHtml } from "../lib/agent-build-policy";
 import Groq from "groq-sdk";
 import { StreamAgentChatBody, type AgentRateLimitRetry, type AgentToolExchange } from "@workspace/api-zod";
+import { applyProjectEdits, validateProjectEdits } from "@workspace/api-zod";
 import { AgentCompareError, compareAgentGeminiModel, runCompareAgentMode } from "../lib/agent-compare";
 import { createAgentMemoryRouter } from "./agent-memory";
 import { validAgentMemory } from "../lib/agent-request-context";
@@ -82,7 +83,7 @@ function sameToolArguments(left: AgentToolExchange, right: { tool: string; argum
 function htmlPreviewCount(history: AgentToolExchange[]) {
   return history.filter((exchange) =>
     (exchange.tool === "run_code" && exchange.arguments.language === "html") ||
-    (exchange.tool === "write_project" && /\.html?$/i.test(exchange.arguments.entrypoint ?? "")),
+    ((exchange.tool === "write_project" || exchange.tool === "edit_project") && /\.html?$/i.test(exchange.arguments.entrypoint ?? "")),
   ).length;
 }
 
@@ -1350,7 +1351,7 @@ export function createAgentRouter({
           break;
         }
         if (!allowTools || toolCalls >= MAX_AGENT_TOOL_CALLS) {
-          const nextAction = call.tool === "write_project" ? "The next project update was not applied."
+          const nextAction = call.tool === "write_project" || call.tool === "edit_project" ? "The next project update was not applied."
             : call.tool === "run_code" ? "The next code run was not executed."
               : "The next web search was not performed.";
           const handoff = `${nextAction} Any completed workspace changes and the latest preview are preserved. Ask Nexo Agent to continue from the current project with the remaining change.`;
@@ -1402,6 +1403,46 @@ export function createAgentRouter({
             ...(sources?.length ? { sources } : {}),
           });
           continue;
+        }
+
+        if (call.tool === "edit_project") {
+          const edits = validateProjectEdits(call.arguments.edits);
+          const entrypoint = call.arguments.entrypoint;
+          if (typeof entrypoint !== "string" || !entrypoint || entrypoint.length > 160) {
+            throw new AgentPublicError("Nexo Agent returned an invalid edit entrypoint.");
+          }
+          const arguments_ = { edits, entrypoint };
+          let result = "";
+          try {
+            const source = parsed.data.projectFiles ?? [];
+            const updated = applyProjectEdits(source, source.map(file => file.path), edits);
+            if (!source.some(file => file.path === entrypoint) ||
+                !validateAgentProjectFiles(updated) ||
+                updated.some(file => /\.html?$/i.test(file.path) && incompleteAgentHtml(file.content))) {
+              throw new Error("The edited selected source is incomplete or exceeds project limits.");
+            }
+          } catch (error) {
+            result = `Project update was not applied; files are unchanged. ${error instanceof Error ? error.message : "Invalid edit."}`;
+          }
+          if (!result && /\.html?$/i.test(entrypoint) && htmlPreviewCount(history) >= MAX_AGENT_HTML_PREVIEW_RUNS) {
+            previewBudgetExhausted = true;
+            result = "Project update was not applied; the HTML preview revision limit was reached. Existing files and preview are preserved.";
+          }
+          if (result) {
+            history.push({ ...call, arguments: arguments_, result: safeResultText(result) });
+            await emit({ activity: {
+              id: `agent-project-${call.callId}`,
+              label: "Exact edit was rejected; saved files and preview are unchanged",
+              kind: "code", status: "error",
+            } });
+            continue;
+          }
+          await reviewAction(call.callId, call.tool, arguments_);
+          await emit({ activity: { id: `agent-project-${call.callId}`, label: "Applying a small exact-match edit in the isolated browser…", kind: "code", status: "running" } });
+          await emit({ agentTool: { ...call, arguments: arguments_, history } });
+          await emit({ done: true });
+          res.end();
+          return;
         }
 
         if (call.tool === "write_project") {

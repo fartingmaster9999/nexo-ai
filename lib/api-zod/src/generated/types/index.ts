@@ -13,6 +13,7 @@ export * from './agentMemoryEmbeddingInput';
 export * from './agentMemoryEmbeddingResult';
 export * from './agentMemoryEmbeddingResultModel';
 export * from './agentMemoryVector';
+export * from './agentProjectEdit';
 export * from './agentProjectFile';
 export * from './agentRateLimitRetry';
 export * from './agentReviewContext';
