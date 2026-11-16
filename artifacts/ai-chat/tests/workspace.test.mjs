@@ -311,9 +311,10 @@ test('partial Agent edits preserve assets and reject broken updates before repla
 
 test('unverified Agent candidates never replace the last verified project', () => {
   const records = new Map();
+  let writes = 0;
   const storage = {
     getItem: (key) => records.get(key) ?? null,
-    setItem: (key, value) => records.set(key, value),
+    setItem: (key, value) => { writes++; records.set(key, value); },
     removeItem: (key) => records.delete(key),
   };
   const original = createAgentProject([{ path: 'index.html', content: '<h1>Working</h1>' }], 'index.html', null);
@@ -334,6 +335,30 @@ test('unverified Agent candidates never replace the last verified project', () =
   }), true);
   assert.equal(readSavedProject(storage, 'chat').files[0].content, '<h1>Broken</h1>');
   assert.equal(readFailedAgentCandidate(storage, 'chat'), null);
+  const afterPromotion = writes;
+  assert.equal(promoteVerifiedAgentProject(storage, 'chat', candidate, {
+    executionSucceeded: true, browserChecksPassed: true,
+  }), true);
+  assert.equal(writes, afterPromotion, 'a repeated completion never persists the revision twice');
+});
+
+test('a failed promotion write preserves both working source and the repair candidate', () => {
+  const records = new Map();
+  const storage = {
+    getItem: key => records.get(key) ?? null,
+    setItem: (key, value) => records.set(key, value),
+    removeItem: key => records.delete(key),
+  };
+  const working = createAgentProject([{ path: 'index.html', content: '<h1>Working</h1>' }], 'index.html', null);
+  const candidate = createAgentProject([{ path: 'index.html', content: '<h1>Revision</h1>' }], 'index.html', working);
+  writeSavedProject(storage, 'chat', working);
+  writeFailedAgentCandidate(storage, 'chat', candidate);
+  storage.setItem = () => { throw new Error('quota'); };
+  assert.throws(() => promoteVerifiedAgentProject(storage, 'chat', candidate, {
+    executionSucceeded: true, browserChecksPassed: true,
+  }), /quota/);
+  assert.deepEqual(readSavedProject(storage, 'chat'), working);
+  assert.deepEqual(readFailedAgentCandidate(storage, 'chat'), candidate);
 });
 
 test('deferred project scripts run after the DOM in order without losing shared globals', () => {

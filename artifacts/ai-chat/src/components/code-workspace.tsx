@@ -420,10 +420,10 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
     setPreviewDiagnostics([]); setPreviewComplete(false); setHasRun(false);
   }, [key]);
   useEffect(() => {
-    if (!visible || waiting || agentCode || !project || preview || projectLanguage(project.entrypoint) !== 'html') return;
+    if (!visible || !project || preview || projectLanguage(project.entrypoint) !== 'html') return;
     try {
       const id = crypto.randomUUID();
-      setPreview(makePreviewHtml(bundleHtmlProject(project.files, project.entrypoint), id));
+      setPreview(makePreviewHtml(bundleHtmlProject(project.files, project.entrypoint), id, { runInteractionChecks: false }));
       setPreviewId(id);
       setPreviewComplete(false);
       setHasRun(true);

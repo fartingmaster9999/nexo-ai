@@ -30,3 +30,7 @@ Treat an interrupted browser tool's outcome as uncertain, not as permission to r
 Keep tool persistence owned by the Agent controller, not by delayed workspace rendering.
 **Why:** Lazy UI effects can run after a tool checkpoint and after newer edits have been saved. Reapplying the tool payload during display can overwrite those edits even without replaying the tool itself.
 **How to apply:** Display the latest saved project after a successful tool write. Keep failed-save output available for export without treating a remount as permission to retry an old write.
+
+Treat Agent-generated HTML as an unverified candidate regardless of which generation tool returns it. Preserve failed candidate source separately from the working project, and recover it only when the interrupted build identifies a pending candidate.
+**Why:** A syntactically complete page can still fail at runtime or after a click. Reopening the verified preview must not repeat automated interaction actions, and resuming repairs against the working source instead of the failed draft makes exact edits unreliable.
+**How to apply:** Run bounded checks in a separate opaque-origin frame, promote only a checked revision, and keep automatic interaction checks disabled when displaying an already verified preview. Recovery must retain consumed-call evidence rather than rerunning tools.

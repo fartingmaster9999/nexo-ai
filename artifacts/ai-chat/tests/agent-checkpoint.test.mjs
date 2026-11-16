@@ -65,6 +65,19 @@ test('completed results cannot be removed or replaced by a continuation', () => 
   assert.throws(() => extendAgentHistory([], [exchange, exchange]), /unsafe continuation/);
 });
 
+test('candidate recovery records retain consumed calls without embedding unselected source', () => {
+  const store = storage();
+  const saved = checkpoint({ pendingCandidate: true, phase: 'executing',
+    history: privateAgentHistory([exchange], null) });
+  writeAgentCheckpoint(store, saved);
+  const recovered = readAgentCheckpoint(store, 'chat-a').checkpoint;
+  assert.equal(recovered.pendingCandidate, true);
+  assert.equal(recovered.history[0].callId, 'write-once');
+  assert.equal(recovered.history[0].result, exchange.result);
+  assert.equal(recovered.history[0].arguments.files[1].content, '');
+  assert.throws(() => writeAgentCheckpoint(store, checkpoint({ pendingCandidate: 'yes' })), /invalid/);
+});
+
 test('reloaded provider wait uses only its remaining window and is cancellable', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100_000 });
   const controller = new AbortController();

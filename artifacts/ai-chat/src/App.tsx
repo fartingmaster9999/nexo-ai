@@ -43,6 +43,7 @@ import {
   promoteVerifiedAgentProject,
   projectLanguage,
   writeFailedAgentCandidate,
+  readFailedAgentCandidate,
   readSavedProject,
   selectedProjectFiles,
   type SavedProject,
@@ -922,7 +923,10 @@ function Home() {
     let connectTimeout: number | null = null;
     try {
       let agentHistory: AgentToolExchange[] = resume?.history ?? [];
-      let stagedProject: SavedProject | null = null;
+      let stagedProject: SavedProject | null = resume?.pendingCandidate
+        ? readFailedAgentCandidate(localStorage, conversationId)
+        : null;
+      let candidateSaved = Boolean(stagedProject);
       const programReviews = createProgramReviewMemo();
       let agentToolCalls = resume?.toolCalls ?? 0;
       let deferredRetries = resume?.retries ?? 0;
@@ -934,13 +938,21 @@ function Home() {
       const saveContinuation = (phase: AgentCheckpoint['phase'] = 'ready', waitUntil = 0) => {
         if (!requestAgent || controller.signal.aborted) return;
         flushOutput();
-        const project = readSavedProject(localStorage, conversationId);
+        const working = readSavedProject(localStorage, conversationId);
+        const project = stagedProject ? {
+          ...stagedProject,
+          selectedPaths: working
+            ? stagedProject.selectedPaths.filter(path => working.selectedPaths.includes(path) ||
+                !working.files.some(file => file.path === path))
+            : stagedProject.selectedPaths,
+        } : working;
         const checkpoint: AgentCheckpoint = {
           version: 1, conversationId, assistantId: assistantMessage.id!, messages: requestMessages,
           deepthink: requestDeepthink, compareAgentMode: requestCompareAgentMode,
           imageRequired: Boolean(requestImage), provider: agentProvider.current, model: agentModel.current,
           task: agentTask.current, history: privateAgentHistory(agentHistory, project),
           toolCalls: agentToolCalls, retries: deferredRetries, startedAt, waitUntil, phase, agentFinalize,
+          pendingCandidate: candidateSaved,
         };
         writeAgentCheckpoint(localStorage, checkpoint);
         checkpointRef.current = checkpoint;
@@ -1084,7 +1096,8 @@ function Home() {
             const current = readSavedProject(localStorage, conversationId);
             if (current) savedProject = {
               ...savedProject,
-              selectedPaths: savedProject.selectedPaths.filter(path => current.selectedPaths.includes(path)),
+              selectedPaths: savedProject.selectedPaths.filter(path => current.selectedPaths.includes(path) ||
+                !current.files.some(file => file.path === path)),
             };
           }
           if (!savedProject) {
@@ -1194,7 +1207,8 @@ function Home() {
         // Save the consumed call BEFORE any file write or browser execution.
         saveContinuation('executing');
 
-        const isProject = tool.tool === 'write_project' || tool.tool === 'edit_project';
+        const isProject = tool.tool === 'write_project' || tool.tool === 'edit_project' ||
+          tool.arguments.language === 'html';
         let projectEntrypoint: string | undefined;
         let projectFiles: AgentWorkspaceTask['projectFiles'];
         let language: AgentWorkspaceTask['language'];
@@ -1205,7 +1219,8 @@ function Home() {
             const source = stagedProject ?? saved;
             if (!source) throw new Error('No existing selected project is available.');
             // A later manual deselection must also apply to the staged draft.
-            const selected = saved ? source.selectedPaths.filter(path => saved.selectedPaths.includes(path)) : source.selectedPaths;
+            const selected = saved ? source.selectedPaths.filter(path => saved.selectedPaths.includes(path) ||
+              !saved.files.some(file => file.path === path)) : source.selectedPaths;
             projectFiles = applyProjectEdits(source.files, selected, tool.arguments.edits);
             projectEntrypoint = tool.arguments.entrypoint;
             if (!source.files.some(file => file.path === projectEntrypoint)) throw new Error('The entrypoint does not exist.');
@@ -1232,6 +1247,10 @@ function Home() {
         } else {
           language = tool.arguments.language;
           code = tool.arguments.code;
+          if (language === 'html') {
+            projectEntrypoint = 'index.html';
+            projectFiles = [{ path: projectEntrypoint, content: code }];
+          }
         }
         let projectStorageError = '';
         let previousProject: SavedProject | null = null;
@@ -1259,15 +1278,17 @@ function Home() {
           }
           projectFiles = candidateProject.files;
           stagedProject = candidateProject;
-          saveContinuation('executing');
         }
         let candidateStorageError = '';
         if (isProject && candidateProject) {
+          candidateSaved = false;
           try {
             writeFailedAgentCandidate(localStorage, conversationId, candidateProject);
+            candidateSaved = true;
           } catch {
             candidateStorageError = 'The unverified draft could not be saved for later, but it remains available in this workspace.';
           }
+          saveContinuation('executing');
         }
         const task: AgentWorkspaceTask = {
           id: tool.callId,
@@ -1335,7 +1356,7 @@ function Home() {
           previewDiagnostics = await waitForPreviewDiagnostics(previewId, controller.signal);
           const review = readPreviewReview(previewId);
           previewReviewText = formatPreviewReview(review);
-          previewLayoutErrors = previewReviewHasIssues(review);
+          previewLayoutErrors = !review || previewReviewHasIssues(review);
           previewInteractionResult = readPreviewInteractions(previewId);
           previewInteractionText = formatInteractionResult(previewInteractionResult);
           previewInteractionErrors = interactionChecksHaveIssues(previewInteractionResult) ||
@@ -1391,7 +1412,13 @@ function Home() {
             const clearReviewDeadline = startRequestDeadline(reviewController, AGENT_REVIEW_DEADLINE_MS,
               'Gemma 4 review took too long; continuing with the run results.');
             try {
-            const reviewFiles = projectFiles ? selectedProjectFiles(readSavedProject(localStorage, conversationId)) : null;
+            const working = readSavedProject(localStorage, conversationId);
+            const reviewFiles = candidateProject ? selectedProjectFiles({
+              ...candidateProject,
+              selectedPaths: working ? candidateProject.selectedPaths.filter(path =>
+                working.selectedPaths.includes(path) || !working.files.some(file => file.path === path))
+                : candidateProject.selectedPaths,
+            }) : null;
             const reviewBody: Record<string, unknown> = {
               messages: requestMessages,
               deepthink: requestDeepthink,
@@ -1468,22 +1495,29 @@ function Home() {
             }
           }
         }
+        controller.signal.throwIfAborted();
         const hasPreviewErrors = previewDiagnostics.length > 0 || previewLayoutErrors || previewInteractionErrors;
         const executionSucceeded = !executionError && !projectStorageError;
         const browserChecksPassed = !hasPreviewErrors;
         let projectPromoted = false;
         if (isProject && candidateProject && executionSucceeded && browserChecksPassed) {
           try {
+            if (JSON.stringify(readSavedProject(localStorage, conversationId)) !== JSON.stringify(verifiedProject)) {
+              throw new Error('The working project changed while the candidate was being checked.');
+            }
             projectPromoted = promoteVerifiedAgentProject(localStorage, conversationId, candidateProject, {
               executionSucceeded,
               browserChecksPassed,
             });
             if (!projectPromoted) projectStorageError = 'The candidate was not promoted because its verification checks did not pass.';
-          } catch {
-            projectStorageError = 'Project changes could not be saved in this browser. The last verified project was kept.';
+          } catch (error) {
+            projectStorageError = `${error instanceof Error ? error.message : 'Project changes could not be saved in this browser.'} The working project was kept.`;
           }
         }
-        if (projectPromoted) stagedProject = null;
+        if (projectPromoted) {
+          stagedProject = null;
+          candidateSaved = false;
+        }
         else if (isProject && candidateProject) stagedProject = candidateProject;
         const codeHasErrors = Boolean(projectStorageError || executionError || hasPreviewErrors || isProject && !projectPromoted);
         if (isProject && candidateProject) {

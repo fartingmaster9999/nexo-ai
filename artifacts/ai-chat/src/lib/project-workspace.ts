@@ -131,7 +131,12 @@ export function promoteVerifiedAgentProject(
   checks: { executionSucceeded: boolean; browserChecksPassed: boolean },
 ): boolean {
   if (!checks.executionSucceeded || !checks.browserChecksPassed) return false;
-  writeSavedProject(storage, conversationId, project);
+  const safe = createSavedProject(project.files, project.entrypoint, project.selectedPaths);
+  const serialized = JSON.stringify(safe);
+  // A recovered completion must not write the same promoted revision again.
+  if (storage.getItem(projectStorageKey(conversationId)) !== serialized) {
+    storage.setItem(projectStorageKey(conversationId), serialized);
+  }
   try { deleteFailedAgentCandidate(storage, conversationId); } catch {}
   return true;
 }
