@@ -45,6 +45,18 @@ async function stopProcess(child) {
   }
 }
 
+async function removeProfile(directory) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await rm(directory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!['ENOTEMPTY', 'EBUSY', 'EPERM'].includes(error?.code) || attempt === 4) throw error;
+      await delay(100 * (attempt + 1));
+    }
+  }
+}
+
 const vitePort = await freePort();
 const cdpPort = await freePort();
 const profileDir = await mkdtemp(path.join(tmpdir(), 'reply-status-chromium-'));
@@ -173,5 +185,5 @@ try {
 } finally {
   socket?.close();
   await Promise.all([stopProcess(browser), stopProcess(vite)]);
-  await rm(profileDir, { recursive: true, force: true });
+  await removeProfile(profileDir);
 }

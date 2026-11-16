@@ -356,6 +356,8 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getBoundingClientRect().width > 0`), "the existing preview stays visible, not hidden behind a drafting placeholder");
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-testid="status-agent-waiting"]'))`), false, "planning does not replace an existing preview");
   await waitFor(() => evaluate(`document.body.textContent.includes("Nexo Agent could not complete this request. Please try again.")`), "safe Agent failure message");
+  assert.equal(await evaluate(`document.querySelector('[data-testid="status-request-error"]')?.getAttribute("role")`), "alert", "Agent request failures use an assertive alert role");
+  assert.ok(await evaluate(`document.querySelector('[data-testid="status-request-error"]')?.textContent.includes("Nexo Agent could not complete this request. Please try again.")`), "the alert contains the actionable failure message");
   assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute("srcdoc")?.includes("Corrected preview")`), "a failed follow-up keeps the previous preview");
   const failedImageRequest = await evaluate(`window.__agentRequests[8]`);
   assert.equal(failedImageRequest.body.image.data, imageBase64);

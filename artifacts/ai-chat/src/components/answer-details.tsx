@@ -83,7 +83,7 @@ function NormalFigure() {
 export const ReplyStatus = memo(function ReplyStatus({ mode, label, compact = false, decorative = false }: { mode: ReplyMode; label?: string; compact?: boolean; decorative?: boolean }) {
   const text = label ?? (mode === 'search' ? 'Searching the web' : mode === 'deep' ? 'Deepthink is working' : mode === 'agent' ? 'Agent is working' : 'Working on it');
   return (
-    <span className={`reply-status rs-${mode}-mode${compact ? ' is-compact' : ''}`} role={decorative ? undefined : 'status'} aria-label={decorative ? undefined : text} aria-hidden={decorative || undefined} data-mode={mode} data-testid={mode === 'search' ? 'status-searching' : mode === 'agent' ? 'status-agent' : 'status-thinking'}>
+    <span className={`reply-status rs-${mode}-mode${compact ? ' is-compact' : ''}`} role={decorative ? undefined : 'status'} aria-live={decorative ? undefined : 'polite'} aria-atomic={decorative ? undefined : 'true'} aria-label={decorative ? undefined : text} aria-hidden={decorative || undefined} data-mode={mode} data-testid={mode === 'search' ? 'status-searching' : mode === 'agent' ? 'status-agent' : 'status-thinking'}>
       {mode === 'search' ? <SearchFigure /> : mode === 'deep' ? <BrainFigure /> : mode === 'agent' ? <AgentFigure /> : <NormalFigure />}
       {!compact && <span className="rs-label">{text}</span>}
     </span>
@@ -94,7 +94,7 @@ export const ReplyStatus = memo(function ReplyStatus({ mode, label, compact = fa
 export function LiveReplyIndicator({ message, live, hasContent = false }: { message: ChatMessage; live: boolean; hasContent?: boolean }) {
   if (!live || isSearching(message, live) || (hasContent && !message.deepthink && !message.agentMode)) return null;
   const mode = message.deepthink ? 'deep' : message.agentMode ? 'agent' : 'normal';
-  return <ReplyStatus mode={mode} compact={hasContent} />;
+  return <ReplyStatus mode={mode} compact={hasContent} decorative={message.agentMode === true} />;
 }
 
 /** Backwards-compatible wrapper. */

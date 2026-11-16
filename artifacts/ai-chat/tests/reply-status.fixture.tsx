@@ -20,10 +20,16 @@ const cases: Array<{ mode: ReplyMode; compact: boolean }> = [
 
 type TransitionStage = 'normal' | 'deep' | 'search' | 'search-complete' | 'complete' | 'agent-code' | 'agent-complete' | 'agent-error';
 let setTransitionStage: ((stage: TransitionStage) => void) | undefined;
+let setStreamedContent: ((content: string) => void) | undefined;
+let setStreamedReasoning: ((reasoning: string) => void) | undefined;
 
 function LiveTransitionFixture() {
   const [stage, setStage] = useState<TransitionStage>('normal');
+  const [content, setContent] = useState('This streamed reply stays mounted while its status changes.');
+  const [reasoning, setReasoning] = useState('');
   setTransitionStage = setStage;
+  setStreamedContent = setContent;
+  setStreamedReasoning = setReasoning;
   const live = !['complete', 'agent-complete', 'agent-error'].includes(stage);
   const hasContent = stage !== 'normal';
   const searching = stage === 'search';
@@ -44,7 +50,8 @@ function LiveTransitionFixture() {
   const isAgentStage = stage.startsWith('agent-');
   const message: ChatMessage = {
     role: 'assistant',
-    content: hasContent ? 'This streamed reply stays mounted while its status changes.' : '',
+    content: hasContent ? content : '',
+    reasoning,
     deepthink: ['deep', 'search', 'search-complete'].includes(stage),
     agentMode: isAgentStage,
     activity,
@@ -112,12 +119,20 @@ Object.assign(window, {
       });
     }
   },
-  __runReplyStatusTransitions() {
+  async __runReplyStatusTransitions() {
     const errors: string[] = [];
     const transition = document.querySelector<HTMLElement>('[data-testid="transition-case"]')!;
     const readStatuses = () => [...transition.querySelectorAll<HTMLElement>('.reply-status')].filter((status) => status.getAttribute('role') === 'status');
     const verifyStatus = (mode: ReplyMode | null, label?: string, compact?: boolean) => {
       const statuses = readStatuses();
+      if (mode === 'agent') {
+        if (statuses.length) errors.push(`${stageName()}: generic Agent status duplicates the detailed progress status`);
+        const decorative = transition.querySelector<HTMLElement>('.message-text .reply-status');
+        if (decorative && (decorative.getAttribute('aria-hidden') !== 'true' || decorative.hasAttribute('role'))) {
+          errors.push(`${stageName()}: generic Agent indicator should be hidden from assistive technology`);
+        }
+        return;
+      }
       if (statuses.length !== (mode ? 1 : 0)) {
         errors.push(`${stageName()}: expected ${mode ? 1 : 0} live indicators, found ${statuses.length}`);
       }
@@ -125,6 +140,9 @@ Object.assign(window, {
       if (!mode || !status) return;
       if (status.dataset.mode !== mode) errors.push(`${stageName()}: expected ${mode} indicator, found ${status.dataset.mode}`);
       if (status.getAttribute('role') !== 'status') errors.push(`${stageName()}: indicator lost its status role`);
+      if (status.getAttribute('aria-live') !== 'polite' || status.getAttribute('aria-atomic') !== 'true') {
+        errors.push(`${stageName()}: indicator must politely announce its complete concise status`);
+      }
       if (status.getAttribute('aria-label') !== label) errors.push(`${stageName()}: expected accessible label "${label}", found "${status.getAttribute('aria-label')}"`);
       if (status.classList.contains('is-compact') !== Boolean(compact)) errors.push(`${stageName()}: incorrect compact indicator state`);
     };
@@ -142,7 +160,9 @@ Object.assign(window, {
         errors.push(`${stageName()}: visible Agent progress summary is missing`);
         return;
       }
-      if (summary.getAttribute('role') !== 'status' || summary.getAttribute('aria-live') !== (transition.querySelector('.term')?.classList.contains('is-live') ? 'polite' : 'off')) {
+      if (summary.getAttribute('role') !== 'status' ||
+          summary.getAttribute('aria-live') !== (transition.querySelector('.term')?.classList.contains('is-live') ? 'polite' : 'off') ||
+          summary.getAttribute('aria-atomic') !== 'true') {
         errors.push(`${stageName()}: progress summary does not expose an appropriate accessible status`);
       }
       if (!summary.textContent?.includes(label) || !summary.textContent.includes(state)) {
@@ -159,6 +179,31 @@ Object.assign(window, {
     verifyStatus('deep', 'Deepthink is working', true);
     const streamedParagraph = transition.querySelector<HTMLElement>('.message-text p');
     if (!streamedParagraph) errors.push('deep: streamed reply paragraph is missing');
+    const deepStatus = transition.querySelector<HTMLElement>('.message-text .reply-status[role="status"]');
+    const deepStatusLabel = deepStatus?.getAttribute('aria-label');
+    let deepStatusMutations = 0;
+    const statusObserver = deepStatus ? new MutationObserver((records) => { deepStatusMutations += records.length; }) : null;
+    if (deepStatus) statusObserver?.observe(deepStatus, { subtree: true, childList: true, characterData: true, attributes: true });
+    const reasoningToggle = transition.querySelector<HTMLButtonElement>('[data-testid="toggle-progress-999"]');
+    if (!reasoningToggle) errors.push('deep: reasoning disclosure is missing');
+    else flushSync(() => reasoningToggle.click());
+    for (let i = 0; i < 32; i += 1) {
+      flushSync(() => {
+        setStreamedContent?.(`Streamed reply chunk ${i + 1}.`);
+        setStreamedReasoning?.(`Reasoning detail ${i + 1}.`);
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (deepStatus && transition.querySelector('.message-text .reply-status') !== deepStatus) {
+      errors.push('deep: status region was replaced while answer text streamed');
+    }
+    if (deepStatusMutations) errors.push(`deep: answer streaming mutated the status region ${deepStatusMutations} times`);
+    if (deepStatus?.getAttribute('aria-label') !== deepStatusLabel) errors.push('deep: streamed answer text changed the concise status label');
+    if (deepStatus?.textContent?.includes('Streamed reply chunk')) errors.push('deep: full streamed answer text leaked into the status region');
+    if (!transition.querySelector('[data-testid="reasoning-999"]')?.textContent?.includes('Reasoning detail 32')) {
+      errors.push('deep: final streamed reasoning detail was not rendered');
+    }
+    statusObserver?.disconnect();
 
     setStage('search');
     verifyStatus('search', 'Searching the web for sources', false);
@@ -220,6 +265,9 @@ Object.assign(window, {
               : 'Working on it';
 
       if (status.getAttribute('role') !== 'status') errors.push(`${fixtureCase.dataset.case}: missing status role`);
+      if (status.getAttribute('aria-live') !== 'polite' || status.getAttribute('aria-atomic') !== 'true') {
+        errors.push(`${fixtureCase.dataset.case}: status does not expose polite atomic announcements`);
+      }
       if (status.getAttribute('aria-label') !== expectedName) errors.push(`${fixtureCase.dataset.case}: incorrect accessible name`);
       if (figure.getAttribute('aria-hidden') !== 'true') errors.push(`${fixtureCase.dataset.case}: decorative figure is not hidden`);
       if (Math.abs(rect.width - (compact ? 22 : 28)) > 0.1) errors.push(`${fixtureCase.dataset.case}: unexpected indicator width ${rect.width}`);
