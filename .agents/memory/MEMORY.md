@@ -11,3 +11,4 @@
 - [Validated .replit edits](replit-config-editing.md) — Replace `.replit` through Replit's TOML validation callback; direct patches are blocked.
 - [Browser storage events](browser-storage-events.md) — Storage events reach other same-origin documents, not the document that made the localStorage change.
 - [Agent browser boundary](agent-browser-boundary.md) — Test only generated local previews with bounded actions; never automate arbitrary external sites or credentials.
+- [Browser lifecycle tests](browser-lifecycle-testing.md) — The bundled Chromium lacks page-visibility emulation; use CDP freeze/resume for suspended-tab tests.

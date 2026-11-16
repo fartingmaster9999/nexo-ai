@@ -212,6 +212,76 @@ await withFixture('tests/image-chat.html', async ({ cdp, evaluate, navigate }) =
   assert.equal((await requests())[0].deepthink, false, 'changes in either tab must not alter the in-flight request mode');
   assert.equal((await requests()).length, 1, 'changes in either tab must not start a second request or change the in-flight Agent route');
   assert.equal(await evaluate(`[...window.modeStorageEvents, ...window.modeSyncTab.modeStorageEvents].filter(event => event.trusted).length`), rapidModeChanges.length, 'receiving tabs must not echo mode changes back into storage');
+  const wakeModes = await evaluate(`({
+    deepthink: localStorage.getItem('nexo-deepthink') !== '1',
+    agent: localStorage.getItem('nexo-agent') !== '1'
+  })`);
+  await evaluate(`(() => {
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    window.modeWakeWriteCount = 0;
+    window.modeWakeOriginalSetItem = originalSetItem;
+    Object.defineProperty(localStorage, 'setItem', {
+      configurable: true,
+      value: (key, value) => {
+        if (key === 'nexo-deepthink' || key === 'nexo-agent') window.modeWakeWriteCount += 1;
+        return originalSetItem(key, value);
+      }
+    });
+    const tab = window.modeSyncTab;
+    tab.wakeModes = ${JSON.stringify(wakeModes)};
+    tab.wakeMutationDone = false;
+    tab.setTimeout(() => {
+      for (const [mode, key] of [['deepthink', 'nexo-deepthink'], ['agent', 'nexo-agent']]) {
+        const enabled = tab.wakeModes[mode];
+        const button = tab.document.querySelector('[data-testid="toggle-' + mode + '"]');
+        if ((button.getAttribute('aria-pressed') === 'true') !== enabled) button.click();
+        if ((tab.localStorage.getItem(key) === '1') !== enabled) throw new Error(mode + ' preference was not saved');
+      }
+      tab.wakeMutationDone = true;
+    }, 150);
+  })()`);
+  await cdp('Page.setWebLifecycleState', { state: 'frozen' });
+  await delay(400);
+  await cdp('Page.setWebLifecycleState', { state: 'active' });
+  await evaluate(`document.dispatchEvent(new Event('visibilitychange'))`);
+  await waitFor(() => evaluate(`window.modeSyncTab.wakeMutationDone === true`), 'other tab changes both preferences while this tab is frozen');
+  await waitFor(() => evaluate(`(() => {
+    const first = ${readTabModes('window')};
+    const second = ${readTabModes('window.modeSyncTab')};
+    const expectedDeepthink = window.modeSyncTab.wakeModes.deepthink ? 'true' : 'false';
+    const expectedAgent = window.modeSyncTab.wakeModes.agent ? 'true' : 'false';
+    return first.deepthink.pressed === expectedDeepthink &&
+      first.agent.pressed === expectedAgent &&
+      first.deepthink.active === window.modeSyncTab.wakeModes.deepthink &&
+      first.agent.active === window.modeSyncTab.wakeModes.agent &&
+      second.deepthink.pressed === expectedDeepthink &&
+      second.agent.pressed === expectedAgent &&
+      second.deepthink.active === window.modeSyncTab.wakeModes.deepthink &&
+      second.agent.active === window.modeSyncTab.wakeModes.agent;
+  })()`), 'waking tab restores both latest mode choices and selected styling');
+  const wakeStorageEvents = await evaluate(`({
+    first: window.modeStorageEvents.filter(event => event.trusted),
+    second: window.modeSyncTab.modeStorageEvents.filter(event => event.trusted),
+    receiverWrites: window.modeWakeWriteCount,
+    storedDeepthink: localStorage.getItem('nexo-deepthink'),
+    storedAgent: localStorage.getItem('nexo-agent')
+  })`);
+  const changesFromSecondTab = rapidModeChanges.filter(([, tab]) => tab === 'window.modeSyncTab').length;
+  assert.equal(wakeStorageEvents.first.length, changesFromSecondTab + 2, 'waking tab must receive only the other tab’s user-initiated changes');
+  assert.equal(wakeStorageEvents.second.length, rapidModeChanges.length - changesFromSecondTab, 'the source tab must emit only its prior user-initiated changes');
+  assert.equal(wakeStorageEvents.receiverWrites, 0, 'receiving mode updates must not write either preference back');
+  assert.deepEqual(
+    [wakeStorageEvents.storedDeepthink, wakeStorageEvents.storedAgent],
+    [wakeModes.deepthink ? '1' : '0', wakeModes.agent ? '1' : '0'],
+    'both stored values must remain the choices made in the other tab',
+  );
+  await evaluate(`Object.defineProperty(localStorage, 'setItem', { configurable: true, value: window.modeWakeOriginalSetItem }); delete window.modeWakeOriginalSetItem`);
+  await evaluate(`(() => {
+    const deepthink = document.querySelector('[data-testid="toggle-deepthink"]');
+    const agent = document.querySelector('[data-testid="toggle-agent"]');
+    if (deepthink.getAttribute('aria-pressed') !== 'true') deepthink.click();
+    if (agent.getAttribute('aria-pressed') !== 'false') agent.click();
+  })()`);
   const waiting = await evaluate(findCheckpoint);
   assert.equal(waiting.retries, 1);
   await cdp('Page.reload');

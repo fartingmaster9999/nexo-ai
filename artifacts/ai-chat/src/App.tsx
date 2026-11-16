@@ -186,11 +186,8 @@ function Home() {
   });
   const [deepthinkSuggestionDismissed, setDeepthinkSuggestionDismissed] = useState(false);
   useEffect(() => {
-    const syncModePreferences = (event: StorageEvent) => {
+    const refreshModePreferences = () => {
       try {
-        if (event.storageArea !== window.localStorage) return;
-        if (event.key !== null && event.key !== DEEPTHINK_KEY && event.key !== AGENT_KEY && event.key !== COMPARE_AGENT_KEY &&
-            event.key !== PUBLIC_GROQ_KEY && event.key !== PUBLIC_GEMINI_KEY) return;
         const nextDeepthink = window.localStorage.getItem(DEEPTHINK_KEY) === '1';
         const nextAgent = window.localStorage.getItem(AGENT_KEY) === '1';
         setDeepthink(nextDeepthink);
@@ -201,8 +198,27 @@ function Home() {
         return;
       }
     };
+    const syncModePreferences = (event: StorageEvent) => {
+      try {
+        if (event.storageArea !== window.localStorage) return;
+        if (event.key !== null && event.key !== DEEPTHINK_KEY && event.key !== AGENT_KEY && event.key !== COMPARE_AGENT_KEY &&
+            event.key !== PUBLIC_GROQ_KEY && event.key !== PUBLIC_GEMINI_KEY) return;
+        refreshModePreferences();
+      } catch {
+        return;
+      }
+    };
+    const refreshVisibleTab = () => {
+      if (document.visibilityState === 'visible') refreshModePreferences();
+    };
     window.addEventListener('storage', syncModePreferences);
-    return () => window.removeEventListener('storage', syncModePreferences);
+    window.addEventListener('pageshow', refreshModePreferences);
+    document.addEventListener('visibilitychange', refreshVisibleTab);
+    return () => {
+      window.removeEventListener('storage', syncModePreferences);
+      window.removeEventListener('pageshow', refreshModePreferences);
+      document.removeEventListener('visibilitychange', refreshVisibleTab);
+    };
   }, []);
   const setDeepthinkPreference = (next: boolean): LiveModeUpdateResult => {
     const changed = deepthink !== next;
