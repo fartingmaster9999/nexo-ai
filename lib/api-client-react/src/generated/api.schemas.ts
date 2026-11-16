@@ -304,6 +304,8 @@ export interface AgentChatInput {
   deepthink?: boolean;
   /** For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and gemini-decision-1 rubric scores. The judge must be in the account catalog; no replacement judge is used. */
   compareAgentMode?: boolean;
+  /** Run a second coding model alongside the primary model for a new coding request; ignored for continuations. */
+  parallelCoding?: boolean;
   /** Continue an Agent run on its selected provider after a rate-limit fallback */
   agentProvider?: AgentChatInputAgentProvider;
   /**

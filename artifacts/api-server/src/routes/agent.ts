@@ -201,6 +201,7 @@ export function createAgentRouter({
       ? inferredTask : isAgentTask(parsed.data.agentTask) ? parsed.data.agentTask : inferredTask;
     const hasNewCodingRequest = agentTask === "coding" && !(parsed.data.agentHistory?.length) &&
       !(parsed.data.agentRetryCount ?? 0);
+    const requestParallelCoding = parallelCoding && parsed.data.parallelCoding !== false && hasNewCodingRequest;
     const compareAgentRequested = parsed.data.compareAgentMode === true;
     const compareAgentEligible = compareAgentRequested && parsed.data.deepthink === true &&
       hasNewCodingRequest && agentTask === "coding" && !isProgramReview;
@@ -612,7 +613,7 @@ export function createAgentRouter({
       let parallelCodingPromise: Promise<ParallelCodingResult> | undefined;
       let compareAgentRunPending = compareAgentEligible;
       const startParallelCoding = async (input: typeof parsed.data, toolsAllowed: boolean) => {
-        if (!parallelCoding || parallelCodingStarted || !hasNewCodingRequest || activeProvider !== "groq" ||
+        if (!requestParallelCoding || parallelCodingStarted || activeProvider !== "groq" ||
             activeTask !== "coding" || !toolsAllowed || !groqClient) return;
         parallelCodingStarted = true;
         const preferredPair = activeModel === CODING_FALLBACK

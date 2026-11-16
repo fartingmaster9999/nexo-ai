@@ -655,6 +655,9 @@ components:
           type: boolean
           default: false
           description: For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and gemini-decision-1 rubric scores. The judge must be in the account catalog; no replacement judge is used.
+        parallelCoding:
+          type: boolean
+          description: Run a second coding model alongside the primary model for a new coding request; ignored for continuations.
         agentProvider:
           type: string
           enum: [gemini, groq]

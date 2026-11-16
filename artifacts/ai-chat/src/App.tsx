@@ -80,6 +80,7 @@ const CodeWorkspace = lazy(() => import('@/components/code-workspace').then(modu
 const DEEPTHINK_KEY = 'nexo-deepthink';
 const COMPARE_AGENT_KEY = 'nexo-compare-agent';
 const AGENT_KEY = 'nexo-agent';
+const PARALLEL_CODING_KEY = 'nexo-parallel-coding';
 const PUBLIC_GROQ_KEY = 'nexo-public-groq-key';
 const PUBLIC_GEMINI_KEY = 'nexo-public-gemini-key';
 const PUBLIC_KEY_MODE = import.meta.env.VITE_PUBLIC_KEY_MODE === 'true';
@@ -180,6 +181,9 @@ function Home() {
   const autoOpened = useRef<string | null>(null);
   const [deepthink, setDeepthink] = useState<boolean>(() => { try { return window.localStorage.getItem(DEEPTHINK_KEY) === '1'; } catch { return false; } });
   const [agentMode, setAgentMode] = useState<boolean>(() => { try { return window.localStorage.getItem(AGENT_KEY) === '1'; } catch { return false; } });
+  const [parallelCoding, setParallelCoding] = useState<boolean>(() => {
+    try { return window.localStorage.getItem(PARALLEL_CODING_KEY) !== '0'; } catch { return true; }
+  });
   const [compareAgentMode, setCompareAgentMode] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem(DEEPTHINK_KEY) === '1' &&
@@ -195,6 +199,7 @@ function Home() {
         const nextAgent = window.localStorage.getItem(AGENT_KEY) === '1';
         setDeepthink(nextDeepthink);
         setAgentMode(nextAgent);
+        setParallelCoding(window.localStorage.getItem(PARALLEL_CODING_KEY) !== '0');
         setCompareAgentMode(nextDeepthink && nextAgent && window.localStorage.getItem(COMPARE_AGENT_KEY) === '1');
         setProviderKeys(readPublicProviderKeys());
       } catch {
@@ -204,7 +209,7 @@ function Home() {
     const syncModePreferences = (event: StorageEvent) => {
       try {
         if (event.storageArea !== window.localStorage) return;
-        if (event.key !== null && event.key !== DEEPTHINK_KEY && event.key !== AGENT_KEY && event.key !== COMPARE_AGENT_KEY &&
+        if (event.key !== null && event.key !== DEEPTHINK_KEY && event.key !== AGENT_KEY && event.key !== COMPARE_AGENT_KEY && event.key !== PARALLEL_CODING_KEY &&
             event.key !== PUBLIC_GROQ_KEY && event.key !== PUBLIC_GEMINI_KEY) return;
         refreshModePreferences();
       } catch {
@@ -254,6 +259,10 @@ function Home() {
     return { enabled: next, changed: true };
   };
   const toggleAgentMode = () => { setAgentModePreference(!agentMode); };
+  const setParallelCodingPreference = (next: boolean) => {
+    setParallelCoding(next);
+    try { window.localStorage.setItem(PARALLEL_CODING_KEY, next ? '1' : '0'); } catch { /* keep the choice for this tab */ }
+  };
   const setCompareAgentModeEnabled = (next: boolean) => {
     if (!agentMode || !deepthink || streaming) return;
     if (next && PUBLIC_KEY_MODE && !readPublicProviderKeys().gemini.trim()) {
@@ -693,6 +702,7 @@ function Home() {
     const rejectCompletion = () => { try { onFinished?.(false); } catch {} };
     if (abortRef.current || streaming || preparingImage) { rejectCompletion(); return; }
     const prompt = (resume?.messages.at(-1)?.content ?? suggestedText ?? draft).trim();
+    const requestParallelCoding = parallelCoding;
     const requestImage = resume && !resume.imageRequired ? null : pendingImage;
     if (resume?.imageRequired && !requestImage) {
       trackRecoveryEvent('agent_recovery_resume_blocked', { reason: 'image_required' });
@@ -1084,6 +1094,9 @@ function Home() {
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         };
         if (requestAgent && requestCompareAgentMode) requestBody.compareAgentMode = true;
+        if (requestAgent && !resume && !agentHistory.length && deferredRetries === 0) {
+          requestBody.parallelCoding = requestParallelCoding;
+        }
         if (requestAgent && agentMemory.length) requestBody.agentMemory = agentMemory;
         if (requestAgent && agentProvider.current) requestBody.agentProvider = agentProvider.current;
         if (requestAgent && agentModel.current) requestBody.agentModel = agentModel.current;
@@ -2310,6 +2323,8 @@ function Home() {
         open={agentSettingsOpen}
         onOpenChange={setAgentSettingsOpen}
         agentMode={agentMode}
+        parallelCoding={parallelCoding}
+        onParallelCodingChange={setParallelCodingPreference}
         deepthink={deepthink}
         compareAgentMode={compareAgentMode}
         streaming={streaming}

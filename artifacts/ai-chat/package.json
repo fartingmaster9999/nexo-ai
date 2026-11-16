@@ -15,6 +15,7 @@
     "test:reply-status": "node tests/reply-status.visual.mjs",
     "test:images": "node --test tests/image-attachment.test.mjs && node tests/image-chat.browser.mjs",
     "test:agent": "node --test tests/request-deadlines.test.mjs tests/agent-retry.test.mjs tests/agent-checkpoint.test.mjs && node tests/agent-chat.browser.mjs && node tests/agent-recovery.browser.mjs",
+    "test:agent-parallel-coding": "node tests/parallel-coding.browser.mjs",
     "test:candidates": "node --test tests/workspace.test.mjs tests/agent-checkpoint.test.mjs tests/preview-interactions.test.mjs && node tests/agent-candidate.browser.mjs",
     "test:workspace": "node --test tests/workspace.test.mjs tests/project-edits.test.mjs && node tests/workspace.browser.mjs",
     "test:interactions": "node --test tests/preview-interactions.test.mjs && node tests/preview-interactions.browser.mjs",

@@ -215,6 +215,7 @@ export const streamAgentChatBodyAgentReviewBrowserChecksMax = 4000;
 export const StreamAgentChatBody = zod.object({
   "deepthink": zod.boolean().default(streamAgentChatBodyDeepthinkDefault).describe('Use high thinking level instead of medium'),
   "compareAgentMode": zod.boolean().default(streamAgentChatBodyCompareAgentModeDefault).describe('For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and gemini-decision-1 rubric scores. The judge must be in the account catalog; no replacement judge is used.'),
+  "parallelCoding": zod.boolean().optional().describe('Run a second coding model alongside the primary model for a new coding request; ignored for continuations.'),
   "agentProvider": zod.enum(['gemini', 'groq']).optional().describe('Continue an Agent run on its selected provider after a rate-limit fallback'),
   "agentModel": zod.string().max(streamAgentChatBodyAgentModelMax).optional().describe('Continue an Agent run on its selected provider model'),
   "agentTask": zod.enum(['coding', 'planning', 'reasoning', 'fast_worker', 'document', 'synthesis', 'classification', 'multimodal']).optional().describe('Preserve the server-selected capability route through tool continuations'),
@@ -447,6 +448,7 @@ export const streamPublicAgentChatBodyAgentReviewBrowserChecksMax = 4000;
 export const StreamPublicAgentChatBody = zod.object({
   "deepthink": zod.boolean().default(streamPublicAgentChatBodyDeepthinkDefault).describe('Use high thinking level instead of medium'),
   "compareAgentMode": zod.boolean().default(streamPublicAgentChatBodyCompareAgentModeDefault).describe('For Deepthink coding requests, compare three Qwen and two GPT-OSS drafts with model self-selection and gemini-decision-1 rubric scores. The judge must be in the account catalog; no replacement judge is used.'),
+  "parallelCoding": zod.boolean().optional().describe('Run a second coding model alongside the primary model for a new coding request; ignored for continuations.'),
   "agentProvider": zod.enum(['gemini', 'groq']).optional().describe('Continue an Agent run on its selected provider after a rate-limit fallback'),
   "agentModel": zod.string().max(streamPublicAgentChatBodyAgentModelMax).optional().describe('Continue an Agent run on its selected provider model'),
   "agentTask": zod.enum(['coding', 'planning', 'reasoning', 'fast_worker', 'document', 'synthesis', 'classification', 'multimodal']).optional().describe('Preserve the server-selected capability route through tool continuations'),

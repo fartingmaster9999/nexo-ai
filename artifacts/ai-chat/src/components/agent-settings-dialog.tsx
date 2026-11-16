@@ -6,6 +6,8 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   agentMode: boolean;
+  parallelCoding: boolean;
+  onParallelCodingChange: (enabled: boolean) => void;
   deepthink: boolean;
   compareAgentMode: boolean;
   streaming: boolean;
@@ -19,6 +21,8 @@ export function AgentSettingsDialog({
   open,
   onOpenChange,
   agentMode,
+  parallelCoding,
+  onParallelCodingChange,
   deepthink,
   compareAgentMode,
   streaming,
@@ -43,6 +47,25 @@ export function AgentSettingsDialog({
           <Dialog.Description className="nx-dialog-desc">
             Configure how Agent handles coding requests. These settings are separate from the Deepthink control.
           </Dialog.Description>
+
+          <section className="agent-setting-card" aria-labelledby="parallel-coding-label">
+            <div className="agent-setting-copy">
+              <div className="agent-setting-title" id="parallel-coding-label">Parallel coding</div>
+              <p id="parallel-coding-description">
+                {parallelCoding
+                  ? 'New coding requests can use Qwen and GPT-OSS together to compare complete versions. This uses more Groq requests and tokens.'
+                  : 'New coding requests use one model at a time, conserving Groq requests and tokens.'}
+              </p>
+              <p className="agent-setting-note">Saved on this device. Changes apply to new coding requests only; continuations and Compare Agent Mode are separate.</p>
+            </div>
+            <Switch
+              aria-label="Parallel coding"
+              aria-describedby="parallel-coding-description"
+              checked={parallelCoding}
+              onCheckedChange={onParallelCodingChange}
+              data-testid="switch-parallel-coding"
+            />
+          </section>
 
           <section className="agent-setting-card" aria-labelledby="compare-agent-label">
             <div className="agent-setting-copy">

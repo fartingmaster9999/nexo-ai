@@ -1078,6 +1078,92 @@ test("Agent routes coding to Qwen, exposes security signals, and preserves model
   assert.deepEqual(securityCalls, ["prompt-guard", "safeguard", "prompt-guard"]);
 });
 
+test("single-model coding policy never starts a second coding model", async () => {
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
+  const generationModels = [];
+  let parallelCandidateCalls = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if (request.model === PROMPT_GUARD_MODEL) return { choices: [{ message: { content: "0.01" } }] };
+      if (request.model === SAFEGUARD_MODEL) return { choices: [{ message: { content: '{"violation":0}' } }] };
+      generationModels.push(request.model);
+      return generationModels.length === 1 ? toolStream() : textStream("Build completed.");
+    } } },
+  };
+
+  await withServer(createApp(client, undefined, undefined, {
+    parallelCoding: true,
+    generateGroqCandidate: async () => {
+      parallelCandidateCalls++;
+      throw new Error("single-model mode must not start the second candidate");
+    },
+  }), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Build a small JavaScript example" }],
+        parallelCoding: false,
+      }),
+    }));
+    assert.equal(events.some((event) => event.error), false);
+    assert.equal(events.some((event) => event.agentTool?.tool === "run_code"), true);
+    assert.deepEqual(generationModels, [CODING_FALLBACK]);
+    assert.equal(parallelCandidateCalls, 0);
+    assert.equal(events.some((event) => event.activity?.id === "agent-parallel-code"), false);
+  });
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
+});
+
+test("Agent coding continuations never start a new parallel candidate", async () => {
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
+  const generationModels = [];
+  let parallelCandidateCalls = 0;
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if (request.model === PROMPT_GUARD_MODEL) return { choices: [{ message: { content: "0.01" } }] };
+      if (request.model === SAFEGUARD_MODEL) return { choices: [{ message: { content: '{"violation":0}' } }] };
+      generationModels.push(request.model);
+      return textStream("Continuation completed.");
+    } } },
+  };
+  const history = [{
+    tool: "run_code",
+    callId: "completed-run",
+    thoughtSignature: "completed-signature",
+    arguments: { language: "javascript", code: "console.log(4)" },
+    result: "stdout: 4",
+  }];
+
+  await withServer(createApp(client, undefined, undefined, {
+    parallelCoding: true,
+    generateGroqCandidate: async () => {
+      parallelCandidateCalls++;
+      throw new Error("continuations must not start a parallel candidate");
+    },
+  }), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Continue the existing coding build" }],
+        agentProvider: "groq",
+        agentModel: CODING_FALLBACK,
+        agentTask: "coding",
+        agentHistory: history,
+        parallelCoding: true,
+      }),
+    }));
+    assert.equal(events.some((event) => event.error), false);
+    assert.deepEqual(generationModels, [CODING_FALLBACK]);
+    assert.equal(parallelCandidateCalls, 0);
+    assert.equal(events.some((event) => event.activity?.id === "agent-parallel-code"), false);
+  });
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
+});
+
 test("new coding requests build with Qwen and GPT-OSS concurrently and choose the complete version", async () => {
   [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
   const generationRequests = [];
