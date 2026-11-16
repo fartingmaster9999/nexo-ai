@@ -162,9 +162,10 @@
 .project-file-delete { min-height: 32px; padding-inline: 8px; }
 .project-file-delete:hover:not(:disabled) { color: hsl(var(--destructive)); border-color: hsl(var(--destructive) / .4); background: hsl(var(--destructive) / .06); }
 
-.project-editor-cm { flex: 1; min-width: 0; min-height: 150px; overflow: auto; }
-.project-editor-cm > div,
-.project-editor-cm .cm-editor { min-height: 100%; }
+.project-editor-cm { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+.project-editor-cm > div { flex: 1 1 auto; min-width: 0; min-height: 0; height: 100%; }
+.project-editor-cm .cm-editor { height: 100%; min-height: 0; }
+.project-editor-cm .cm-scroller { overflow: auto; overscroll-behavior: contain; }
 .project-editor-cm .cm-editor { background: hsl(var(--code-bg)); color: hsl(var(--code-foreground)); font: 12px/1.6 var(--app-font-mono); }
 .project-editor-cm .cm-gutters { background: hsl(var(--code-bg)); border-color: var(--project-line); color: hsl(var(--muted-foreground)); }
 .project-editor-cm .cm-content { padding-block: 10px; }
@@ -220,7 +221,7 @@
   .project-file-parent { display: none; }
   .project-file-share { padding-inline: 5px; }
   .project-editor-toolbar { padding-inline: 9px; }
-  .project-editor-cm { min-height: 220px; }
+  .project-editor-cm { min-height: 0; }
   .project-editor-controls { gap: 5px; }
   .project-file-delete span { display: none; }
   .project-file-delete { width: 36px; padding: 0; }

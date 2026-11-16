@@ -143,6 +143,7 @@ function Home() {
   const [homeHistoryOpen, setHomeHistoryOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [longPasteCollapsed, setLongPasteCollapsed] = useState(false);
+  const longPasteRangeRef = useRef<{ start: number; end: number } | null>(null);
   useEffect(() => {
     if (!draft) setLongPasteCollapsed(false);
   }, [draft]);
@@ -1717,6 +1718,7 @@ function Home() {
   };
 
   const onDraftChange = (value: string) => {
+    longPasteRangeRef.current = null;
     setDraft(value);
     if (!value) setLongPasteCollapsed(false);
     if (textareaRef.current) {
@@ -1737,6 +1739,7 @@ function Home() {
     if (nextDraft.length > 12000) return;
     event.preventDefault();
     onDraftChange(nextDraft);
+    longPasteRangeRef.current = { start, end: start + pasted.length };
     setLongPasteCollapsed(true);
     window.requestAnimationFrame(() => longPasteEditRef.current?.focus({ preventScroll: true }));
   };
@@ -1752,9 +1755,23 @@ function Home() {
   };
 
   const clearLongPaste = () => {
-    setDraft('');
+    const range = longPasteRangeRef.current;
+    if (!range || range.start < 0 || range.end > draft.length || range.end < range.start) {
+      setLongPasteCollapsed(false);
+      return;
+    }
+    const nextDraft = `${draft.slice(0, range.start)}${draft.slice(range.end)}`;
+    longPasteRangeRef.current = null;
+    setDraft(nextDraft);
     setLongPasteCollapsed(false);
-    window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
+      textarea.focus({ preventScroll: true });
+      textarea.setSelectionRange(range.start, range.start);
+    });
   };
 
   return (
@@ -2053,12 +2070,15 @@ function Home() {
                     <div className="long-paste-summary" role="group" aria-label="Long pasted message" data-testid="long-paste-summary">
                       <div className="long-paste-summary-heading">
                         <strong>Long pasted message</strong>
-                        <span>{draft.length.toLocaleString()} characters</span>
+                        <span>{(longPasteRangeRef.current?.end ?? draft.length) - (longPasteRangeRef.current?.start ?? 0)} characters</span>
                       </div>
-                      <p>{draft.trim().replace(/\s+/g, ' ').slice(0, 180)}{draft.trim().length > 180 ? '…' : ''}</p>
+                      <p id="long-paste-preview">
+                        {draft.slice(longPasteRangeRef.current?.start ?? 0, longPasteRangeRef.current?.end ?? draft.length).trim().replace(/\s+/g, ' ').slice(0, 180)}
+                        {(draft.slice(longPasteRangeRef.current?.start ?? 0, longPasteRangeRef.current?.end ?? draft.length).trim().length > 180) ? '…' : ''}
+                      </p>
                       <div className="long-paste-summary-actions">
-                        <button ref={longPasteEditRef} type="button" onClick={editLongPaste} data-testid="button-edit-long-paste">Edit text</button>
-                        <button type="button" onClick={clearLongPaste} data-testid="button-clear-long-paste">Clear message</button>
+                        <button ref={longPasteEditRef} type="button" onClick={editLongPaste} aria-describedby="long-paste-preview" data-testid="button-edit-long-paste">Edit text</button>
+                        <button type="button" onClick={clearLongPaste} aria-describedby="long-paste-preview" data-testid="button-clear-long-paste">Remove pasted text</button>
                       </div>
                     </div>
                   )}

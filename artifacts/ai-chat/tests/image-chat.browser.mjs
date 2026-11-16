@@ -63,7 +63,7 @@ try {
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
       window.__imageRequests = [];
-      window.__textRequests = 0;
+      window.__textRequests = [];
       window.fetch = async (input, init = {}) => {
         const url = typeof input === "string" ? input : input.url;
         if (url.endsWith("/api/chat/image")) {
@@ -79,7 +79,7 @@ try {
           });
         }
         if (url.endsWith("/api/chat")) {
-          window.__textRequests++;
+          window.__textRequests.push({ url, body: JSON.parse(init.body) });
           return new Response('data: {"content":"Text-only route remains active."}\\n\\ndata: {"done":true}\\n\\n', {
             headers: { "Content-Type": "text/event-stream" }
           });
@@ -87,6 +87,53 @@ try {
         return originalFetch(input, init);
       };
     })()`);
+
+    assert.equal(await evaluate(`document.body.textContent.includes("Welcome to Nexo")`), false, "the home screen has no Welcome to Nexo label");
+    const prefix = "Keep this context.\n\n";
+    const firstPaste = `${"A copied paragraph with details. ".repeat(49)}A copied paragraph with details.`;
+    await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
+    await cdp("Input.insertText", { text: prefix });
+    await waitFor(() => evaluate(`document.querySelector('[data-testid="input-message"]').value === ${JSON.stringify(prefix)}`), "prompt context");
+    await evaluate(`(() => {
+      const input = document.querySelector('[data-testid="input-message"]');
+      input.setSelectionRange(input.value.length, input.value.length);
+      const clipboard = new DataTransfer();
+      clipboard.setData("text/plain", ${JSON.stringify(firstPaste)});
+      input.dispatchEvent(new ClipboardEvent("paste", { clipboardData: clipboard, bubbles: true, cancelable: true }));
+    })()`);
+    await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="long-paste-summary"]'))`), "collapsed long paste");
+    assert.equal(await evaluate(`document.activeElement?.dataset.testid`), "button-edit-long-paste", "focus moves to a usable edit control");
+    assert.equal(await evaluate(`document.querySelector('[data-testid="input-message"]').value`), prefix + firstPaste, "the full prompt remains intact while collapsed");
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    assert.equal(await evaluate(`document.activeElement?.dataset.testid`), "button-clear-long-paste", "Tab reaches the remove control");
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", modifiers: 8, key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", modifiers: 8, key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    assert.equal(await evaluate(`document.activeElement?.dataset.testid`), "button-edit-long-paste", "Shift+Tab returns to the edit control");
+    await evaluate(`document.querySelector('[data-testid="button-edit-long-paste"]').click()`);
+    await waitFor(() => evaluate(`!document.querySelector('[data-testid="input-message"]').hidden`), "reopened long paste");
+    assert.equal(await evaluate(`document.activeElement?.dataset.testid`), "input-message", "editing returns keyboard focus to the prompt");
+    const editedPrompt = `${prefix + firstPaste} Revised`;
+    await cdp("Input.insertText", { text: " Revised" });
+    await waitFor(() => evaluate(`document.querySelector('[data-testid="input-message"]').value === ${JSON.stringify(editedPrompt)}`), "edit long prompt");
+
+    const secondPaste = "More copied details. ".repeat(65);
+    await evaluate(`(() => {
+      const input = document.querySelector('[data-testid="input-message"]');
+      input.setSelectionRange(input.value.length, input.value.length);
+      const clipboard = new DataTransfer();
+      clipboard.setData("text/plain", ${JSON.stringify(secondPaste)});
+      input.dispatchEvent(new ClipboardEvent("paste", { clipboardData: clipboard, bubbles: true, cancelable: true }));
+    })()`);
+    await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="long-paste-summary"]'))`), "second collapsed long paste");
+    await evaluate(`document.querySelector('[data-testid="button-clear-long-paste"]').click()`);
+    await waitFor(() => evaluate(`!document.querySelector('[data-testid="long-paste-summary"]')`), "remove only the pasted section");
+    assert.equal(await evaluate(`document.querySelector('[data-testid="input-message"]').value`), editedPrompt, "removing pasted text preserves the prompt already entered");
+    assert.equal(await evaluate(`document.activeElement?.dataset.testid`), "input-message", "removal returns focus to the prompt");
+    await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
+    await waitFor(() => evaluate(`window.__textRequests.length === 1`), "large text prompt submission", 10000);
+    assert.equal(await evaluate(`window.__textRequests[0].body.messages.at(-1).content`), editedPrompt.trim(), "submission includes the complete edited long prompt");
+    await waitFor(() => evaluate(`document.body.textContent.includes("Text-only route remains active.")`), "large text prompt reply", 10000);
 
     const root = (await cdp("DOM.getDocument")).root.nodeId;
     const input = (await cdp("DOM.querySelector", { nodeId: root, selector: '[data-testid="input-image-file"]' })).nodeId;
@@ -143,7 +190,7 @@ try {
     await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
     await cdp("Input.insertText", { text: "What is 2 + 2?" });
     await evaluate(`document.querySelector('[data-testid="button-send-message"]').click()`);
-    await waitFor(() => evaluate(`window.__textRequests === 1`), "text-only Groq route", 10000);
+    await waitFor(() => evaluate(`window.__textRequests.length === 2`), "text-only Groq route", 10000);
     await waitFor(() => evaluate(`document.body.textContent.includes("Text-only route remains active.")`), "text-only response", 10000);
     assert.equal(await evaluate(`window.__imageRequests.length`), 2);
     console.log("Image-chat browser checks passed: validation, oversized-image compression, preview/remove, ephemeral image bytes, Gemini routing, and unchanged text routing.");

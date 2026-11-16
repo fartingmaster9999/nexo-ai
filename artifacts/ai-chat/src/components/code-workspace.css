@@ -6,7 +6,13 @@
 .workspace.workspace-resizable .ws-head { flex-shrink: 0; min-width: 0; flex-wrap: wrap; height: auto; padding-block: 6px; }
 .workspace.workspace-resizable .ws-agent-label { margin-left: 2px; color: hsl(var(--primary)); font-size: 10px; font-weight: 600; letter-spacing: .03em; white-space: nowrap; }
 .workspace.workspace-resizable .ws-project-label { margin-left: 4px; color: hsl(var(--muted-foreground)); font: 10px var(--app-font-mono); white-space: nowrap; }
-.workspace.workspace-resizable .ws-editor { min-height: 80px; }
+.workspace.workspace-resizable .ws-editor { min-height: 0; }
+.workspace.workspace-resizable .ws-editor > div,
+.workspace.workspace-resizable .ws-editor .cm-theme,
+.workspace.workspace-resizable .ws-editor .cm-theme-dark,
+.workspace.workspace-resizable .ws-editor .cm-theme-light,
+.workspace.workspace-resizable .ws-editor .cm-editor { min-height: 0; }
+.workspace.workspace-resizable .ws-editor .cm-scroller { overflow: auto; overscroll-behavior: contain; }
 .workspace.workspace-resizable .ws-out { min-height: 100px; }
 .workspace.workspace-resizable .ws-out-head { flex-wrap: wrap; }
 .workspace.workspace-resizable .ws-out-actions { flex-wrap: wrap; }
