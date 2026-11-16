@@ -1366,10 +1366,14 @@ function Home() {
                 ].filter(Boolean).join('\n').slice(0, 4000),
               },
             };
-            const imageOutput = outputs.find((output) => output.kind === 'image' && output.dataUrl);
-            const imageMatch = imageOutput?.dataUrl?.match(/^data:image\/png;base64,([A-Za-z0-9+/=\r\n]+)$/);
-            if (imageMatch && imageMatch[1].length <= 2_000_000) {
-              reviewBody.image = { mimeType: 'image/png', data: imageMatch[1].replace(/\s/g, '') };
+            if (encodedImage) {
+              reviewBody.image = encodedImage;
+            } else {
+              const imageOutput = outputs.find((output) => output.kind === 'image' && output.dataUrl);
+              const imageMatch = imageOutput?.dataUrl?.match(/^data:image\/png;base64,([A-Za-z0-9+/=\r\n]+)$/);
+              if (imageMatch && imageMatch[1].length <= 2_000_000) {
+                reviewBody.image = { mimeType: 'image/png', data: imageMatch[1].replace(/\s/g, '') };
+              }
             }
             const cachedReview = programReviews.read(reviewBody);
             if (cachedReview !== undefined) {

@@ -1,9 +1,10 @@
 import { boundedHistory } from "./chat-request";
 
 export const GEMINI_IMAGE_MODEL = "gemini-3.8-flash";
+export const GEMINI_IMAGE_FALLBACK_MODEL = "gemini-3.6-flash";
+export const GEMMA_IMAGE_MODELS = ["gemma-4-31b-it", "gemma-4-26b-a4b-it"] as const;
 export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const MAX_EVENT_CHARS = 1_000_000;
-const GEMINI_STREAM_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:streamGenerateContent?alt=sse`;
 
 export type ImageMimeType = "image/jpeg" | "image/png" | "image/webp";
 export type ImageChatInput = {
@@ -39,7 +40,11 @@ export function validateImageData(mimeType: ImageMimeType, data: string): void {
   if (!isJpeg && !isPng && !isWebp) throw new Error("Image type does not match its content");
 }
 
-export function buildGeminiImageRequest(input: ImageChatInput, now = new Date()) {
+export function buildGeminiImageRequest(
+  input: ImageChatInput,
+  now = new Date(),
+  model = GEMINI_IMAGE_MODEL,
+) {
   validateImageData(input.image.mimeType, input.image.data);
   const timeZone = input.timeZone ?? "UTC";
   const localTime = new Intl.DateTimeFormat("en-US", {
@@ -72,7 +77,9 @@ export function buildGeminiImageRequest(input: ImageChatInput, now = new Date())
     generationConfig: {
       temperature: 0.6,
       maxOutputTokens: input.deepthink ? 8192 : 4096,
-      thinkingConfig: { thinkingLevel: input.deepthink ? "high" : "medium" },
+      ...(model.startsWith("gemma-")
+        ? {}
+        : { thinkingConfig: { thinkingLevel: input.deepthink ? "high" : "medium" } }),
     },
   };
 }
@@ -82,8 +89,10 @@ export async function requestGeminiImageStream(
   request: ReturnType<typeof buildGeminiImageRequest>,
   signal: AbortSignal,
   fetchImpl: typeof fetch = fetch,
+  model = GEMINI_IMAGE_MODEL,
 ): Promise<Response> {
-  return fetchImpl(GEMINI_STREAM_URL, {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
+  return fetchImpl(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify(request),
@@ -93,7 +102,8 @@ export async function requestGeminiImageStream(
 
 export function geminiImageErrorMessage(status: number): string {
   if (status === 400) return "Gemini could not process this image. Try a supported image or a shorter prompt.";
-  if (status === 401 || status === 403) return "Gemini could not authorize this request. Please check the Gemini API key in project secrets.";
+  if (status === 401 || status === 403) return "Gemini could not authorize this request. Check that the Gemini API key is valid and has access to the selected model.";
+  if (status === 404) return "The selected Gemini model is unavailable to this API key. Check model access and try again.";
   if (status === 429) return "Gemini is temporarily rate-limited. Please try again later.";
   if (status >= 500) return "Gemini image understanding is temporarily unavailable. Please try again.";
   return "The image request could not be completed. Please try again.";

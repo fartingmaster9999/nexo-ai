@@ -76,11 +76,11 @@ export async function availableGeminiAgentModels(
           for (const item of body.models) {
             if (!item || typeof item !== "object" || Array.isArray(item)) continue;
             const model = item as GeminiCatalogItem;
-             const decisionModel = model.name?.replace(/^models\//, "") === GEMINI_DECISION_MODEL;
+            const decisionModel = model.name?.replace(/^models\//, "") === GEMINI_DECISION_MODEL;
+            const requiredMethod = decisionModel ? "generateContent" : "streamGenerateContent";
             if (typeof model.name !== "string" ||
                 !Array.isArray(model.supportedGenerationMethods) ||
-                !model.supportedGenerationMethods?.some((method) =>
-                   method === "generateContent" || (!decisionModel && method === "streamGenerateContent")) ||
+                !model.supportedGenerationMethods.includes(requiredMethod) ||
                  typeof model.inputTokenLimit !== "number" || model.inputTokenLimit < 8192 ||
                  typeof model.outputTokenLimit !== "number" ||
                  model.outputTokenLimit < (decisionModel ? 512 : 8192)) continue;

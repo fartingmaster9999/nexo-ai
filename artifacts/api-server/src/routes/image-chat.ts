@@ -2,8 +2,10 @@ import { Router, type IRouter } from "express";
 import { StreamImageChatBody } from "@workspace/api-zod";
 import { isValidTimeZone } from "../lib/chat-request";
 import { requestGeminiWithRetry } from "../lib/gemini-retry";
+import { availableGeminiAgentModels } from "../lib/gemini-agent";
 import {
   buildGeminiImageRequest, GeminiImageApiError, GeminiSseDecoder, GEMINI_IMAGE_MODEL,
+  GEMINI_IMAGE_FALLBACK_MODEL, GEMMA_IMAGE_MODELS,
   geminiImageErrorMessage, requestGeminiImageStream, visibleGeminiText,
 } from "../lib/gemini-image";
 import { CHAT_DEADLINE_MS, PROVIDER_IDLE_MS, writeChatEvent } from "../lib/chat-runtime";
@@ -11,12 +13,14 @@ import { getPublicProviderKey, isPublicApiRequest } from "../lib/public-api-keys
 
 type ImageChatRouterOptions = {
   getApiKey?: () => string | undefined;
+  getGeminiModels?: typeof availableGeminiAgentModels;
   fetchImpl?: typeof fetch;
   now?: () => Date;
 };
 
 export function createImageChatRouter({
   getApiKey = () => process.env.GEMINI_API_KEY,
+  getGeminiModels = availableGeminiAgentModels,
   fetchImpl = fetch,
   now = () => new Date(),
 }: ImageChatRouterOptions = {}): IRouter {
@@ -42,9 +46,8 @@ export function createImageChatRouter({
     res.status(400).json({ error: "The provided timezone is invalid." });
     return;
   }
-  let request: ReturnType<typeof buildGeminiImageRequest>;
   try {
-    request = buildGeminiImageRequest(parsed.data, now());
+    buildGeminiImageRequest(parsed.data, now(), GEMINI_IMAGE_MODEL);
   } catch {
     res.status(400).json({ error: "The image data is invalid. Choose a JPEG, PNG, or WebP image under 3 MB." });
     return;
@@ -71,6 +74,7 @@ export function createImageChatRouter({
   };
   res.on("close", abortOnDisconnect);
   const emit = (event: object) => writeChatEvent(res, event, controller.signal);
+  let activeModel = GEMINI_IMAGE_MODEL;
 
   try {
     res.setHeader("Content-Type", "text/event-stream");
@@ -82,19 +86,66 @@ export function createImageChatRouter({
     heartbeat = setInterval(() => {
       if (!res.destroyed && !res.writableEnded && res.writableLength === 0) res.write(": keepalive\n\n");
     }, 10000);
-    await emit({ model: GEMINI_IMAGE_MODEL });
     await emit({ activity: { id: "image-analysis", label: "Analyzing the attached image", kind: "thinking", status: "running" } });
     resetIdle();
 
-    const upstream = await requestGeminiWithRetry(
-      () => requestGeminiImageStream(apiKey, request, controller.signal, fetchImpl),
-      controller.signal,
-    );
-    if (!upstream.ok) {
-      req.log.warn({ provider: "gemini", model: GEMINI_IMAGE_MODEL, status: upstream.status }, "Gemini image request rejected");
-      await upstream.body?.cancel().catch(() => {});
-      throw new GeminiImageApiError(upstream.status);
+    const catalog = await getGeminiModels(apiKey, fetchImpl).catch(() => []);
+    const catalogIds = new Set(catalog.map((model) => model.name?.replace(/^models\//, "") ?? "").filter(Boolean));
+    const geminiModels = [GEMINI_IMAGE_MODEL, GEMINI_IMAGE_FALLBACK_MODEL].filter((model) => catalogIds.has(model));
+    if (!geminiModels.length) geminiModels.push(GEMINI_IMAGE_MODEL);
+    const models = [...GEMMA_IMAGE_MODELS.filter((model) => catalogIds.has(model)), ...geminiModels];
+    let upstream: Response | undefined;
+    let lastFailureStatus = 503;
+    for (const [index, model] of models.entries()) {
+      activeModel = model;
+      await emit({ model });
+      if (index > 0) {
+        await emit({ activity: {
+          id: "image-analysis",
+          label: model.startsWith("gemma-")
+            ? "Trying another Gemma model for image understanding"
+            : "Gemma could not process this image; trying Gemini vision instead",
+          kind: "thinking",
+          status: "running",
+        } });
+      }
+      const modelRequest = buildGeminiImageRequest(parsed.data, now(), model);
+      try {
+        const candidate = await requestGeminiWithRetry(
+          () => requestGeminiImageStream(apiKey, modelRequest, controller.signal, fetchImpl, model),
+          controller.signal,
+        );
+        if (candidate.ok && candidate.body) {
+          upstream = candidate;
+          break;
+        }
+        lastFailureStatus = candidate.ok ? 502 : candidate.status;
+        req.log.warn({
+          event: "gemini.image.model_rejected",
+          provider: "gemini",
+          model,
+          status: lastFailureStatus,
+          fallbackAvailable: index < models.length - 1,
+        }, "Gemini image model rejected the request");
+        await candidate.body?.cancel().catch(() => {});
+        if (lastFailureStatus === 401 || lastFailureStatus === 403 ||
+            ![400, 404, 429, 500, 502, 503, 504].includes(lastFailureStatus) ||
+            index === models.length - 1) {
+          throw new GeminiImageApiError(lastFailureStatus);
+        }
+      } catch (error) {
+        if (controller.signal.aborted || error instanceof GeminiImageApiError) throw error;
+        req.log.warn({
+          event: "gemini.image.model_unreachable",
+          provider: "gemini",
+          model,
+          failureKind: error instanceof Error ? error.name : typeof error,
+          fallbackAvailable: index < models.length - 1,
+        }, "Gemini image model request could not be completed");
+        if (index === models.length - 1) throw error;
+      }
     }
+    if (!upstream) throw new GeminiImageApiError(lastFailureStatus);
     if (!upstream.body) throw new Error("Gemini returned an empty response stream");
 
     const decoder = new GeminiSseDecoder();
@@ -139,11 +190,18 @@ export function createImageChatRouter({
     await emit({ activity: { id: "image-analysis", label: "Image analysis complete", kind: "thinking", status: "complete" } });
     await emit({ done: true });
     res.end();
-    req.log.info({ event: "gemini.image.completed", model: GEMINI_IMAGE_MODEL, durationMs: Date.now() - startedAt }, "Gemini image response completed");
+    req.log.info({ event: "gemini.image.completed", model: activeModel, durationMs: Date.now() - startedAt }, "Gemini image response completed");
   } catch (error) {
     if (res.destroyed || res.writableEnded || (controller.signal.aborted && !timedOut)) return;
     const status = error instanceof GeminiImageApiError ? error.status : undefined;
-    req.log.error({ event: "gemini.image.failed", model: GEMINI_IMAGE_MODEL, status, timedOut, durationMs: Date.now() - startedAt }, "Gemini image response failed");
+    req.log.error({
+      event: "gemini.image.failed",
+      model: activeModel,
+      status,
+      timedOut,
+      failureKind: timedOut ? "timeout" : error instanceof GeminiImageApiError ? "gemini_http" : error instanceof Error ? error.name : typeof error,
+      durationMs: Date.now() - startedAt,
+    }, "Gemini image response failed");
     const message = timedOut
       ? "Image analysis timed out. Your prompt is kept; please try again."
       : error instanceof GeminiImageApiError

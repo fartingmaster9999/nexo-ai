@@ -83,7 +83,12 @@ export function sanitizeInteractionResult(value: unknown): InteractionResult | n
   const result = value as Record<string, unknown>;
   if (Object.keys(result).sort().join() !== 'status,steps' || typeof result.status !== 'string' || !['running', 'complete', 'invalid', 'not-requested'].includes(result.status) ||
       !Array.isArray(result.steps) || result.steps.length > 16) return null;
-  const resultSteps = result.steps;
+  const resultSteps = result.steps as Array<{
+    step: number;
+    action: InteractionStep['action'];
+    reason: InteractionReason;
+    observation?: InteractionObservation;
+  }>;
   if (['invalid', 'not-requested'].includes(String(result.status)) && resultSteps.length !== 0 ||
       result.status === 'complete' && resultSteps.length === 0) return null;
   const actions = ['click', 'submit', 'inspect', 'fill', 'check', 'scroll', 'assertText', 'assertValue', 'assertChecked', 'assertCount'];

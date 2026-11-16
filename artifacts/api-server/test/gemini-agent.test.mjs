@@ -31,6 +31,7 @@ test("Gemini model discovery checks exact IDs, streaming, context, and server-si
         models: [
           { name: "models/gemini-3.5-flash-lite", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 131072, outputTokenLimit: 8192 },
           { name: "models/gemini-3.1-flash-lite", supportedGenerationMethods: ["generateContent"], inputTokenLimit: 131072, outputTokenLimit: 8192 },
+          { name: "models/gemini-decision-1", supportedGenerationMethods: ["generateContent"], inputTokenLimit: 8192, outputTokenLimit: 512 },
           { name: "models/embedding-only", supportedGenerationMethods: ["embedContent"], inputTokenLimit: 131072, outputTokenLimit: 8192 },
           { name: "models/gemma-4-31b-it", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 4096, outputTokenLimit: 8192 },
         ],
@@ -45,7 +46,7 @@ test("Gemini model discovery checks exact IDs, streaming, context, and server-si
   });
   assert.deepEqual(models.map((model) => model.name), [
     "models/gemini-3.5-flash-lite",
-    "models/gemini-3.1-flash-lite",
+    "models/gemini-decision-1",
     "models/gemma-4-26b-a4b-it",
   ]);
   assert.equal(requests.length, 2);

@@ -13,11 +13,15 @@ const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwM
 const image = { mimeType: "image/png", data: png };
 const input = { messages: [{ role: "user", content: "What is in this picture?" }], image };
 
-function createSseApp({ getApiKey = () => "test-only-key", fetchImpl = async () => new Response("", { status: 200 }) } = {}) {
+function createSseApp({
+  getApiKey = () => "test-only-key",
+  getGeminiModels = async () => [],
+  fetchImpl = async () => new Response("", { status: 200 }),
+} = {}) {
   const app = express();
   app.use(pinoHttp({ logger: pino({ level: "silent" }) }));
   app.use(express.json({ limit: "5mb" }));
-  app.use("/api", createImageChatRouter({ getApiKey, fetchImpl, now: () => new Date("2026-11-06T12:00:00Z") }));
+  app.use("/api", createImageChatRouter({ getApiKey, getGeminiModels, fetchImpl, now: () => new Date("2026-11-06T12:00:00Z") }));
   return app;
 }
 
@@ -52,6 +56,9 @@ test("Gemini image request carries image data, current time and selected thinkin
   assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "high");
   assert.match(request.systemInstruction.parts[0].text, /2026-11-06T12:00:00\.000Z/);
   assert.match(request.systemInstruction.parts[0].text, /America\/Chicago/);
+  const gemmaRequest = buildGeminiImageRequest(input, new Date("2026-11-06T12:00:00Z"), "gemma-4-31b-it");
+  assert.equal(gemmaRequest.generationConfig.thinkingConfig, undefined, "Gemma does not receive Gemini-only thinking settings");
+  assert.deepEqual(gemmaRequest.contents.at(-1).parts.at(-1), { inlineData: image });
 });
 
 test("image validation rejects bad base64, mismatched signatures, and payloads over 3 MB", () => {
@@ -149,6 +156,36 @@ test("image route streams visible Gemini text and excludes hidden thought parts"
   assert.deepEqual(captured.body.contents.at(-1).parts.at(-1).inlineData, image);
 });
 
+test("image route prefers catalog-verified Gemma 4 and falls back to Gemini for unsupported vision", async () => {
+  const models = [
+    { name: "models/gemma-4-31b-it", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 8192, outputTokenLimit: 8192 },
+    { name: "models/gemini-3.8-flash", supportedGenerationMethods: ["streamGenerateContent"], inputTokenLimit: 8192, outputTokenLimit: 8192 },
+  ];
+  const calls = [];
+  const upstream = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "The image shows a chart." }] } }] })}\n\n`;
+  await withServer(createSseApp({
+    getGeminiModels: async () => models,
+    fetchImpl: async (url, init) => {
+      const call = { url: String(url), body: JSON.parse(init.body) };
+      calls.push(call);
+      return call.url.includes("gemma-4-31b-it")
+        ? new Response("model has no image input", { status: 400 })
+        : new Response(upstream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    },
+  }), async (url) => {
+    const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    const events = (await response.text()).split(/\r?\n/).filter((line) => line.startsWith("data: "))
+      .map((line) => JSON.parse(line.slice(6)));
+    assert.deepEqual(events.filter((event) => event.model).map((event) => event.model), ["gemma-4-31b-it", "gemini-3.8-flash"]);
+    assert.match(events.find((event) => event.activity?.status === "running" && event.activity.label.includes("Gemma"))?.activity.label ?? "", /Gemini vision/);
+    assert.equal(events.filter((event) => event.content).map((event) => event.content).join(""), "The image shows a chart.");
+    assert.equal(events.at(-1).done, true);
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.generationConfig.thinkingConfig, undefined);
+  assert.deepEqual(calls[0].body.contents.at(-1).parts.at(-1).inlineData, image);
+});
+
 test("invalid image signatures and provider failures are safe and bounded", async () => {
   let calls = 0;
   await withServer(createSseApp({
@@ -167,8 +204,9 @@ test("invalid image signatures and provider failures are safe and bounded", asyn
     assert.match(text, /temporarily rate-limited/);
     assert.equal(text.includes("DO NOT RETURN UPSTREAM BODY"), false);
   });
-  assert.equal(geminiImageErrorMessage(401), "Gemini could not authorize this request. Please check the Gemini API key in project secrets.");
+  assert.equal(geminiImageErrorMessage(401), "Gemini could not authorize this request. Check that the Gemini API key is valid and has access to the selected model.");
   assert.equal(geminiImageErrorMessage(429), "Gemini is temporarily rate-limited. Please try again later.");
+  assert.match(geminiImageErrorMessage(404), /model is unavailable/);
 });
 
 test("closing the browser stream aborts the upstream Gemini request", async () => {
