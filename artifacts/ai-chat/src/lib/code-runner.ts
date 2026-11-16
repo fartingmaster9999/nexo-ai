@@ -127,7 +127,7 @@ export function readPreviewReview(previewId: string): PreviewReview | undefined 
 /** The caller must first validate the opaque origin, exact frame, and preview ID. */
 export function reportPreviewInteractions(previewId: string, value: unknown): boolean {
   const interactions = sanitizeInteractionResult(value);
-  if (!interactions) return false;
+  if (!interactions || interactions.status === 'running') return false;
   const existing = previewResults.get(previewId);
   if (!existing || existing.interactions || Date.now() - existing.savedAt > PREVIEW_RESULT_TTL_MS ||
       !interactionResultMatchesPlan(interactions, existing.interactionPlan)) return false;
@@ -142,6 +142,12 @@ export function readPreviewInteractions(previewId: string): InteractionResult | 
   const cached = previewResults.get(previewId);
   if (!cached?.interactions || Date.now() - cached.savedAt > PREVIEW_RESULT_TTL_MS) return undefined;
   return sanitizeInteractionResult(cached.interactions) ?? undefined;
+}
+
+export function readPreviewInteractionPlan(previewId: string): InteractionPlan | null | undefined {
+  const cached = previewResults.get(previewId);
+  if (!cached || Date.now() - cached.savedAt > PREVIEW_RESULT_TTL_MS) return undefined;
+  return cached.interactionPlan;
 }
 
 /** Called only after the parent validates the exact sandbox frame and its preview ID. */
@@ -207,12 +213,21 @@ function previewInstrumentation(previewId: string) {
 }
 
 /** HTML previews run with an opaque origin and a restrictive policy; never add allow-same-origin. */
-export function makePreviewHtml(code: string, previewId: string): string {
+export function makePreviewHtml(
+  code: string,
+  previewId: string,
+  options: { runInteractionChecks?: boolean } = {},
+): string {
+  const runInteractionChecks = options.runInteractionChecks !== false;
   rememberPreviewResult(previewId, {
-    diagnostics: [], complete: false, savedAt: Date.now(), interactionPlan: readInteractionPlan(code),
+    diagnostics: [], complete: false, savedAt: Date.now(),
+    interactionPlan: runInteractionChecks ? readInteractionPlan(code) : undefined,
   });
   const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";
-  const head = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${previewInstrumentation(previewId)}</script><script>${previewReviewInstrumentation(previewId)}</script><script>${previewFormInstrumentation()}</script><script>${previewInteractionInstrumentation(previewId, code)}</script>`;
+  const interactionScript = runInteractionChecks
+    ? `<script>${previewInteractionInstrumentation(previewId, code)}</script>`
+    : '';
+  const head = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${previewInstrumentation(previewId)}</script><script>${previewReviewInstrumentation(previewId)}</script><script>${previewFormInstrumentation()}</script>${interactionScript}`;
   const source = code.replace(/^\s*<!doctype\b[^>]*>/i, '');
   let documentHtml: string;
   if (/<head\b[^>]*>/i.test(source)) {

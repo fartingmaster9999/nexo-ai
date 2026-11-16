@@ -6,6 +6,7 @@ import {
   executeCode,
   makePreviewHtml,
   MAX_PREVIEW_DIAGNOSTICS,
+  readPreviewInteractionPlan,
   reportPreviewDiagnostics,
   reportPreviewReview,
   reportPreviewInteractions,
@@ -27,13 +28,17 @@ import {
   createSavedProject,
   projectLanguage,
   readSavedProject,
+  readFailedAgentCandidate,
   writeSavedProject,
   type ProjectFile,
   type SavedProject,
 } from '@/lib/project-workspace';
 import './code-workspace.css';
 import { WORKSPACE_DRAFT_KEY } from '@/lib/workspace-recovery';
-import { formatInteractionResult, interactionChecksHaveIssues, type InteractionResult } from '@/lib/preview-interactions';
+import {
+  formatInteractionResult, interactionChecksHaveIssues, interactionResultMatchesPlan, sanitizeInteractionResult,
+  type InteractionResult,
+} from '@/lib/preview-interactions';
 
 type Draft = { language: RunLanguage; code: string; edited: boolean };
 export type AgentWorkspaceTask = {
@@ -46,6 +51,15 @@ export type AgentWorkspaceTask = {
   previewHtml?: string;
   previewId?: string;
   previewDiagnostics?: PreviewDiagnostic[];
+  previewInteractions?: InteractionResult;
+  candidatePreviewHtml?: string;
+  candidatePreviewId?: string;
+  candidateDiagnostics?: PreviewDiagnostic[];
+  candidateProjectFiles?: ProjectFile[];
+  candidateProjectEntrypoint?: string;
+  failedCandidateFiles?: ProjectFile[];
+  failedCandidateEntrypoint?: string;
+  candidateStorageError?: string;
   projectFiles?: ProjectFile[];
   projectEntrypoint?: string;
   projectStorageError?: string;
@@ -77,7 +91,7 @@ type Props = {
   waiting?: boolean;
   visible?: boolean;
 };
-type View = 'preview' | 'code' | 'console';
+type View = 'preview' | 'code' | 'console' | 'candidate';
 
 export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, onAskFix, canAsk, isLight, agentCode, immersive = false, waiting = false, visible = true }: Props) {
   const [view, setView] = useState<View>('preview');
@@ -94,13 +108,17 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   const [previewDiagnostics, setPreviewDiagnostics] = useState<PreviewDiagnostic[]>([]);
   const [previewComplete, setPreviewComplete] = useState(false);
   const [previewInteractions, setPreviewInteractions] = useState<InteractionResult>();
+  const [candidateDiagnostics, setCandidateDiagnostics] = useState<PreviewDiagnostic[]>([]);
+  const [candidatePath, setCandidatePath] = useState('');
   const [hasRun, setHasRun] = useState(false);
   const [storageError, setStorageError] = useState('');
   const [project, setProject] = useState<SavedProject | null>(null);
+  const [storedFailedCandidate, setStoredFailedCandidate] = useState<SavedProject | null>(null);
   const [activeProjectPath, setActiveProjectPath] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const consoleRef = useRef<HTMLDivElement>(null);
   const previewFrameRef = useRef<HTMLIFrameElement>(null);
+  const candidateFrameRef = useRef<HTMLIFrameElement>(null);
   const previewDiagnosticsRef = useRef<PreviewDiagnostic[]>([]);
   const followConsoleRef = useRef(true);
   const outputsRef = useRef(outputs);
@@ -135,20 +153,31 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
   useEffect(() => {
     if (!conversationId) {
       setProject(null);
+      setStoredFailedCandidate(null);
       setActiveProjectPath('');
       return;
     }
+    let saved: SavedProject | null = null;
     try {
-      const saved = readSavedProject(localStorage, conversationId);
-      setProject(saved);
-      setActiveProjectPath(saved?.entrypoint ?? saved?.files[0]?.path ?? '');
+      saved = readSavedProject(localStorage, conversationId);
       setStorageError('');
     } catch (error) {
       setProject(null);
-      setActiveProjectPath('');
       setStorageError(error instanceof Error ? error.message : 'Saved project data could not be read.');
     }
+    setProject(saved);
+    setActiveProjectPath(saved?.entrypoint ?? saved?.files[0]?.path ?? '');
+    try { setStoredFailedCandidate(readFailedAgentCandidate(localStorage, conversationId)); }
+    catch { setStoredFailedCandidate(null); }
   }, [conversationId]);
+
+  useEffect(() => {
+    if (agentCode?.status === 'complete') setStoredFailedCandidate(null);
+  }, [agentCode?.id, agentCode?.status]);
+
+  useEffect(() => {
+    if (agentCode?.candidatePreviewId) setView('preview');
+  }, [agentCode?.candidatePreviewId]);
 
   useEffect(() => {
     if (!agentCode?.projectFiles || !agentCode.projectEntrypoint) return;
@@ -221,14 +250,18 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       previewDiagnosticsRef.current = initialDiagnostics;
       setPreviewDiagnostics(initialDiagnostics);
     }
+    if (agentCode.previewInteractions) setPreviewInteractions(agentCode.previewInteractions);
+    if (agentCode.candidateDiagnostics) setCandidateDiagnostics(agentCode.candidateDiagnostics);
   }, [
     agentCode?.id, agentCode?.outputs, agentCode?.status, agentCode?.error,
-    agentCode?.previewHtml, agentCode?.previewId, agentCode?.previewDiagnostics,
+    agentCode?.previewHtml, agentCode?.previewId, agentCode?.previewDiagnostics, agentCode?.previewInteractions,
+    agentCode?.candidateDiagnostics,
   ]);
 
   useLayoutEffect(() => {
     if (!previewId) return;
-    setPreviewInteractions(undefined);
+    setPreviewInteractions(agentCode?.previewInteractions);
+    const interactionPlan = readPreviewInteractionPlan(previewId);
     let completed = false;
     let runtimeComplete = false;
     let interactionsComplete = false;
@@ -280,6 +313,11 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         interactionsComplete = true;
         setPreviewInteractions(readPreviewInteractions(previewId));
         if (runtimeComplete) finish();
+      } else if (data.type === 'nexo-preview-interaction-progress') {
+        if (completed || Object.keys(data).sort().join() !== 'previewId,result,type') return;
+        const progress = sanitizeInteractionResult(data.result);
+        if (!progress || progress.status !== 'running' || !interactionResultMatchesPlan(progress, interactionPlan)) return;
+        setPreviewInteractions(progress);
       } else if (data.type === 'nexo-preview-complete') {
         if (completed || runtimeComplete || !Array.isArray(data.diagnostics) || data.diagnostics.length > MAX_PREVIEW_DIAGNOSTICS) return;
         runtimeComplete = true;
@@ -294,6 +332,78 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       window.removeEventListener('message', receive);
     };
   }, [previewId]);
+
+  useLayoutEffect(() => {
+    const id = agentCode?.candidatePreviewId;
+    if (!id || agentCode?.status !== 'running' || !agentCode.candidatePreviewHtml) return;
+    setPreviewInteractions({ status: 'running', steps: [] });
+    setCandidateDiagnostics([]);
+    let completed = false;
+    let runtimeComplete = false;
+    const interactionPlan = readPreviewInteractionPlan(id);
+    let interactionsComplete = false;
+    const diagnostics: PreviewDiagnostic[] = [];
+    const merge = (values: unknown[]) => {
+      const seen = new Set(diagnostics.map((entry) => `${entry.kind}\n${entry.message}\n${entry.source ?? ''}\n${entry.line ?? ''}`));
+      for (const value of values.slice(0, MAX_PREVIEW_DIAGNOSTICS)) {
+        const diagnostic = sanitizePreviewDiagnostic(value);
+        if (!diagnostic) continue;
+        const key = `${diagnostic.kind}\n${diagnostic.message}\n${diagnostic.source ?? ''}\n${diagnostic.line ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (diagnostics.length < MAX_PREVIEW_DIAGNOSTICS - 1) diagnostics.push(diagnostic);
+        else {
+          diagnostics.push({ kind: 'limit', message: 'Additional preview errors were omitted.' });
+          break;
+        }
+      }
+      setCandidateDiagnostics([...diagnostics]);
+      return [...diagnostics];
+    };
+    const finish = (values: unknown[] = []) => {
+      if (completed) return;
+      completed = true;
+      window.clearTimeout(timer);
+      reportPreviewDiagnostics(id, merge(values), true);
+    };
+    const timer = window.setTimeout(() => {
+      finish([{ kind: 'timeout', message: 'The candidate browser preview did not finish loading in time.' }]);
+    }, 12_000);
+    const receive = (event: MessageEvent) => {
+      const frame = candidateFrameRef.current;
+      if (event.origin !== 'null' || event.source !== frame?.contentWindow) return;
+      const data = event.data;
+      if (!data || typeof data !== 'object' || Array.isArray(data) || data.previewId !== id) return;
+      if (data.type === 'nexo-preview-diagnostic') {
+        const diagnostic = sanitizePreviewDiagnostic(data.diagnostic);
+        if (!diagnostic || completed) return;
+        reportPreviewDiagnostics(id, merge([diagnostic]), false);
+      } else if (data.type === 'nexo-preview-review') {
+        if (!completed) reportPreviewReview(id, data.review);
+      } else if (data.type === 'nexo-preview-interaction-progress') {
+        if (completed || Object.keys(data).sort().join() !== 'previewId,result,type') return;
+        const progress = sanitizeInteractionResult(data.result);
+        if (!progress || progress.status !== 'running' || !interactionResultMatchesPlan(progress, interactionPlan)) return;
+        setPreviewInteractions(progress);
+      } else if (data.type === 'nexo-preview-interactions') {
+        if (completed || interactionsComplete || Object.keys(data).sort().join() !== 'previewId,result,type' ||
+            !reportPreviewInteractions(id, data.result)) return;
+        interactionsComplete = true;
+        setPreviewInteractions(readPreviewInteractions(id));
+        if (runtimeComplete) finish();
+      } else if (data.type === 'nexo-preview-complete') {
+        if (completed || runtimeComplete || !Array.isArray(data.diagnostics) || data.diagnostics.length > MAX_PREVIEW_DIAGNOSTICS) return;
+        runtimeComplete = true;
+        reportPreviewDiagnostics(id, merge(data.diagnostics), false);
+        if (interactionsComplete) finish();
+      }
+    };
+    window.addEventListener('message', receive);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('message', receive);
+    };
+  }, [agentCode?.candidatePreviewHtml, agentCode?.candidatePreviewId, agentCode?.status]);
 
   useEffect(() => {
     const current = abortRef.current;
@@ -557,6 +667,47 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
 
   const isHtml = workspaceLanguage === 'html';
   const agentRunning = agentCode?.status === 'running';
+  const failedCandidateFiles = agentCode?.failedCandidateFiles ?? agentCode?.candidateProjectFiles ?? storedFailedCandidate?.files ?? [];
+  const candidateEntrypoint = agentCode?.failedCandidateEntrypoint ?? agentCode?.candidateProjectEntrypoint ?? storedFailedCandidate?.entrypoint;
+  const defaultCandidatePath = failedCandidateFiles.some((file) => file.path === candidateEntrypoint)
+    ? candidateEntrypoint
+    : failedCandidateFiles[0]?.path;
+  const selectedCandidateFile = failedCandidateFiles.find((file) => file.path === candidatePath) ?? failedCandidateFiles[0];
+  const candidateCode = selectedCandidateFile?.content ?? '';
+  useEffect(() => {
+    setCandidatePath((current) => failedCandidateFiles.some((file) => file.path === current)
+      ? current
+      : defaultCandidatePath ?? '');
+  }, [agentCode?.failedCandidateFiles, storedFailedCandidate]);
+  useEffect(() => {
+    if (!failedCandidateFiles.length && view === 'candidate') setView('preview');
+  }, [failedCandidateFiles.length, view]);
+  const referencePreviewRect = previewFrameRef.current?.getBoundingClientRect();
+  const candidateViewportWidth = Math.max(1, Math.round(referencePreviewRect?.width || window.innerWidth));
+  const candidateViewportHeight = Math.max(1, Math.round(referencePreviewRect?.height || window.innerHeight));
+  const candidateRunner = agentRunning && agentCode?.candidatePreviewHtml && agentCode.candidatePreviewId ? (
+    <iframe
+      ref={candidateFrameRef}
+      className="ws-candidate-runner"
+      sandbox="allow-scripts"
+      srcDoc={agentCode.candidatePreviewHtml}
+      title="Hidden isolated Agent candidate test"
+      aria-hidden="true"
+      tabIndex={-1}
+      style={{
+        position: 'fixed',
+        left: `-${candidateViewportWidth + 100}px`,
+        top: 0,
+        width: candidateViewportWidth,
+        height: candidateViewportHeight,
+        opacity: 0,
+        pointerEvents: 'none',
+        zIndex: -1,
+        border: 0,
+      }}
+      data-testid="agent-candidate-runner"
+    />
+  ) : null;
   const runDisabled = project ? !activeProjectFile?.content.trim() || agentRunning : !draft.code.trim() || agentRunning;
   const editorNode = project ? (
     <ProjectFilesPanel
@@ -582,6 +733,41 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         onChange={(v) => { if (v !== draft.code) setDraft({ code: v }); }} aria-label="Code editor" data-testid="editor-code" />
     </div>
   );
+  const interactionTraceNode = previewInteractions ? (
+    <section
+      className={`ws-browser-trace status-${previewInteractions.status}`}
+      role={previewInteractions.status === 'running' ? 'status' : interactionChecksHaveIssues(previewInteractions) ? 'alert' : 'status'}
+      aria-live={previewInteractions.status === 'running' ? 'polite' : 'off'}
+      data-testid="agent-browser-trace"
+    >
+      <div className="ws-browser-trace-head">
+        <strong>{previewInteractions.status === 'running' ? 'Testing the candidate' : 'Agent browser checks'}</strong>
+        <span>{previewInteractions.status === 'running' ? 'Running' :
+          previewInteractions.status === 'invalid' || interactionChecksHaveIssues(previewInteractions) ? 'Needs attention' :
+          previewInteractions.status === 'not-requested' ? 'Not verified' : 'Finished'}</span>
+      </div>
+      <small className="ws-browser-trace-note">The saved preview stays unchanged until the candidate passes its checks.</small>
+      {previewInteractions.steps.length > 0 ? (
+        <ol>
+          {previewInteractions.steps.map((step) => (
+            <li key={`${step.step}-${step.action}`} className={step.reason === 'ok' ? 'is-pass' : 'is-fail'}>
+              <span>Step {step.step}</span>
+              <code>{step.action}</code>
+              <small>{step.reason === 'ok' ? 'passed' : step.reason === 'target' ? 'target not found' :
+                step.reason === 'mismatch' ? 'check did not match' : step.reason === 'timeout' ? 'timed out' :
+                step.reason === 'unsupported' ? 'not supported' : 'action failed'}</small>
+              {step.observation && <small>{step.observation}</small>}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p>{previewInteractions.status === 'running' ? 'Starting the bounded local interaction checks…' :
+          previewInteractions.status === 'not-requested' ? 'No interaction plan was supplied for this preview.' :
+          'The browser interaction plan could not be run.'}</p>
+      )}
+      <small className="ws-browser-trace-note">Checks run only inside the isolated project preview. No external website is controlled.</small>
+    </section>
+  ) : null;
   const previewNode = preview ? (
     <div className="ws-preview-pane" data-testid="preview-pane">
       <iframe
@@ -597,12 +783,13 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       {previewComplete && previewDiagnostics.length === 0 && (
         <p className="ws-preview-status" role="status">Preview loaded. No runtime errors were reported.</p>
       )}
-      {previewComplete && (
+      {previewComplete && !previewInteractions && (
         <pre className="ws-preview-status" role={interactionChecksHaveIssues(previewInteractions) ? 'alert' : 'status'}
           data-testid="preview-interaction-results" style={{ whiteSpace: 'pre-wrap' }}>
           {formatInteractionResult(previewInteractions)}
         </pre>
       )}
+      {interactionTraceNode}
       {previewDiagnostics.length > 0 && (
         <div className="ws-preview-diagnostics" role="alert" data-testid="preview-diagnostics">
           <strong>Preview diagnostics</strong>
@@ -650,9 +837,12 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
       { id: 'preview', label: 'Preview', Icon: Eye },
       { id: 'code', label: 'Code', Icon: Code2 },
       { id: 'console', label: 'Console', Icon: ScrollText },
+      ...(failedCandidateFiles.length ? [{ id: 'candidate' as const, label: 'Draft', Icon: Code2 }] : []),
     ];
     const issueCount = previewDiagnostics.length + (runError ? 1 : 0) + outputs.filter((o) => o.kind === 'stderr').length;
     return (
+      <>
+      {candidateRunner}
       <section ref={panelRef} id="code-workspace" className="workspace ws-immersive" aria-label="Agent workspace" data-testid="panel-workspace" data-view={view} tabIndex={-1}>
         <header className="wsi-head">
           <button type="button" className="wsi-back" onClick={close} aria-label="Back to chat. Your project stays saved." data-testid="button-close-workspace">
@@ -675,11 +865,14 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
           <div className="wsi-actions">
             {view === 'code' && <button type="button" className={`ws-btn wrap-toggle ${wrapLines ? 'is-on' : ''}`} aria-label="Wrap code lines"
               aria-pressed={wrapLines} onClick={() => setWrapLines((value) => !value)} data-testid="button-toggle-wrap">Wrap</button>}
-            <CopyCodeButton text={workspaceCode} label={project && activeProjectFile ? `Copy ${activeProjectFile.path}` : 'Copy workspace code'} />
-            {runButton}
+            {view === 'candidate'
+              ? <CopyCodeButton text={candidateCode} label={selectedCandidateFile ? `Copy ${selectedCandidateFile.path} candidate` : 'Copy candidate code'} />
+              : <CopyCodeButton text={workspaceCode} label={project && activeProjectFile ? `Copy ${activeProjectFile.path}` : 'Copy workspace code'} />}
+            {view !== 'candidate' && runButton}
           </div>
         </header>
         {storageError && <div className="ws-banner" role="alert">{storageError}</div>}
+        {agentCode?.candidateStorageError && <div className="ws-banner" role="status">{agentCode.candidateStorageError}</div>}
         <div className="wsi-body">
           {waiting && !preview ? (
             <div className="wsi-waiting" role="status" aria-live="polite" data-testid="status-agent-waiting">
@@ -705,6 +898,7 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
                     {!agentRunning && !isHtml && <button type="button" className="ws-mini" onClick={() => setView('console')} data-testid="button-open-console">Open console</button>}
                   </div>
                 )}
+                {!previewNode && interactionTraceNode}
               </div>
               <div id="wsi-pane-code" role="tabpanel" aria-labelledby="wsi-tab-code" className="wsi-pane" hidden={view !== 'code'}>
                 {!project && editorLanguage.error && <div className="ws-language-status" role="status">
@@ -717,14 +911,42 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
                 <div className="ws-out-head"><span>Console</span><span className="ws-out-actions">{askFixButton}</span></div>
                 {consoleNode}
               </div>
+              {failedCandidateFiles.length > 0 && (
+                <div id="wsi-pane-candidate" role="tabpanel" aria-labelledby="wsi-tab-candidate" className="wsi-pane ws-candidate-pane" hidden={view !== 'candidate'}>
+                  <div className="ws-candidate-banner" role="status">
+                    <strong>Unverified draft</strong>
+                    <span>The last verified project and preview were kept. This candidate was not saved.</span>
+                  </div>
+                  <div className="ws-candidate-files" role="tablist" aria-label="Candidate project files">
+                    {failedCandidateFiles.map((file) => (
+                      <button key={file.path} type="button" role="tab" aria-selected={selectedCandidateFile?.path === file.path}
+                        className={selectedCandidateFile?.path === file.path ? 'is-on' : ''}
+                        onClick={() => setCandidatePath(file.path)} data-testid={`tab-candidate-${file.path}`}>
+                        {file.path}
+                      </button>
+                    ))}
+                  </div>
+                  {selectedCandidateFile
+                    ? <pre className="ws-candidate-source"><code>{selectedCandidateFile.content}</code></pre>
+                    : <p className="ws-candidate-empty">No candidate files were retained.</p>}
+                  {candidateDiagnostics.length > 0 && (
+                    <ul className="ws-candidate-errors" aria-label="Candidate preview errors">
+                      {candidateDiagnostics.map((diagnostic, index) => <li key={`${diagnostic.kind}-${index}`}>{diagnostic.kind}: {diagnostic.message}</li>)}
+                    </ul>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
       </section>
+      </>
     );
   }
 
   return (
+    <>
+    {candidateRunner}
     <aside ref={panelRef} id="code-workspace" className="workspace workspace-resizable" style={{ ['--workspace-width' as string]: `${workspaceSize.width}px` }} aria-label="Code workspace" data-testid="panel-workspace" tabIndex={-1}>
       <div className="workspace-resizer" role="separator" aria-orientation="vertical" aria-label="Resize code workspace"
         aria-controls="code-workspace" tabIndex={0} aria-valuemin={workspaceSize.bounds.min} aria-valuemax={workspaceSize.bounds.max}
@@ -781,5 +1003,6 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         {isHtml && previewNode ? previewNode : consoleNode}
       </div>
     </aside>
+    </>
   );
 }

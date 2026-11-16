@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { copyRawCode, rawCodeFromSource } from '../src/lib/code-clipboard.ts';
-import { makePreviewHtml, sanitizePreviewDiagnostic, reportPreviewReview, reportPreviewDiagnostics, readPreviewReview } from '../src/lib/code-runner.ts';
+import { makePreviewHtml, readPreviewInteractionPlan, sanitizePreviewDiagnostic, reportPreviewReview, reportPreviewDiagnostics, readPreviewReview } from '../src/lib/code-runner.ts';
 import { sanitizePreviewReview, formatPreviewReview, previewReviewInstrumentation, previewReviewHasIssues } from '../src/lib/preview-review.ts';
 test('Agent treats browser structural defects as repairable failures, not successful builds', () => {
   const healthy = { emptyPage: false, horizontalOverflow: false, brokenImages: 0, unlabeledControls: 0 };
@@ -22,9 +22,13 @@ import {
   createSavedProject,
   deleteSavedProject,
   createAgentProject,
+  deleteFailedAgentCandidate,
+  readFailedAgentCandidate,
+  promoteVerifiedAgentProject,
   readSavedProject,
   selectedProjectFiles,
   validateProjectFiles,
+  writeFailedAgentCandidate,
   writeSavedProject,
 } from '../src/lib/project-workspace.ts';
 
@@ -104,6 +108,13 @@ test('HTML preview is instrumented, network-restricted, and diagnostics are boun
   assert.doesNotMatch(preview, /allow-same-origin/);
   assert.doesNotMatch(preview, /allow-forms/);
   assert.match(preview, /form-action 'none'/);
+  const displayOnly = makePreviewHtml(
+    '<button id="action">Action</button><script type="application/json" id="nexo-interaction-checks">{"steps":[]}</script>',
+    'display-only',
+    { runInteractionChecks: false },
+  );
+  assert.doesNotMatch(displayOnly, /nexo-preview-interaction-progress/);
+  assert.equal(readPreviewInteractionPlan('display-only'), undefined);
 
   const diagnostic = sanitizePreviewDiagnostic({
     kind: 'error',
@@ -241,9 +252,12 @@ test('project files are bounded, path-safe, isolated per conversation, and share
   writeSavedProject(storage, 'chat/one', project);
   assert.deepEqual(readSavedProject(storage, 'chat/one'), project);
   assert.deepEqual(readSavedProject(storage, 'chat/two'), null);
+  writeFailedAgentCandidate(storage, 'chat/one', project);
+  assert.deepEqual(readFailedAgentCandidate(storage, 'chat/one'), project);
   assert.deepEqual(selectedProjectFiles(project), [files[1]]);
   deleteSavedProject(storage, 'chat/one');
   assert.deepEqual(readSavedProject(storage, 'chat/one'), null, 'deleting a conversation also removes its project record');
+  assert.deepEqual(readFailedAgentCandidate(storage, 'chat/one'), null, 'deleting a conversation also removes its failed candidate');
 });
 
 test('HTML project preview embeds only local CSS and classic JavaScript assets', () => {
@@ -293,6 +307,33 @@ test('partial Agent edits preserve assets and reject broken updates before repla
     { path: 'index.html', content: '<link rel="stylesheet" href="missing.css">' },
   ], 'index.html', revised), /stylesheet.*not found/);
   assert.equal(JSON.stringify(revised), snapshot, 'invalid updates do not mutate the working project');
+});
+
+test('unverified Agent candidates never replace the last verified project', () => {
+  const records = new Map();
+  const storage = {
+    getItem: (key) => records.get(key) ?? null,
+    setItem: (key, value) => records.set(key, value),
+    removeItem: (key) => records.delete(key),
+  };
+  const original = createAgentProject([{ path: 'index.html', content: '<h1>Working</h1>' }], 'index.html', null);
+  const candidate = createAgentProject([{ path: 'index.html', content: '<h1>Broken</h1>' }], 'index.html', original);
+  writeSavedProject(storage, 'chat', original);
+  writeFailedAgentCandidate(storage, 'chat', candidate);
+  assert.equal(promoteVerifiedAgentProject(storage, 'chat', candidate, {
+    executionSucceeded: true, browserChecksPassed: false,
+  }), false);
+  assert.equal(readSavedProject(storage, 'chat').files[0].content, '<h1>Working</h1>');
+  assert.equal(readFailedAgentCandidate(storage, 'chat').files[0].content, '<h1>Broken</h1>');
+  assert.equal(promoteVerifiedAgentProject(storage, 'chat', candidate, {
+    executionSucceeded: false, browserChecksPassed: true,
+  }), false);
+  assert.equal(readSavedProject(storage, 'chat').files[0].content, '<h1>Working</h1>');
+  assert.equal(promoteVerifiedAgentProject(storage, 'chat', candidate, {
+    executionSucceeded: true, browserChecksPassed: true,
+  }), true);
+  assert.equal(readSavedProject(storage, 'chat').files[0].content, '<h1>Broken</h1>');
+  assert.equal(readFailedAgentCandidate(storage, 'chat'), null);
 });
 
 test('deferred project scripts run after the DOM in order without losing shared globals', () => {

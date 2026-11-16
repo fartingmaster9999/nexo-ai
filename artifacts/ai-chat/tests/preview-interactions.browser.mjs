@@ -31,6 +31,12 @@ const counter = broken => `<button id="increment">Increment</button><output id="
   <script>let count=0;document.querySelector('#increment').onclick=()=>{
     setTimeout(()=>document.querySelector('#count').textContent=String(count${broken ? '' : '+=1'}),120);
   };</script>${manifest(counterSteps)}`;
+const inspectScroll = `<div id="panel" style="height:40px;overflow:auto"><button id="action">Go</button><div style="height:220px">Local content</div></div>
+  ${manifest([
+    { action: 'inspect', selector: '#action' },
+    { action: 'scroll', selector: '#panel', direction: 'down', distance: 80 },
+    { action: 'assertCount', selector: '#panel button', value: 1 },
+  ])}`;
 
 await withFixture('tests/preview-interactions.html', async ({ evaluate, requests }) => {
   await waitFor(() => evaluate('!!window.__interactions'), 'interaction fixture');
@@ -57,6 +63,20 @@ await withFixture('tests/preview-interactions.html', async ({ evaluate, requests
     assert.equal(await evaluate(`(() => {try{return document.querySelector('[data-testid="frame-preview"]').contentWindow.document.body.innerText;}catch(_){return 'blocked';}})()`), 'blocked');
     console.log(`PASS ${name}`);
   }
+  const inspection = await run(inspectScroll);
+  assert.equal(inspection.result.status, 'complete');
+  assert.deepEqual(inspection.result.steps.map(step => step.action), ['inspect', 'scroll', 'assertCount']);
+  assert.equal(inspection.result.steps[0].observation, 'button');
+  assert.equal(inspection.result.steps[1].observation, 'scrolled');
+  assert.ok(inspection.result.steps.every(step => step.reason === 'ok'));
+  assert.doesNotMatch(JSON.stringify(inspection.result), /Local content|Go/);
+  console.log('PASS bounded inspect and scroll actions');
+  const stagedCandidate = await evaluate(`window.__interactions.runCandidate(${JSON.stringify(inspectScroll)})`);
+  assert.equal(stagedCandidate.result.status, 'complete');
+  assert.deepEqual(stagedCandidate.result.steps.map(step => step.action), ['inspect', 'scroll', 'assertCount']);
+  assert.deepEqual(stagedCandidate.diagnostics, []);
+  assert.match(stagedCandidate.text, /Only the supplied local checks passed/);
+  console.log('PASS hidden candidate preview and live interaction reporting');
   const invalid = await run(`<button id="increment">Increment</button>${manifest([{ action: 'eval', selector: '#increment', value: 'parent.document.body' }])}`);
   assert.equal(invalid.result.status, 'invalid');
   const noPlan = await run('<h1>No interaction plan</h1>');

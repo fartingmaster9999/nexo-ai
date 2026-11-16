@@ -25,7 +25,7 @@ import { ResearchBriefPanel } from '@/components/research-brief-panel';
 import NotFound from '@/pages/not-found';
 import { LiveReplyIndicator, NoticeBanner, ThinkingPanel, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
-import { executeCode, formatPreviewReview, readPreviewReview, readPreviewInteractions, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
+import { executeCode, makePreviewHtml, formatPreviewReview, readPreviewReview, readPreviewInteractions, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
 import { formatInteractionResult, interactionChecksHaveIssues } from '@/lib/preview-interactions';
 import { previewReviewHasIssues } from '@/lib/preview-review';
 import { startRequestDeadline, RESPONSE_DEADLINE_MS, AGENT_BUILD_DEADLINE_MS, AGENT_REVIEW_DEADLINE_MS } from '@/lib/request-deadlines';
@@ -39,10 +39,12 @@ import {
   bundleHtmlProject,
   createAgentProject,
   deleteSavedProject,
+  promoteVerifiedAgentProject,
   projectLanguage,
+  writeFailedAgentCandidate,
   readSavedProject,
   selectedProjectFiles,
-  writeSavedProject,
+  type SavedProject,
 } from '@/lib/project-workspace';
 import { useConversations } from '@/hooks/use-conversations';
 import { hasSentUserMessage, type Conversation } from '@/lib/conversation-storage';
@@ -902,6 +904,7 @@ function Home() {
     let connectTimeout: number | null = null;
     try {
       let agentHistory: AgentToolExchange[] = resume?.history ?? [];
+      let stagedProject: SavedProject | null = null;
       const programReviews = createProgramReviewMemo();
       let agentToolCalls = resume?.toolCalls ?? 0;
       let deferredRetries = resume?.retries ?? 0;
@@ -1058,11 +1061,13 @@ function Home() {
         if (requestAgent) requestBody.agentRetryCount = deferredRetries;
         if (requestAgent && agentFinalize) requestBody.agentFinalize = true;
         if (requestAgent) {
-          let savedProject = null;
-          try {
-            savedProject = readSavedProject(localStorage, conversationId);
-          } catch (error) {
-            throw new Error(error instanceof Error ? error.message : 'Saved project data could not be read.');
+          let savedProject: SavedProject | null = stagedProject;
+          if (!savedProject) {
+            try {
+              savedProject = readSavedProject(localStorage, conversationId);
+            } catch (error) {
+              throw new Error(error instanceof Error ? error.message : 'Saved project data could not be read.');
+            }
           }
           const sharedFiles = selectedProjectFiles(savedProject);
           if (agentHistory.length) requestBody.agentHistory = privateAgentHistory(agentHistory, savedProject);
@@ -1179,13 +1184,15 @@ function Home() {
           code = tool.arguments.code;
         }
         let projectStorageError = '';
+        let previousProject: SavedProject | null = null;
+        let verifiedProject: SavedProject | null = null;
+        let candidateProject: SavedProject | null = null;
         if (projectFiles && projectEntrypoint) {
-          let previousProject = null;
-          try { previousProject = readSavedProject(localStorage, conversationId); }
+          try { verifiedProject = readSavedProject(localStorage, conversationId); }
           catch (error) { projectStorageError = error instanceof Error ? error.message : 'Saved project data could not be read.'; }
-          let nextProject: ReturnType<typeof createAgentProject>;
+          previousProject = stagedProject ?? verifiedProject;
           try {
-            nextProject = createAgentProject(projectFiles, projectEntrypoint, previousProject);
+            candidateProject = createAgentProject(projectFiles, projectEntrypoint, previousProject);
           } catch (error) {
             const detail = error instanceof Error ? error.message.slice(0, 800) : 'The project update is invalid.';
             agentHistory = [...completedHistory, {
@@ -1200,13 +1207,17 @@ function Home() {
             saveContinuation();
             continue;
           }
-          projectFiles = nextProject.files;
-          try {
-            if (!projectStorageError) writeSavedProject(localStorage, conversationId, nextProject);
-          } catch {
-            projectStorageError = 'Project changes could not be saved in this browser. Export a backup before leaving.';
-          }
+          projectFiles = candidateProject.files;
+          stagedProject = candidateProject;
           saveContinuation('executing');
+        }
+        let candidateStorageError = '';
+        if (isProject && candidateProject) {
+          try {
+            writeFailedAgentCandidate(localStorage, conversationId, candidateProject);
+          } catch {
+            candidateStorageError = 'The unverified draft could not be saved for later, but it remains available in this workspace.';
+          }
         }
         const task: AgentWorkspaceTask = {
           id: tool.callId,
@@ -1214,7 +1225,15 @@ function Home() {
           code,
           outputs: [],
           status: 'running',
-          ...(isProject ? { projectFiles, projectEntrypoint, projectStorageError: projectStorageError || undefined } : {}),
+          ...(isProject ? {
+            ...(verifiedProject ? { projectFiles: verifiedProject.files, projectEntrypoint: verifiedProject.entrypoint } : {}),
+            ...(candidateProject ? {
+              candidateProjectFiles: candidateProject.files,
+              candidateProjectEntrypoint: candidateProject.entrypoint,
+            } : {}),
+            candidateStorageError: candidateStorageError || undefined,
+            projectStorageError: projectStorageError || undefined,
+          } : {}),
         };
         setAgentCodeTask(task);
         setWorkspaceOpen(true);
@@ -1222,13 +1241,15 @@ function Home() {
         let executionError = '';
         let previewHtml: string | undefined;
         let previewId: string | undefined;
+        let executionCode = code;
         let previewDiagnostics: PreviewDiagnostic[] = [];
         let previewReviewText = '';
         let previewLayoutErrors = false;
         let previewInteractionText = '';
         let previewInteractionErrors = false;
+        let previewInteractionResult: ReturnType<typeof readPreviewInteractions>;
         try {
-          const executionCode = projectFiles && projectEntrypoint && language === 'html'
+          executionCode = projectFiles && projectEntrypoint && language === 'html'
             ? bundleHtmlProject(projectFiles, projectEntrypoint)
             : code;
           const execution = await executeCode({
@@ -1258,14 +1279,20 @@ function Home() {
         };
         saveContinuation();
         if (previewHtml && previewId) {
-          setAgentCodeTask({ ...task, outputs, status: 'running', previewHtml, previewId });
+          setAgentCodeTask(isProject
+            ? { ...task, outputs, status: 'running', candidatePreviewHtml: previewHtml, candidatePreviewId: previewId }
+            : { ...task, outputs, status: 'running', previewHtml, previewId });
           previewDiagnostics = await waitForPreviewDiagnostics(previewId, controller.signal);
           const review = readPreviewReview(previewId);
           previewReviewText = formatPreviewReview(review);
           previewLayoutErrors = previewReviewHasIssues(review);
-          const interactions = readPreviewInteractions(previewId);
-          previewInteractionText = formatInteractionResult(interactions);
-          previewInteractionErrors = interactionChecksHaveIssues(interactions);
+          previewInteractionResult = readPreviewInteractions(previewId);
+          previewInteractionText = formatInteractionResult(previewInteractionResult);
+          previewInteractionErrors = interactionChecksHaveIssues(previewInteractionResult) ||
+            (Boolean(review?.controls) && previewInteractionResult?.status === 'not-requested');
+          if (Boolean(review?.controls) && previewInteractionResult?.status === 'not-requested') {
+            previewInteractionText += '\nInteractive controls were present but no local interaction checks were supplied.';
+          }
         }
         if (controller.signal.aborted) return;
         const outputText = outputs
@@ -1388,17 +1415,67 @@ function Home() {
           }
         }
         const hasPreviewErrors = previewDiagnostics.length > 0 || previewLayoutErrors || previewInteractionErrors;
-        setAgentCodeTask({
-          ...task,
-          outputs,
-          status: executionError || hasPreviewErrors ? 'error' : 'complete',
-          error: executionError || undefined,
-          previewHtml,
-          previewId,
-          previewDiagnostics,
-        });
+        const executionSucceeded = !executionError && !projectStorageError;
+        const browserChecksPassed = !hasPreviewErrors;
+        let projectPromoted = false;
+        if (isProject && candidateProject && executionSucceeded && browserChecksPassed) {
+          try {
+            projectPromoted = promoteVerifiedAgentProject(localStorage, conversationId, candidateProject, {
+              executionSucceeded,
+              browserChecksPassed,
+            });
+            if (!projectPromoted) projectStorageError = 'The candidate was not promoted because its verification checks did not pass.';
+          } catch {
+            projectStorageError = 'Project changes could not be saved in this browser. The last verified project was kept.';
+          }
+        }
+        if (projectPromoted) stagedProject = null;
+        else if (isProject && candidateProject) stagedProject = candidateProject;
+        const codeHasErrors = Boolean(projectStorageError || executionError || hasPreviewErrors || isProject && !projectPromoted);
+        if (isProject && candidateProject) {
+          if (projectPromoted) {
+            const visiblePreviewId = language === 'html' ? crypto.randomUUID() : undefined;
+            const visiblePreviewHtml = visiblePreviewId
+              ? makePreviewHtml(executionCode, visiblePreviewId, { runInteractionChecks: false })
+              : undefined;
+            setAgentCodeTask({
+              ...task,
+              projectFiles: candidateProject.files,
+              projectEntrypoint: candidateProject.entrypoint,
+              outputs,
+              status: 'complete',
+              candidateStorageError: undefined,
+              previewHtml: visiblePreviewHtml,
+              previewId: visiblePreviewId,
+              previewDiagnostics: [],
+              previewInteractions: previewInteractionResult,
+            });
+          } else {
+            setAgentCodeTask({
+              ...task,
+              outputs,
+              status: 'error',
+              error: executionError || projectStorageError || 'The browser checks did not pass. The last verified project was kept.',
+              candidateStorageError: candidateStorageError || undefined,
+              candidateDiagnostics: previewDiagnostics,
+              previewInteractions: previewInteractionResult,
+              failedCandidateFiles: candidateProject.files,
+              failedCandidateEntrypoint: candidateProject.entrypoint,
+            });
+          }
+        } else {
+          setAgentCodeTask({
+            ...task,
+            outputs,
+            status: executionError || hasPreviewErrors ? 'error' : 'complete',
+            error: executionError || undefined,
+            previewHtml,
+            previewId,
+            previewDiagnostics,
+            previewInteractions: previewInteractionResult,
+          });
+        }
 
-        const codeHasErrors = Boolean(projectStorageError || executionError || hasPreviewErrors);
         const resultText = [
           `Nexo execution status: ${codeHasErrors ? 'failed' : 'completed'}.`,
           previewInteractionText,
@@ -1418,10 +1495,14 @@ function Home() {
             id: activityId,
             label: codeHasErrors
               ? projectStorageError ? 'Project could not be saved in this browser'
-                : previewInteractionErrors ? 'Local interaction checks failed; Agent will repair the project'
-                : previewLayoutErrors ? 'Browser checks found page issues; Agent will review them'
+                : previewInteractionErrors ? 'A browser check failed; Agent is repairing the candidate while the verified project stays intact'
+                : previewLayoutErrors ? 'Browser checks found a page issue; Agent is reviewing the candidate'
                 : previewDiagnostics.length ? 'HTML preview reported runtime errors' : 'Browser code run returned an error'
-              : isProject ? 'Project saved and run in the isolated browser' : 'Code finished in the isolated browser',
+              : isProject
+                ? previewInteractionResult?.status === 'complete'
+                  ? `Project verified; ${previewInteractionResult.steps.length} local browser checks passed`
+                  : 'Project verified and saved from the isolated browser run'
+                : 'Code finished in the isolated browser',
             kind: 'code',
             status: codeHasErrors ? 'error' : 'complete',
           };

@@ -20,6 +20,31 @@
 .ws-preview-diagnostics li > span { color: hsl(2 82% 72%); font-family: var(--app-font-mono); }
 .ws-preview-diagnostics code { min-width: 0; overflow-wrap: anywhere; font-family: var(--app-font-mono); }
 .ws-preview-diagnostics small { grid-column: 2; color: hsl(var(--muted-foreground)); overflow-wrap: anywhere; }
+.ws-browser-trace { flex: 0 0 auto; max-height: 190px; overflow: auto; padding: 8px 12px; border-top: 1px solid hsl(var(--border)); background: hsl(var(--card)); color: hsl(var(--foreground)); font-size: 10.5px; line-height: 1.45; }
+.ws-browser-trace.status-running { border-top-color: hsl(var(--primary) / .45); }
+.ws-browser-trace.status-invalid, .ws-browser-trace.status-complete:has(.is-fail) { border-top-color: hsl(2 70% 55% / .4); }
+.ws-browser-trace-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.ws-browser-trace-head strong { font-size: 10px; letter-spacing: .035em; text-transform: uppercase; }
+.ws-browser-trace-head span { color: hsl(var(--muted-foreground)); font-size: 10px; }
+.ws-browser-trace ol { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.ws-browser-trace li { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); gap: 6px; align-items: baseline; min-width: 0; }
+.ws-browser-trace li > span { color: hsl(var(--muted-foreground)); }
+.ws-browser-trace li code { color: hsl(var(--primary)); font-family: var(--app-font-mono); }
+.ws-browser-trace li small { color: hsl(var(--muted-foreground)); overflow-wrap: anywhere; }
+.ws-browser-trace li.is-pass small:first-of-type { color: hsl(145 55% 62%); }
+.ws-browser-trace li.is-fail small:first-of-type { color: hsl(2 82% 72%); }
+.ws-browser-trace-note { display: block; margin-top: 5px; color: hsl(var(--muted-foreground)); font-size: 9.5px; }
+.ws-candidate-pane { padding: 12px; gap: 8px; }
+.ws-candidate-banner { display: grid; gap: 3px; padding: 9px 11px; border: 1px solid hsl(35 70% 52% / .28); border-radius: 9px; background: hsl(35 60% 12% / .25); font-size: 11px; line-height: 1.5; }
+.ws-candidate-banner strong { color: hsl(38 85% 70%); }
+.ws-candidate-banner span { color: hsl(var(--muted-foreground)); }
+.ws-candidate-files { display: flex; gap: 5px; overflow-x: auto; padding: 2px 0; }
+.ws-candidate-files button { flex: 0 0 auto; padding: 6px 9px; border: 1px solid hsl(var(--border)); border-radius: 7px; background: transparent; color: hsl(var(--muted-foreground)); font: 10px var(--app-font-mono); cursor: pointer; }
+.ws-candidate-files button.is-on { border-color: hsl(var(--primary) / .55); background: hsl(var(--primary) / .1); color: hsl(var(--foreground)); }
+.ws-candidate-source { flex: 1 1 auto; min-height: 0; margin: 0; overflow: auto; padding: 12px; border: 1px solid hsl(var(--border)); border-radius: 9px; background: hsl(var(--code-bg)); color: hsl(var(--foreground)); font: 11px/1.55 var(--app-font-mono); tab-size: 2; white-space: pre; }
+.ws-candidate-source code { font: inherit; }
+.ws-candidate-empty { color: hsl(var(--muted-foreground)); }
+.ws-candidate-errors { flex: 0 0 auto; max-height: 110px; overflow: auto; margin: 0; padding: 8px 10px 8px 26px; border-radius: 8px; background: hsl(2 55% 12% / .22); color: hsl(2 82% 72%); font: 10px/1.5 var(--app-font-mono); overflow-wrap: anywhere; }
 .ws-language-status { padding: 5px 12px; font-size: 11px; color: hsl(var(--muted-foreground)); border-bottom: 1px solid var(--hair); flex-shrink: 0; }
 .ws-language-status button { margin-left: 8px; background: transparent; border: 0; color: hsl(var(--primary)); text-decoration: underline; cursor: pointer; }
 @media (min-width: 768px) and (max-width: 1100px) {

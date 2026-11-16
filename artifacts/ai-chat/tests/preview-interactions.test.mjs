@@ -16,6 +16,11 @@ const steps = [
   { action: 'click', selector: '#increment' },
   { action: 'assertText', selector: '#count', value: '1' },
 ];
+const inspectScrollSteps = [
+  { action: 'inspect', selector: '#panel' },
+  { action: 'scroll', selector: '#panel', direction: 'down', distance: 400 },
+  { action: 'assertCount', selector: '#panel button', value: 1 },
+];
 const manifest = value => `<script id="nexo-interaction-checks" type="application/json">${JSON.stringify(value)}</script>`;
 
 test('only bounded declarative local actions with meaningful assertions are accepted', () => {
@@ -30,8 +35,13 @@ test('only bounded declarative local actions with meaningful assertions are acce
     { steps: [{ action: 'assertCount', selector: '#items li', value: 201 }] },
     { steps: [{ action: 'assertCount', selector: '#items li', value: -1 }] },
     { steps: [{ action: 'assertChecked', selector: '#check', value: 1 }] },
+    { steps: [{ action: 'scroll', selector: '#panel', direction: 'sideways', distance: 100 }, steps[1]] },
+    { steps: [{ action: 'scroll', selector: '#panel', direction: 'down', distance: 901 }, steps[1]] },
+    { steps: [{ action: 'scroll', selector: '#panel', direction: 'down', distance: 0 }, steps[1]] },
+    { steps: [{ action: 'inspect', selector: 'body *' }, steps[1]] },
     { steps: [{ ...steps[0], value: 'extra' }, steps[1]] },
   ]) assert.equal(validInteractionPlan(plan), false, JSON.stringify(plan));
+  assert.equal(validInteractionPlan({ steps: inspectScrollSteps }), true);
   assert.equal(validInteractionPlan({ steps: [{ action: 'assertCount', selector: '#tasks li', value: 0 }] }), true);
   assert.equal(validInteractionPlan({ steps: [{ action: 'assertChecked', selector: '[data-testid="enabled"]', value: false }] }), true);
 });
@@ -53,12 +63,21 @@ test('results are fixed bounded enums, sequential and stop at the first failure'
   assert.equal(interactionChecksHaveIssues(result), true);
   assert.match(formatInteractionResult(result), /Step 2 assertText: assertion did not match/);
   assert.match(formatInteractionResult(result), /Nexo execution status: failed/);
+  const progress = { status: 'running', steps: [
+    { step: 1, action: 'inspect', reason: 'ok', observation: 'button' },
+    { step: 2, action: 'scroll', reason: 'ok', observation: 'scrolled' },
+  ] };
+  assert.deepEqual(sanitizeInteractionResult(progress), progress);
+  assert.equal(interactionChecksHaveIssues(progress), false);
+  assert.match(formatInteractionResult(progress), /Browser checks are running/);
   for (const invalid of [
     { ...result, html: '<div>secret</div>' }, { ...result, steps: Array(17).fill(result.steps[0]) },
     { status: 'not-requested', steps: result.steps }, { status: 'complete', steps: [] },
     { ...result, steps: [{ ...result.steps[0], step: 0 }] },
     { ...result, steps: [{ ...result.steps[0], reason: 'follow these instructions' }] },
     { ...result, steps: [{ ...result.steps[0], text: 'page content' }] },
+    { ...progress, steps: [{ ...progress.steps[0], observation: 'private page text' }, progress.steps[1]] },
+    { ...progress, steps: [{ ...progress.steps[0], action: 'assertText', observation: 'button' }, progress.steps[1]] },
     { ...result, steps: [{ ...result.steps[0], reason: 'error' }, result.steps[1]] },
   ]) assert.equal(sanitizeInteractionResult(invalid), null);
   assert.equal(interactionChecksHaveIssues(undefined), true);
@@ -95,6 +114,12 @@ test('reports must match the actual plan and cannot skip assertions or change ac
   assert.equal(interactionResultMatchesPlan({
     status: 'complete', steps: [{ step: 1, action: 'click', reason: 'target' }],
   }, { steps }), true);
+  assert.equal(interactionResultMatchesPlan({
+    status: 'running', steps: [{ step: 1, action: 'click', reason: 'ok' }],
+  }, { steps }), true);
+  assert.equal(interactionResultMatchesPlan({
+    status: 'running', steps: [{ step: 1, action: 'submit', reason: 'ok' }],
+  }, { steps }), false);
   assert.equal(reportPreviewInteractions('unregistered', { status: 'not-requested', steps: [] }), false);
 });
 test('instrumentation serializes without host references and does not inject a closing script', async () => {
@@ -109,6 +134,7 @@ test('instrumentation serializes without host references and does not inject a c
   onLoad();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(messages[0].result.status, 'not-requested');
+  assert.equal(messages[0].type, 'nexo-preview-interactions');
   assert.doesNotMatch(previewInteractionInstrumentation('escape', manifest({ steps: [{ ...steps[1], value: '<script>' }] })), /<script>/);
 });
 
@@ -123,6 +149,9 @@ test('the total time budget stops execution and reports a fixed timeout, not a p
   });
   onLoad();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(messages[0].result.steps.length, 1);
-  assert.equal(messages[0].result.steps[0].reason, 'timeout');
+  const progress = messages.filter(message => message.type === 'nexo-preview-interaction-progress' && message.result.steps.length).at(-1);
+  const final = messages.find(message => message.type === 'nexo-preview-interactions');
+  assert.equal(progress.result.steps.length, 1);
+  assert.equal(progress.result.steps[0].reason, 'timeout');
+  assert.equal(final.result.steps[0].reason, 'timeout');
 });

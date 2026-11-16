@@ -28,6 +28,27 @@ function Fixture() {
         });
         return { result, diagnostics, text, id: execution.previewId };
       },
+      async runCandidate(source: string) {
+        const execution = await executeCode({ language: 'html', code: source });
+        const candidate: AgentWorkspaceTask = {
+          id: execution.previewId!, language: 'html', code: source, outputs: [], status: 'running',
+          candidatePreviewHtml: execution.previewHtml, candidatePreviewId: execution.previewId,
+        };
+        flushSync(() => { setSummary(''); setTask(candidate); });
+        const diagnostics = await waitForPreviewDiagnostics(execution.previewId!, new AbortController().signal);
+        const result = readPreviewInteractions(execution.previewId!);
+        const text = formatInteractionResult(result);
+        flushSync(() => {
+          setSummary(text);
+          setTask({
+            ...candidate,
+            status: interactionChecksHaveIssues(result) ? 'error' : 'complete',
+            candidateDiagnostics: diagnostics,
+            previewInteractions: result,
+          });
+        });
+        return { result, diagnostics, text, id: execution.previewId };
+      },
       read: readPreviewInteractions,
       id: () => task?.previewId,
     },

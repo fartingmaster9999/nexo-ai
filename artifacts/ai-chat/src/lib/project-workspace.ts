@@ -10,6 +10,7 @@ export const MAX_PROJECT_FILE_CHARS = 12_000;
 export const MAX_PROJECT_TOTAL_CHARS = 12_000;
 export const MAX_PROJECT_PATH_CHARS = 160;
 const PROJECT_KEY_PREFIX = 'nexo-project-v1:';
+const AGENT_CANDIDATE_KEY_PREFIX = 'nexo-agent-candidate-v1:';
 
 export function validateProjectFiles(value: unknown): ProjectFile[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_PROJECT_FILES) {
@@ -60,6 +61,10 @@ export function projectStorageKey(conversationId: string): string {
   return `${PROJECT_KEY_PREFIX}${encodeURIComponent(conversationId)}`;
 }
 
+export function failedAgentCandidateStorageKey(conversationId: string): string {
+  return `${AGENT_CANDIDATE_KEY_PREFIX}${encodeURIComponent(conversationId)}`;
+}
+
 /** Agent-authored files are already provider-visible; keep explicit opt-outs. */
 export function createAgentProject(files: unknown, entrypoint: string, previous: SavedProject | null): SavedProject {
   const updates = validateProjectFiles(files);
@@ -75,7 +80,11 @@ export function createAgentProject(files: unknown, entrypoint: string, previous:
 }
 
 export function readSavedProject(storage: Storage, conversationId: string): SavedProject | null {
-  const raw = storage.getItem(projectStorageKey(conversationId));
+  return readProjectFromKey(storage, projectStorageKey(conversationId));
+}
+
+function readProjectFromKey(storage: Pick<Storage, 'getItem'>, key: string): SavedProject | null {
+  const raw = storage.getItem(key);
   if (!raw) return null;
   let value: unknown;
   try {
@@ -96,13 +105,40 @@ export function readSavedProject(storage: Storage, conversationId: string): Save
   );
 }
 
+export function readFailedAgentCandidate(storage: Storage, conversationId: string): SavedProject | null {
+  return readProjectFromKey(storage, failedAgentCandidateStorageKey(conversationId));
+}
+
 export function writeSavedProject(storage: Storage, conversationId: string, project: SavedProject): void {
   const safe = createSavedProject(project.files, project.entrypoint, project.selectedPaths);
   storage.setItem(projectStorageKey(conversationId), JSON.stringify(safe));
 }
 
+export function writeFailedAgentCandidate(storage: Storage, conversationId: string, project: SavedProject): void {
+  const safe = createSavedProject(project.files, project.entrypoint, project.selectedPaths);
+  storage.setItem(failedAgentCandidateStorageKey(conversationId), JSON.stringify(safe));
+}
+
+export function deleteFailedAgentCandidate(storage: Storage, conversationId: string): void {
+  storage.removeItem(failedAgentCandidateStorageKey(conversationId));
+}
+
+/** Promote an Agent candidate only after its isolated run and browser checks pass. */
+export function promoteVerifiedAgentProject(
+  storage: Storage,
+  conversationId: string,
+  project: SavedProject,
+  checks: { executionSucceeded: boolean; browserChecksPassed: boolean },
+): boolean {
+  if (!checks.executionSucceeded || !checks.browserChecksPassed) return false;
+  writeSavedProject(storage, conversationId, project);
+  try { deleteFailedAgentCandidate(storage, conversationId); } catch {}
+  return true;
+}
+
 export function deleteSavedProject(storage: Storage, conversationId: string): void {
   storage.removeItem(projectStorageKey(conversationId));
+  deleteFailedAgentCandidate(storage, conversationId);
 }
 
 export function selectedProjectFiles(project: SavedProject | null): ProjectFile[] {
