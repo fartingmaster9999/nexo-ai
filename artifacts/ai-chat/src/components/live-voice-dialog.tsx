@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import { Bot, Brain, ExternalLink, Loader2, Mic, MicOff, PhoneOff, Radio, Volume2 } from "lucide-react";
+import { Bot, Brain, Check, ExternalLink, Loader2, Mic, MicOff, PhoneOff, Radio, Volume2, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +32,7 @@ import "./live-voice-dialog.css";
 
 type LiveStatus = "idle" | "requesting" | "connecting" | "listening" | "thinking" | "speaking" | "ended" | "error";
 type TranscriptLine = { id: string; role: "user" | "assistant"; text: string; interim?: boolean };
+type PendingAgentRequest = { task: string; transcript: LiveTranscriptLine[] };
 const MAX_TRANSCRIPT_LINES = 100;
 const MAX_TRANSCRIPT_LINE_CHARS = 4_000;
 export type LiveSessionToken = { token: string; model: string };
@@ -181,6 +182,7 @@ export function LiveVoiceDialog({
   const [needsSettings, setNeedsSettings] = useState(false);
   const [muted, setMuted] = useState(false);
   const [externalLink, setExternalLink] = useState<{ label: string; url: string } | null>(null);
+  const [pendingAgentRequest, setPendingAgentRequest] = useState<PendingAgentRequest | null>(null);
   const [switchingMode, setSwitchingMode] = useState(false);
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const transcriptLinesRef = useRef<TranscriptLine[]>([]);
@@ -194,7 +196,43 @@ export function LiveVoiceDialog({
   const restartModeRef = useRef<((session: LiveSession) => void) | null>(null);
   const agentWorkRef = useRef(agentWork);
   agentWorkRef.current = agentWork;
+  const pendingAgentRequestRef = useRef<PendingAgentRequest | null>(null);
   const announcedAgentWorkRef = useRef<string | null>(null);
+
+  const stageAgentRequest = useCallback((transcript: LiveTranscriptLine[], requestedTask?: string) => {
+    if (agentWorkRef.current?.status === "running") {
+      return { staged: false as const, reason: "An Agent build is already running in the workspace." };
+    }
+    if (pendingAgentRequestRef.current) {
+      return { staged: false as const, reason: "A build request is already waiting for your confirmation." };
+    }
+    const completeTranscript = transcript
+      .filter((line) => !line.interim && line.text.trim())
+      .map((line) => ({ role: line.role, text: line.text.trim() }));
+    const lastUserRequest = [...completeTranscript].reverse().find((line) => line.role === "user")?.text ?? "";
+    if (!lastUserRequest) {
+      return { staged: false as const, reason: "I could not hear a clear request. Please repeat it." };
+    }
+    const task = (requestedTask?.trim() || lastUserRequest).replace(/\s+/g, " ").slice(0, 180);
+    const pending = { task, transcript: completeTranscript };
+    pendingAgentRequestRef.current = pending;
+    setPendingAgentRequest(pending);
+    return { staged: true as const, task };
+  }, []);
+
+  const confirmAgentRequest = () => {
+    const pending = pendingAgentRequestRef.current;
+    if (!pending) return;
+    pendingAgentRequestRef.current = null;
+    setPendingAgentRequest(null);
+    const result = actionCallbacksRef.current.onBuildWithAgent(pending.transcript, pending.task);
+    if (!result.accepted) setError(result.reason);
+  };
+
+  const cancelAgentRequest = () => {
+    pendingAgentRequestRef.current = null;
+    setPendingAgentRequest(null);
+  };
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -277,21 +315,14 @@ export function LiveVoiceDialog({
         } else if (call.name === "get_nexo_modes") {
           result = { status: "ok", ...modeStateRef.current };
         } else if (call.name === "start_agent") {
-          if (agentWorkRef.current?.status === "running") {
-            result = { status: "already_running", message: "An Agent build is already running in the workspace." };
-          } else {
-            const transcript: LiveTranscriptLine[] = transcriptLinesRef.current
-              .filter((line) => !line.interim && line.text.trim())
-              .map((line) => ({ role: line.role, text: line.text }));
-            const requestedTask = typeof call.args.task === "string" ? call.args.task.trim().slice(0, 180) : "";
-            if (!transcript.some((line) => line.role === "user") && requestedTask) {
-              transcript.push({ role: "user", text: requestedTask });
-            }
-            const outcome = actionCallbacksRef.current.onBuildWithAgent(transcript, requestedTask || undefined);
-            result = outcome.accepted
-              ? { status: "started", message: "Nexo Agent is building in the workspace. Keep this Live session connected. Do not tell the user it is finished until the app sends a completion update." }
-              : { status: "unavailable", message: outcome.reason };
-          }
+          const transcript: LiveTranscriptLine[] = transcriptLinesRef.current
+            .filter((line) => !line.interim && line.text.trim())
+            .map((line) => ({ role: line.role, text: line.text }));
+          const requestedTask = typeof call.args.task === "string" ? call.args.task.trim().slice(0, 180) : "";
+          const staged = stageAgentRequest(transcript, requestedTask || undefined);
+          result = staged.staged
+            ? { status: "awaiting_confirmation", task: staged.task, message: "Show the user the captured task and ask them to confirm in the app before starting Agent. Do not say the build has started." }
+            : { status: "not_staged", message: staged.reason };
         } else {
           result = { status: "unsupported", message: "This Live action is not available." };
         }
@@ -309,7 +340,7 @@ export function LiveVoiceDialog({
     } catch {
       failSession(session, "Nexo Live could not hand the request to the workspace. Start a new call to continue.");
     }
-  }, [failSession]);
+  }, [failSession, stageAgentRequest]);
 
   const handleServerMessage = useCallback((session: LiveSession, message: Record<string, unknown>) => {
     if (session.stopped || sessionRef.current !== session) return;
@@ -535,6 +566,7 @@ export function LiveVoiceDialog({
     setMuted(false);
     setSwitchingMode(options.modeSwitch === true);
     if (!options.preserveTranscript) {
+      cancelAgentRequest();
       transcriptLinesRef.current = [];
       setLines([]);
     }
@@ -720,13 +752,16 @@ export function LiveVoiceDialog({
   };
   const startAgentFromTranscript = (transcript: LiveTranscriptLine[]) => {
     const task = [...transcript].reverse().find((line) => line.role === "user")?.text;
-    const result = actionCallbacksRef.current.onBuildWithAgent(transcript, task);
-    if (!result.accepted) setError(result.reason);
+    const result = stageAgentRequest(transcript, task);
+    if (!result.staged) setError(result.reason);
   };
 
   return (
     <Dialog open={open} modal={!workspaceOpen} onOpenChange={(nextOpen) => {
-      if (!nextOpen) stopSession();
+      if (!nextOpen) {
+        stopSession();
+        cancelAgentRequest();
+      }
       onOpenChange(nextOpen);
     }}>
       <DialogContent
@@ -825,6 +860,23 @@ export function LiveVoiceDialog({
           </div>
         )}
 
+        {pendingAgentRequest && (
+          <section className="live-agent-confirmation" aria-labelledby="live-agent-confirmation-title" data-testid="live-agent-confirmation">
+            <div className="live-agent-confirmation-copy">
+              <strong id="live-agent-confirmation-title">Start Agent on this task?</strong>
+              <p>{pendingAgentRequest.task}</p>
+            </div>
+            <div className="live-agent-confirmation-actions">
+              <button type="button" className="live-agent-confirm" onClick={confirmAgentRequest} data-testid="button-confirm-live-agent">
+                <Check size={14} aria-hidden="true" /> Start Agent
+              </button>
+              <button type="button" className="live-agent-cancel" onClick={cancelAgentRequest} data-testid="button-cancel-live-agent">
+                <X size={14} aria-hidden="true" /> Not now
+              </button>
+            </div>
+          </section>
+        )}
+
         <section ref={transcriptRef} className="live-transcript" aria-label="Live transcript">
           {lines.length === 0 ? (
             <p className="live-transcript-empty">{status === "idle" ? "Your conversation will appear here." : "Speak naturally. Nexo will respond as you talk."}</p>
@@ -854,7 +906,7 @@ export function LiveVoiceDialog({
             </>
           )}
         </div>
-        {canBuildWithAgent && (
+        {canBuildWithAgent && !pendingAgentRequest && (
           <button
             type="button"
             className="live-agent-button"

@@ -46,7 +46,7 @@ export const GEMINI_LIVE_TOOLS = [{
     },
     {
       name: "start_agent",
-      description: "Start Nexo Agent to build or edit an app, website, or code the user requested, or when the user explicitly asks to use Agent. The app will keep this Live voice session open during the build and will send a completion update. Do not call for advice, brainstorming, explanations, or questions that do not require code changes.",
+      description: "Stage a build request for user confirmation when the user directly asks to create or edit an app, website, or code. This does not start Agent. Never call for casual conversation, hypotheticals, advice, brainstorming, explanations, or when Nexo suggested building but the user did not ask.",
       behavior: "NON_BLOCKING",
       parameters: {
         type: "OBJECT",
@@ -68,8 +68,10 @@ export function liveSystemInstruction(deepthink: boolean): string {
     style,
     "When the user asks to turn Deepthink or Agent mode on or off, call set_deepthink or set_agent_mode with the requested state. Use get_nexo_modes when the user asks which modes are enabled.",
     "When the user asks to open a website, Classroom course, or external link, call open_external_link. Never claim that you cannot open websites; if the browser blocks a new tab, direct the user to the open-link button shown in Live.",
-    "When the user requests a code, app, or website build or explicitly asks you to use Agent, call start_agent; when they ask to see an existing workspace, call open_workspace.",
-    "The app keeps this Live session active while Agent works. Tell the user when the task has started, continue the conversation, and do not claim it is finished until the app sends a completion update.",
+    "Only call start_agent after the user directly asks you to build or edit code, an app, or a website. Do not infer permission from casual conversation, hypothetical ideas, a request for advice, or your own suggestions.",
+    "Calling start_agent only stages the request. The app shows the captured task and asks the user to confirm; do not claim Agent has started unless the app later reports that it started. If the user declines, do not try again unless they make a new direct request.",
+    "When the user asks to see an existing workspace, call open_workspace.",
+    "After the user confirms and the app reports Agent has started, keep this Live session active while Agent works. Do not claim it is finished until the app sends a completion update.",
     "The complete voice transcript is passed to Agent. Do not reveal private reasoning or claim to have performed actions outside this session.",
   ].join(" ");
 }

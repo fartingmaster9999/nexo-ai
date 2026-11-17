@@ -63,6 +63,17 @@
 .live-agent-progress-copy { min-width:0; display:grid; gap:2px; }
 .live-agent-progress-copy strong { color:hsl(var(--foreground)); font-size:11px; }
 .live-agent-progress-copy span { color:hsl(var(--muted-foreground)); font-size:10px; line-height:1.4; }
+.live-agent-confirmation { display:grid; gap:9px; margin-top:11px; padding:11px; border:1px solid hsl(var(--primary) / .4); border-radius:11px; background:hsl(var(--primary) / .08); }
+.live-agent-confirmation-copy { display:grid; gap:4px; }
+.live-agent-confirmation-copy strong { color:hsl(var(--foreground)); font-size:12px; }
+.live-agent-confirmation-copy p { margin:0; color:hsl(var(--muted-foreground)); font-size:11px; line-height:1.45; overflow-wrap:anywhere; }
+.live-agent-confirmation-actions { display:flex; gap:7px; }
+.live-agent-confirm,.live-agent-cancel { min-height:34px; display:inline-flex; justify-content:center; align-items:center; gap:6px; padding:0 10px; border:1px solid hsl(var(--border)); border-radius:8px; font-size:10px; font-weight:650; cursor:pointer; }
+.live-agent-confirm { border-color:hsl(var(--primary) / .55); color:hsl(var(--primary-foreground)); background:hsl(var(--primary)); }
+.live-agent-cancel { color:hsl(var(--foreground)); background:hsl(var(--background) / .7); }
+.live-agent-confirm:focus-visible,.live-agent-cancel:focus-visible { outline:2px solid hsl(var(--primary)); outline-offset:2px; }
+.live-agent-confirm:hover { filter:brightness(1.08); }
+.live-agent-cancel:hover { border-color:hsl(var(--primary) / .45); }
 .live-agent-open-workspace { flex:0 0 auto; padding:5px 8px; border:1px solid hsl(var(--border)); border-radius:7px; color:hsl(var(--foreground)); background:hsl(var(--background) / .7); font-size:10px; cursor:pointer; }
 .live-agent-open-workspace:hover { border-color:hsl(var(--primary) / .45); }
 .live-agent-overlay[data-state="open"] { opacity:0 !important; pointer-events:none !important; background:transparent !important; }
@@ -90,6 +101,10 @@
 .live-agent-docked .live-agent-progress { margin-top:4px; padding:7px 8px; }
 .live-agent-docked .live-agent-progress-copy strong { font-size:10px; }
 .live-agent-docked .live-agent-progress-copy span { font-size:9px; }
+.live-agent-docked .live-agent-confirmation { gap:6px; margin-top:4px; padding:8px; }
+.live-agent-docked .live-agent-confirmation-copy strong { font-size:10px; }
+.live-agent-docked .live-agent-confirmation-copy p { font-size:9px; }
+.live-agent-docked .live-agent-confirm,.live-agent-docked .live-agent-cancel { min-height:29px; font-size:9px; }
 .live-agent-docked .live-agent-open-workspace { font-size:9px; }
 .live-agent-docked .live-external-link { margin-top:4px; padding:7px; font-size:9px; }
 .live-agent-docked .live-external-link a { padding:5px 7px; }
