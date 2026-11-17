@@ -26,7 +26,7 @@ import { ResearchBriefPanel } from '@/components/research-brief-panel';
 import NotFound from '@/pages/not-found';
 import { LiveReplyIndicator, NoticeBanner, ThinkingPanel, type Activity, type ChatMessage } from '@/components/answer-details';
 import { consumeChatStream, type AgentToolCandidate, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
-import { checkIsolatedHtmlCandidate, executeCode, makePreviewHtml, formatPreviewReview, readPreviewReview, readPreviewInteractions, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
+import { checkIsolatedHtmlCandidate, executeCode, makePreviewHtml, formatPreviewReview, readPreviewReview, readPreviewInteractions, waitForPreviewDiagnostics, waitForPreviewScreenshot, type PreviewDiagnostic, type PreviewScreenshotResult, type RunOutput } from '@/lib/code-runner';
 import { formatInteractionResult, interactionChecksHaveIssues } from '@/lib/preview-interactions';
 import { previewReviewHasIssues } from '@/lib/preview-review';
 import { startRequestDeadline, RESPONSE_DEADLINE_MS, AGENT_BUILD_DEADLINE_MS, AGENT_REVIEW_DEADLINE_MS } from '@/lib/request-deadlines';
@@ -1198,6 +1198,7 @@ function Home() {
           previewId?: string;
           diagnostics: PreviewDiagnostic[];
           review?: NonNullable<ReturnType<typeof readPreviewReview>>;
+          screenshotResult?: PreviewScreenshotResult;
           interactions?: NonNullable<ReturnType<typeof readPreviewInteractions>>;
           score: number;
         } | undefined;
@@ -1247,6 +1248,7 @@ function Home() {
               let previewId: string | undefined;
               let diagnostics: PreviewDiagnostic[] = [];
               let review: NonNullable<ReturnType<typeof readPreviewReview>> | undefined;
+              let screenshotResult: PreviewScreenshotResult | undefined;
               let interactions: NonNullable<ReturnType<typeof readPreviewInteractions>> | undefined;
               let score: number;
               if (language === 'html') {
@@ -1255,6 +1257,7 @@ function Home() {
                 previewId = checked.previewId;
                 diagnostics = checked.diagnostics;
                 review = checked.review;
+                screenshotResult = checked.screenshotResult;
                 interactions = checked.interactions;
                 score = checked.passed ? 5 :
                   (diagnostics.length ? 0 : 2) +
@@ -1268,7 +1271,7 @@ function Home() {
               }
               return {
                 candidate, language, code, executionCode, outputs, executionError,
-                previewHtml, previewId, diagnostics, review, interactions, score, isProject,
+                previewHtml, previewId, diagnostics, review, screenshotResult, interactions, score, isProject,
               };
             } catch (error) {
               if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
@@ -1314,6 +1317,7 @@ function Home() {
                 previewId: checked.previewId,
                 diagnostics: checked.diagnostics,
                 review: checked.review,
+                screenshotResult: checked.screenshotResult,
                 interactions: checked.interactions,
                 score: checked.score,
               };
@@ -1475,6 +1479,7 @@ function Home() {
         let executionCode = code;
         let previewDiagnostics: PreviewDiagnostic[] = [];
         let previewReviewText = '';
+        let previewScreenshotResult: PreviewScreenshotResult = { status: 'not_requested' };
         let previewLayoutErrors = false;
         let previewInteractionText = '';
         let previewInteractionErrors = false;
@@ -1490,6 +1495,7 @@ function Home() {
             previewHtml = reusedCandidateCheck.previewHtml;
             previewId = reusedCandidateCheck.previewId;
             previewDiagnostics = reusedCandidateCheck.diagnostics;
+            previewScreenshotResult = reusedCandidateCheck.screenshotResult ?? { status: 'not_requested' };
             previewReviewText = reusedCandidateCheck.review ? formatPreviewReview(reusedCandidateCheck.review) : '';
             previewLayoutErrors = !reusedCandidateCheck.review || previewReviewHasIssues(reusedCandidateCheck.review);
             previewInteractionResult = reusedCandidateCheck.interactions;
@@ -1504,6 +1510,7 @@ function Home() {
               language,
               code: executionCode,
               signal: controller.signal,
+              captureScreenshot: requestAgent && language === 'html',
             });
             outputs = execution.outputs;
             executionError = execution.error ?? '';
@@ -1538,6 +1545,9 @@ function Home() {
             ? { ...task, outputs, status: 'running', candidatePreviewHtml: previewHtml, candidatePreviewId: previewId }
             : { ...task, outputs, status: 'running', previewHtml, previewId });
           previewDiagnostics = await waitForPreviewDiagnostics(previewId, controller.signal);
+          if (requestAgent && language === 'html') {
+            previewScreenshotResult = await waitForPreviewScreenshot(previewId, controller.signal);
+          }
           const review = readPreviewReview(previewId);
           previewReviewText = formatPreviewReview(review);
           previewLayoutErrors = !review || previewReviewHasIssues(review);
@@ -1588,7 +1598,11 @@ function Home() {
           if (PUBLIC_KEY_MODE && !readPublicProviderKeys().gemini.trim()) {
             setReviewActivity('complete', 'Gemma 4 review skipped; add a Gemini key in Settings to enable review');
           } else {
-            setReviewActivity('running', 'Gemma 4 is reviewing the generated code and run results');
+            setReviewActivity('running', previewScreenshotResult.status === 'captured'
+              ? 'Gemma 4 is reviewing the generated page, code, and run results'
+              : language === 'html'
+                ? 'Visual preview capture unavailable; Gemma 4 is reviewing code and run results'
+                : 'Gemma 4 is reviewing the generated code and run results');
             const reviewController = new AbortController();
             const abortReview = () => reviewController.abort(controller.signal.reason);
             if (controller.signal.aborted) abortReview();
@@ -1603,29 +1617,40 @@ function Home() {
                 working.selectedPaths.includes(path) || !working.files.some(file => file.path === path))
                 : candidateProject.selectedPaths,
             }) : null;
+            const agentReview: Record<string, unknown> = {
+              language,
+              source: reviewFiles
+                ? reviewFiles.map((file) => `--- ${file.path} ---\n${file.content}`).join('\n\n').slice(0, 24000) || 'No project source is selected for review.'
+                : code.slice(0, 24000),
+              output: [
+                executionError ? `Execution error: ${executionError}` : '',
+                outputText,
+              ].filter(Boolean).join('\n').slice(-8000),
+              browserChecks: [
+                previewInteractionText,
+                previewReviewText,
+                ...(previewScreenshotResult.status === 'failed'
+                  ? ['Visual preview screenshot failed; continue with source and browser checks.'] : []),
+                ...(previewScreenshotResult.status === 'timed_out'
+                  ? ['Visual preview screenshot timed out; continue with source and browser checks.'] : []),
+                ...previewDiagnostics.map((diagnostic) =>
+                  `${diagnostic.kind}: ${diagnostic.message}${diagnostic.source ? ` (${diagnostic.source}${diagnostic.line ? `:${diagnostic.line}` : ''})` : ''}`
+                ),
+              ].filter(Boolean).join('\n').slice(0, 4000),
+            };
+            if (previewScreenshotResult.status === 'captured') {
+              agentReview.previewImage = {
+                mimeType: previewScreenshotResult.screenshot.mimeType,
+                data: previewScreenshotResult.screenshot.data,
+              };
+            }
             const reviewBody: Record<string, unknown> = {
               messages: requestMessages,
               deepthink: requestDeepthink,
               timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
               agentProvider: 'gemini',
               agentTask: 'document',
-              agentReview: {
-                language,
-                source: reviewFiles
-                  ? reviewFiles.map((file) => `--- ${file.path} ---\n${file.content}`).join('\n\n').slice(0, 24000) || 'No project source is selected for review.'
-                  : code.slice(0, 24000),
-                output: [
-                  executionError ? `Execution error: ${executionError}` : '',
-                  outputText,
-                ].filter(Boolean).join('\n').slice(-8000),
-                browserChecks: [
-                  previewInteractionText,
-                  previewReviewText,
-                  ...previewDiagnostics.map((diagnostic) =>
-                    `${diagnostic.kind}: ${diagnostic.message}${diagnostic.source ? ` (${diagnostic.source}${diagnostic.line ? `:${diagnostic.line}` : ''})` : ''}`
-                  ),
-                ].filter(Boolean).join('\n').slice(0, 4000),
-              },
+              agentReview,
             };
             if (encodedImage) {
               reviewBody.image = encodedImage;
@@ -1664,14 +1689,18 @@ function Home() {
             }
             gemmaReviewText = reviewChunks.join('').slice(0, 6000);
             programReviews.remember(reviewBody, gemmaReviewText);
-            setReviewActivity('complete', 'Gemma 4 review is ready for Agent');
+            setReviewActivity('complete', previewScreenshotResult.status === 'captured'
+              ? 'Gemma 4 visual review is ready for Agent'
+              : 'Gemma 4 code review is ready; visual capture was unavailable');
             }
             } catch {
               if (controller.signal.aborted) throw controller.signal.reason;
               gemmaReviewText = 'The Gemma 4 review was unavailable. Continue using the source, runtime output, and browser checks.';
               setReviewActivity('error', reviewController.signal.aborted
-                ? 'Gemma 4 review took too long; Agent will continue with the run results'
-                : 'Gemma 4 review unavailable; Agent will continue with the run results');
+                ? 'Gemma 4 review timed out; Agent will continue with source and browser checks'
+                : language === 'html' && previewScreenshotResult.status !== 'captured'
+                  ? 'Gemma 4 review unavailable; visual capture was unavailable, so Agent will continue with source and browser checks'
+                  : 'Gemma 4 review unavailable; Agent will continue with source and browser checks');
             } finally {
               clearReviewDeadline();
               controller.signal.removeEventListener('abort', abortReview);

@@ -1,5 +1,7 @@
 import {
-  previewReviewInstrumentation, sanitizePreviewReview, previewReviewHasIssues, type PreviewReview,
+  previewReviewInstrumentation, previewScreenshotInstrumentation, sanitizePreviewReview,
+  sanitizePreviewScreenshotEvent, previewReviewHasIssues, type PreviewReview, type PreviewScreenshotResult,
+  PREVIEW_SCREENSHOT_WAIT_MS,
 } from './preview-review.ts';
 import { previewFormInstrumentation } from './preview-forms.ts';
 import {
@@ -7,6 +9,7 @@ import {
   interactionResultMatchesPlan, interactionChecksHaveIssues, type InteractionResult, type InteractionPlan,
 } from './preview-interactions.ts';
 export { formatPreviewReview } from './preview-review.ts';
+export type { PreviewScreenshot, PreviewScreenshotResult } from './preview-review.ts';
 export type RunLanguage = 'python' | 'javascript' | 'html';
 export type RunOutput = { kind: 'stdout' | 'stderr' | 'status' | 'image'; text?: string; dataUrl?: string };
 export type PreviewDiagnosticKind = 'error' | 'unhandled-rejection' | 'console-error' | 'resource-error' | 'timeout' | 'limit';
@@ -27,6 +30,7 @@ export type IsolatedHtmlCandidateCheck = {
   previewId: string;
   diagnostics: PreviewDiagnostic[];
   review?: PreviewReview;
+  screenshotResult: PreviewScreenshotResult;
   interactions?: InteractionResult;
   passed: boolean;
 };
@@ -40,7 +44,8 @@ const PREVIEW_RESULT_CACHE_SIZE = 8;
 
 type PreviewResult = {
   diagnostics: PreviewDiagnostic[]; complete: boolean; savedAt: number;
-  review?: PreviewReview; interactions?: InteractionResult; interactionPlan?: InteractionPlan | null;
+  review?: PreviewReview; screenshotResult?: PreviewScreenshotResult;
+  interactions?: InteractionResult; interactionPlan?: InteractionPlan | null;
 };
 type PreviewWaiter = {
   resolve: (diagnostics: PreviewDiagnostic[]) => void;
@@ -49,8 +54,16 @@ type PreviewWaiter = {
   signal: AbortSignal;
   abort: () => void;
 };
+type PreviewScreenshotWaiter = {
+  resolve: (result: PreviewScreenshotResult) => void;
+  reject: (error: DOMException) => void;
+  timer: number;
+  signal: AbortSignal;
+  abort: () => void;
+};
 const previewResults = new Map<string, PreviewResult>();
 const previewWaiters = new Map<string, Set<PreviewWaiter>>();
+const previewScreenshotWaiters = new Map<string, Set<PreviewScreenshotWaiter>>();
 
 function sanitizePreviewSource(source: unknown): string | undefined {
   if (typeof source !== 'string' || !source.trim()) return undefined;
@@ -122,6 +135,7 @@ export function reportPreviewReview(previewId: string, value: unknown) {
   rememberPreviewResult(previewId, {
     interactions: existing?.interactions,
     interactionPlan: existing?.interactionPlan,
+    screenshotResult: existing?.screenshotResult,
     diagnostics: existing?.diagnostics ?? [],
     complete: existing?.complete ?? false,
     savedAt: Date.now(),
@@ -134,6 +148,66 @@ export function readPreviewReview(previewId: string): PreviewReview | undefined 
   return cached?.review && Date.now() - cached.savedAt <= PREVIEW_RESULT_TTL_MS ? { ...cached.review } : undefined;
 }
 
+/** Called only after the parent validates the opaque origin, exact iframe, and preview ID. */
+export function reportPreviewScreenshot(previewId: string, value: unknown): boolean {
+  const result = sanitizePreviewScreenshotEvent(value);
+  const existing = previewResults.get(previewId);
+  if (!result || !existing || existing.screenshotResult ||
+      Date.now() - existing.savedAt > PREVIEW_RESULT_TTL_MS) return false;
+  rememberPreviewResult(previewId, { ...existing, screenshotResult: result, savedAt: Date.now() });
+  const waiters = previewScreenshotWaiters.get(previewId);
+  if (!waiters) return true;
+  for (const waiter of waiters) {
+    window.clearTimeout(waiter.timer);
+    waiter.signal.removeEventListener('abort', waiter.abort);
+    waiter.resolve(result);
+  }
+  previewScreenshotWaiters.delete(previewId);
+  return true;
+}
+
+export function readPreviewScreenshot(previewId: string): PreviewScreenshotResult | undefined {
+  const cached = previewResults.get(previewId);
+  if (!cached?.screenshotResult || Date.now() - cached.savedAt > PREVIEW_RESULT_TTL_MS) return undefined;
+  return cached.screenshotResult.status === 'captured'
+    ? { status: 'captured', screenshot: { ...cached.screenshotResult.screenshot } }
+    : { status: cached.screenshotResult.status };
+}
+
+/** Bounded wait; a missing screenshot never blocks the existing browser checks. */
+export function waitForPreviewScreenshot(previewId: string, signal: AbortSignal): Promise<PreviewScreenshotResult> {
+  const cached = readPreviewScreenshot(previewId);
+  if (cached) return Promise.resolve(cached);
+  if (signal.aborted) return Promise.reject(new DOMException('Stopped', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const waiters = previewScreenshotWaiters.get(previewId) ?? new Set<PreviewScreenshotWaiter>();
+    let waiter: PreviewScreenshotWaiter;
+    const removeWaiter = () => {
+      window.clearTimeout(waiter.timer);
+      signal.removeEventListener('abort', waiter.abort);
+      const current = previewScreenshotWaiters.get(previewId);
+      current?.delete(waiter);
+      if (current?.size === 0) previewScreenshotWaiters.delete(previewId);
+    };
+    waiter = {
+      resolve: (result) => { removeWaiter(); resolve(result); },
+      reject,
+      signal,
+      timer: window.setTimeout(() => {
+        const timeout = { type: 'nexo-preview-screenshot', status: 'timed_out' };
+        if (!reportPreviewScreenshot(previewId, timeout)) waiter.resolve({ status: 'timed_out' });
+      }, PREVIEW_SCREENSHOT_WAIT_MS),
+      abort: () => {
+        removeWaiter();
+        reject(new DOMException('Stopped', 'AbortError'));
+      },
+    };
+    waiters.add(waiter);
+    previewScreenshotWaiters.set(previewId, waiters);
+    signal.addEventListener('abort', waiter.abort, { once: true });
+  });
+}
+
 /** The caller must first validate the opaque origin, exact frame, and preview ID. */
 export function reportPreviewInteractions(previewId: string, value: unknown): boolean {
   const interactions = sanitizeInteractionResult(value);
@@ -143,7 +217,8 @@ export function reportPreviewInteractions(previewId: string, value: unknown): bo
       !interactionResultMatchesPlan(interactions, existing.interactionPlan)) return false;
   rememberPreviewResult(previewId, {
     diagnostics: existing?.diagnostics ?? [], complete: existing?.complete ?? false,
-    review: existing?.review, interactionPlan: existing.interactionPlan, interactions, savedAt: Date.now(),
+    review: existing?.review, screenshotResult: existing?.screenshotResult,
+    interactionPlan: existing.interactionPlan, interactions, savedAt: Date.now(),
   });
   return true;
 }
@@ -169,7 +244,8 @@ export function reportPreviewDiagnostics(previewId: string, values: unknown[], c
   ]);
   const result = {
     diagnostics, complete: complete || existing?.complete === true, savedAt: Date.now(),
-    review: existing?.review, interactions: existing?.interactions, interactionPlan: existing?.interactionPlan,
+    review: existing?.review, screenshotResult: existing?.screenshotResult,
+    interactions: existing?.interactions, interactionPlan: existing?.interactionPlan,
   };
   rememberPreviewResult(previewId, result);
   if (!result.complete) return;
@@ -226,7 +302,7 @@ function previewInstrumentation(previewId: string) {
 export function makePreviewHtml(
   code: string,
   previewId: string,
-  options: { runInteractionChecks?: boolean } = {},
+  options: { runInteractionChecks?: boolean; captureScreenshot?: boolean } = {},
 ): string {
   const runInteractionChecks = options.runInteractionChecks !== false;
   rememberPreviewResult(previewId, {
@@ -237,7 +313,10 @@ export function makePreviewHtml(
   const interactionScript = runInteractionChecks
     ? `<script>${previewInteractionInstrumentation(previewId, code)}</script>`
     : '';
-  const head = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${previewInstrumentation(previewId)}</script><script>${previewReviewInstrumentation(previewId)}</script><script>${previewFormInstrumentation()}</script>${interactionScript}`;
+  const screenshotScript = options.captureScreenshot
+    ? `<script>${previewScreenshotInstrumentation(previewId)}</script>`
+    : '';
+  const head = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${previewInstrumentation(previewId)}</script><script>${previewReviewInstrumentation(previewId)}</script>${screenshotScript}<script>${previewFormInstrumentation()}</script>${interactionScript}`;
   const source = code.replace(/^\s*<!doctype\b[^>]*>/i, '');
   let documentHtml: string;
   if (/<head\b[^>]*>/i.test(source)) {
@@ -258,6 +337,7 @@ type ExecuteOptions = {
   code: string;
   onOutput?: (output: RunOutput) => void;
   signal?: AbortSignal;
+  captureScreenshot?: boolean;
 };
 
 let runnerFrame: HTMLIFrameElement | null = null;
@@ -375,7 +455,11 @@ export function executeCode(options: ExecuteOptions): Promise<ExecutionResult> {
   if (options.signal?.aborted) return Promise.reject(new DOMException('Stopped', 'AbortError'));
   if (options.language === 'html') {
     const previewId = crypto.randomUUID();
-    return Promise.resolve({ outputs: [], previewHtml: makePreviewHtml(options.code, previewId), previewId });
+    return Promise.resolve({
+      outputs: [],
+      previewHtml: makePreviewHtml(options.code, previewId, { captureScreenshot: options.captureScreenshot }),
+      previewId,
+    });
   }
   const next = runQueue.then(() => executeInRunner(options), () => executeInRunner(options));
   runQueue = next.then(() => undefined, () => undefined);
@@ -389,7 +473,7 @@ export function checkIsolatedHtmlCandidate(
 ): Promise<IsolatedHtmlCandidateCheck> {
   if (signal.aborted) return Promise.reject(new DOMException('Stopped', 'AbortError'));
   const previewId = crypto.randomUUID();
-  const previewHtml = makePreviewHtml(code, previewId);
+  const previewHtml = makePreviewHtml(code, previewId, { captureScreenshot: true });
   const interactionPlan = readInteractionPlan(code);
   const diagnostics: PreviewDiagnostic[] = [];
   const seenDiagnostics = new Set<string>();
@@ -429,12 +513,16 @@ export function checkIsolatedHtmlCandidate(
     let runtimeComplete = false;
     let reviewComplete = false;
     let interactionsComplete = false;
+    let screenshotComplete = false;
     let review: PreviewReview | undefined;
+    let screenshotResult: PreviewScreenshotResult = { status: 'timed_out' };
     let interactions: InteractionResult | undefined;
     let settled = false;
     let timer = 0;
+    let screenshotTimer = 0;
     const cleanup = () => {
       window.clearTimeout(timer);
+      window.clearTimeout(screenshotTimer);
       window.removeEventListener('message', receive);
       signal.removeEventListener('abort', abort);
       frame.remove();
@@ -450,6 +538,7 @@ export function checkIsolatedHtmlCandidate(
         previewId,
         diagnostics: [...diagnostics],
         review,
+        screenshotResult,
         interactions,
         passed: !timedOut && diagnostics.length === 0 && Boolean(review) &&
           !previewReviewHasIssues(review) && !review?.emptyPage &&
@@ -468,6 +557,12 @@ export function checkIsolatedHtmlCandidate(
       if (!data || typeof data !== 'object' || Array.isArray(data) || data.previewId !== previewId) return;
       if (data.type === 'nexo-preview-diagnostic') {
         addDiagnostics([data.diagnostic]);
+      } else if (data.type === 'nexo-preview-screenshot') {
+        if (screenshotComplete) return;
+        const clean = sanitizePreviewScreenshotEvent(data);
+        if (!clean) return;
+        screenshotResult = clean;
+        screenshotComplete = true;
       } else if (data.type === 'nexo-preview-complete') {
         if (runtimeComplete || !Array.isArray(data.diagnostics) ||
             data.diagnostics.length > MAX_PREVIEW_DIAGNOSTICS) return;
@@ -487,11 +582,17 @@ export function checkIsolatedHtmlCandidate(
         interactions = clean;
         interactionsComplete = true;
       }
-      if (runtimeComplete && reviewComplete && interactionsComplete) finish();
+      if (runtimeComplete && reviewComplete && interactionsComplete && screenshotComplete) finish();
     };
     window.addEventListener('message', receive);
     signal.addEventListener('abort', abort, { once: true });
     timer = window.setTimeout(() => finish(true), PREVIEW_WAIT_MS);
+    screenshotTimer = window.setTimeout(() => {
+      if (screenshotComplete) return;
+      screenshotResult = { status: 'timed_out' };
+      screenshotComplete = true;
+      if (runtimeComplete && reviewComplete && interactionsComplete) finish();
+    }, PREVIEW_SCREENSHOT_WAIT_MS);
     document.body.append(frame);
     if (signal.aborted) abort();
   });

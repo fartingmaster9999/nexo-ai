@@ -286,6 +286,26 @@ export const AgentReviewContextLanguage = {
   html: 'html',
 } as const;
 
+export type AgentReviewContextPreviewImageMimeType = typeof AgentReviewContextPreviewImageMimeType[keyof typeof AgentReviewContextPreviewImageMimeType];
+
+
+export const AgentReviewContextPreviewImageMimeType = {
+  'image/jpeg': 'image/jpeg',
+} as const;
+
+/**
+ * Bounded JPEG screenshot from the exact opaque-origin Nexo-generated preview, never an external page.
+ */
+export type AgentReviewContextPreviewImage = {
+  mimeType: AgentReviewContextPreviewImageMimeType;
+  /**
+     * @minLength 16
+     * @maxLength 512000
+     * @pattern ^[A-Za-z0-9+/]+={0,2}$
+     */
+  data: string;
+};
+
 /**
  * Bounded source and isolated-run results for a tool-free Gemma 4 code review.
  */
@@ -297,6 +317,8 @@ export interface AgentReviewContext {
   output?: string;
   /** @maxLength 4000 */
   browserChecks?: string;
+  /** Bounded JPEG screenshot from the exact opaque-origin Nexo-generated preview, never an external page. */
+  previewImage?: AgentReviewContextPreviewImage;
 }
 
 export interface AgentChatInput {

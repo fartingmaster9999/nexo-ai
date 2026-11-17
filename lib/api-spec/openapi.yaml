@@ -749,6 +749,22 @@ components:
         browserChecks:
           type: string
           maxLength: 4000
+        previewImage:
+          type: object
+          description: Bounded JPEG screenshot from the exact opaque-origin Nexo-generated preview, never an external page.
+          properties:
+            mimeType:
+              type: string
+              enum: [image/jpeg]
+            data:
+              type: string
+              minLength: 16
+              maxLength: 512000
+              pattern: "^[A-Za-z0-9+/]+={0,2}$"
+          required:
+            - mimeType
+            - data
+          additionalProperties: false
       required:
         - language
         - source

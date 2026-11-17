@@ -8,9 +8,18 @@ import {
 } from '../src/lib/preview-interactions.ts';
 import {
   reportPreviewInteractions, readPreviewInteractions, reportPreviewDiagnostics,
-  reportPreviewReview, readPreviewReview,
+  reportPreviewReview, readPreviewReview, reportPreviewScreenshot, readPreviewScreenshot,
   makePreviewHtml,
 } from '../src/lib/code-runner.ts';
+import {
+  sanitizePreviewScreenshot, sanitizePreviewScreenshotEvent, previewScreenshotInstrumentation,
+  PREVIEW_SCREENSHOT_MAX_DATA_CHARS,
+} from '../src/lib/preview-review.ts';
+
+const tinyJpeg = Buffer.from([
+  0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03,
+  0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
+]).toString('base64');
 
 const steps = [
   { action: 'click', selector: '#increment' },
@@ -99,6 +108,25 @@ test('interaction cache survives structural and runtime reports and returns inde
   assert.equal(reportPreviewInteractions('cache', { status: 'complete', steps: [{ step: 1, action: 'eval', reason: 'ok' }] }), false);
   assert.deepEqual(readPreviewInteractions('cache'), result);
   assert.equal(reportPreviewInteractions('cache', result), false, 'only one result per preview');
+});
+
+test('preview screenshot messages are JPEG-only, size-bounded, and stored only for a registered preview', () => {
+  const screenshot = { mimeType: 'image/jpeg', data: tinyJpeg, width: 1, height: 1 };
+  const event = { type: 'nexo-preview-screenshot', status: 'captured', screenshot };
+  assert.deepEqual(sanitizePreviewScreenshot(screenshot), screenshot);
+  assert.deepEqual(sanitizePreviewScreenshotEvent(event), { status: 'captured', screenshot });
+  assert.equal(sanitizePreviewScreenshot({ ...screenshot, width: 2 }), null, 'declared dimensions must match image bytes');
+  assert.equal(sanitizePreviewScreenshot({ ...screenshot, html: '<h1>not allowed</h1>' }), null, 'no DOM or text may cross the boundary');
+  assert.equal(sanitizePreviewScreenshot({ ...screenshot, data: 'A'.repeat(PREVIEW_SCREENSHOT_MAX_DATA_CHARS + 1) }), null);
+  assert.equal(sanitizePreviewScreenshotEvent({ ...event, pageText: 'private page text' }), null);
+  assert.equal(reportPreviewScreenshot('unregistered-preview', event), false);
+
+  makePreviewHtml('<h1>Generated</h1>', 'screenshot-cache', { captureScreenshot: true });
+  assert.equal(reportPreviewScreenshot('screenshot-cache', event), true);
+  assert.deepEqual(readPreviewScreenshot('screenshot-cache'), { status: 'captured', screenshot });
+  assert.equal(reportPreviewScreenshot('screenshot-cache', event), false, 'a preview accepts only one screenshot result');
+  assert.match(previewScreenshotInstrumentation('preview-test'), /nexo-preview-screenshot/);
+  assert.equal(previewScreenshotInstrumentation('preview-test').includes('</script'), false);
 });
 
 test('reports must match the actual plan and cannot skip assertions or change actions', () => {

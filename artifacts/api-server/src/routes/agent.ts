@@ -404,6 +404,14 @@ export function createAgentRouter({
         return;
       }
     }
+    if (parsed.data.agentReview?.previewImage) {
+      try {
+        validateImageData(parsed.data.agentReview.previewImage.mimeType, parsed.data.agentReview.previewImage.data);
+      } catch {
+        res.status(400).json({ error: "The generated-preview screenshot is invalid or exceeds the safe image limit." });
+        return;
+      }
+    }
     const history: AgentToolExchange[] = (parsed.data.agentHistory ?? []).map((exchange) => ({
       ...exchange,
       ...(exchange.sources ? { sources: cleanSources(exchange.sources) } : {}),

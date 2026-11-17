@@ -210,6 +210,11 @@ export const streamAgentChatBodyAgentReviewOutputMax = 8000;
 
 export const streamAgentChatBodyAgentReviewBrowserChecksMax = 4000;
 
+export const streamAgentChatBodyAgentReviewPreviewImageDataMin = 16;
+export const streamAgentChatBodyAgentReviewPreviewImageDataMax = 512000;
+
+
+export const streamAgentChatBodyAgentReviewPreviewImageDataRegExp = new RegExp('^[A-Za-z0-9+/]+={0,2}$');
 
 
 export const StreamAgentChatBody = zod.object({
@@ -269,7 +274,11 @@ export const StreamAgentChatBody = zod.object({
   "language": zod.enum(['python', 'javascript', 'html']),
   "source": zod.string().max(streamAgentChatBodyAgentReviewSourceMax),
   "output": zod.string().max(streamAgentChatBodyAgentReviewOutputMax).optional(),
-  "browserChecks": zod.string().max(streamAgentChatBodyAgentReviewBrowserChecksMax).optional()
+  "browserChecks": zod.string().max(streamAgentChatBodyAgentReviewBrowserChecksMax).optional(),
+  "previewImage": zod.object({
+  "mimeType": zod.enum(['image/jpeg']),
+  "data": zod.string().min(streamAgentChatBodyAgentReviewPreviewImageDataMin).max(streamAgentChatBodyAgentReviewPreviewImageDataMax).regex(streamAgentChatBodyAgentReviewPreviewImageDataRegExp)
+}).optional().describe('Bounded JPEG screenshot from the exact opaque-origin Nexo-generated preview, never an external page.')
 }).optional().describe('Bounded source and isolated-run results for a tool-free Gemma 4 code review.')
 })
 
@@ -443,6 +452,11 @@ export const streamPublicAgentChatBodyAgentReviewOutputMax = 8000;
 
 export const streamPublicAgentChatBodyAgentReviewBrowserChecksMax = 4000;
 
+export const streamPublicAgentChatBodyAgentReviewPreviewImageDataMin = 16;
+export const streamPublicAgentChatBodyAgentReviewPreviewImageDataMax = 512000;
+
+
+export const streamPublicAgentChatBodyAgentReviewPreviewImageDataRegExp = new RegExp('^[A-Za-z0-9+/]+={0,2}$');
 
 
 export const StreamPublicAgentChatBody = zod.object({
@@ -502,7 +516,11 @@ export const StreamPublicAgentChatBody = zod.object({
   "language": zod.enum(['python', 'javascript', 'html']),
   "source": zod.string().max(streamPublicAgentChatBodyAgentReviewSourceMax),
   "output": zod.string().max(streamPublicAgentChatBodyAgentReviewOutputMax).optional(),
-  "browserChecks": zod.string().max(streamPublicAgentChatBodyAgentReviewBrowserChecksMax).optional()
+  "browserChecks": zod.string().max(streamPublicAgentChatBodyAgentReviewBrowserChecksMax).optional(),
+  "previewImage": zod.object({
+  "mimeType": zod.enum(['image/jpeg']),
+  "data": zod.string().min(streamPublicAgentChatBodyAgentReviewPreviewImageDataMin).max(streamPublicAgentChatBodyAgentReviewPreviewImageDataMax).regex(streamPublicAgentChatBodyAgentReviewPreviewImageDataRegExp)
+}).optional().describe('Bounded JPEG screenshot from the exact opaque-origin Nexo-generated preview, never an external page.')
 }).optional().describe('Bounded source and isolated-run results for a tool-free Gemma 4 code review.')
 })
 

@@ -9,6 +9,7 @@ import {
   readPreviewInteractionPlan,
   reportPreviewDiagnostics,
   reportPreviewReview,
+  reportPreviewScreenshot,
   reportPreviewInteractions,
   readPreviewInteractions,
   sanitizePreviewDiagnostic,
@@ -307,6 +308,8 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         reportPreviewDiagnostics(previewId, diagnostics, false);
       } else if (data.type === 'nexo-preview-review') {
         if (!completed) reportPreviewReview(previewId, data.review);
+      } else if (data.type === 'nexo-preview-screenshot') {
+        reportPreviewScreenshot(previewId, data);
       } else if (data.type === 'nexo-preview-interactions') {
         if (completed || interactionsComplete || Object.keys(data).sort().join() !== 'previewId,result,type' ||
             !reportPreviewInteractions(previewId, data.result)) return;
@@ -380,6 +383,8 @@ export function CodeWorkspace({ conversationId, snippets, onClose, returnFocus, 
         reportPreviewDiagnostics(id, merge([diagnostic]), false);
       } else if (data.type === 'nexo-preview-review') {
         if (!completed) reportPreviewReview(id, data.review);
+      } else if (data.type === 'nexo-preview-screenshot') {
+        reportPreviewScreenshot(id, data);
       } else if (data.type === 'nexo-preview-interaction-progress') {
         if (completed || Object.keys(data).sort().join() !== 'previewId,result,type') return;
         const progress = sanitizeInteractionResult(data.result);

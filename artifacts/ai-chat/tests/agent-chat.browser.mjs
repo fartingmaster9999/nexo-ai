@@ -7,6 +7,10 @@ import { delay, waitFor, withFixture } from "./browser-harness.mjs";
 const temp = await mkdtemp(path.join(tmpdir(), "nexo-agent-image-"));
 const imagePath = path.join(temp, "chart.png");
 const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==";
+const fakeScreenshotBase64 = Buffer.from([
+  0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03,
+  0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
+]).toString("base64");
 await writeFile(imagePath, Buffer.from(imageBase64, "base64"));
 const liveEvents = process.env.NEXO_LIVE_AGENT_EVENTS ? JSON.parse(process.env.NEXO_LIVE_AGENT_EVENTS) : null;
 const liveTool = liveEvents?.find((event) => event.agentTool)?.agentTool;
@@ -123,7 +127,7 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
               thoughtSignature: "html-preview-signature",
               arguments: {
                 language: "html",
-                code: "<!doctype html><html><head><title>Agent preview</title></head><body><h1>First version</h1><script>throw new Error('HTML_PREVIEW_RUNTIME_FAILURE')</script></body></html>"
+                code: "<!doctype html><html><head><title>Agent preview</title></head><body><h1>First version</h1><script>parent.postMessage({type:'nexo-preview-screenshot',previewId:'stale-preview-id',status:'captured',screenshot:{mimeType:'image/jpeg',data:'${fakeScreenshotBase64}',width:1,height:1}},'*');throw new Error('HTML_PREVIEW_RUNTIME_FAILURE')</script></body></html>"
               },
               history: []
             } },
@@ -329,6 +333,8 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.match(qwenRequests[1].body.agentHistory[0].result, /Gemma 4 review was unavailable/);
   assert.equal(await evaluate(`window.__reviewAbortObserved`), true, "a stalled optional reviewer is cancelled without stopping Qwen");
 
+  await cdp("DOM.setFileInputFiles", { nodeId: imageInput, files: [imagePath] });
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="image-attachment-preview"]'))`), "reference image for visual preview review");
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="button-send-message"]'))`), "composer after Qwen response");
   await evaluate(`document.querySelector('[data-testid="input-message"]').focus()`);
   await cdp("Input.insertText", { text: "Build and preview a small HTML page, then fix its runtime error." });
@@ -345,6 +351,14 @@ await withFixture("tests/image-chat.html", async ({ cdp, evaluate }) => {
   assert.match(htmlContinuation[2].body.agentHistory[1].result, /no runtime errors were reported/);
   assert.equal(await evaluate(`document.querySelector('[data-testid="frame-preview"]').getAttribute("sandbox")`), "allow-scripts");
   assert.ok(await evaluate(`document.querySelector('[data-testid="frame-preview"]')?.getAttribute("srcdoc")?.includes("Corrected preview")`), "The revised HTML is shown in the isolated preview");
+  const visualReview = await evaluate(`window.__agentReviewRequests.find(request => request.body.agentReview.previewImage)`);
+  assert.ok(visualReview, "Gemma receives a screenshot of the generated preview");
+  assert.equal(visualReview.body.agentReview.previewImage.mimeType, "image/jpeg");
+  assert.ok(visualReview.body.agentReview.previewImage.data.length <= 512000, "the screenshot payload is bounded");
+  assert.ok(visualReview.body.agentReview.previewImage.data.length > 100, "the preview screenshot is real image data");
+  assert.notEqual(visualReview.body.agentReview.previewImage.data, fakeScreenshotBase64, "a stale preview ID cannot replace the current screenshot");
+  assert.equal(visualReview.body.image.mimeType, "image/png", "the separate user reference image is preserved");
+  assert.equal(await evaluate(`Object.keys(localStorage).some(key => (localStorage.getItem(key) || "").includes(window.__agentReviewRequests.find(request => request.body.agentReview.previewImage).body.agentReview.previewImage.data))`), false, "preview images are not stored in conversation history");
 
   await cdp("DOM.setFileInputFiles", { nodeId: imageInput, files: [imagePath] });
   await waitFor(() => evaluate(`Boolean(document.querySelector('[data-testid="image-attachment-preview"]'))`), "image attachment for failed Agent request");

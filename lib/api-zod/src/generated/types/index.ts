@@ -18,6 +18,8 @@ export * from './agentProjectFile';
 export * from './agentRateLimitRetry';
 export * from './agentReviewContext';
 export * from './agentReviewContextLanguage';
+export * from './agentReviewContextPreviewImage';
+export * from './agentReviewContextPreviewImageMimeType';
 export * from './agentSource';
 export * from './agentSourceRetrieval';
 export * from './agentStreamEventEnvelope';

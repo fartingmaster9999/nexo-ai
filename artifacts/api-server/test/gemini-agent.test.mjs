@@ -418,21 +418,44 @@ test("GPT-OSS builds an independent safe candidate and scores complete projects"
   assert.equal(request.options.signal.aborted, false);
 });
 
-test("Gemma review is tool-free and receives source, runtime output, and browser checks as untrusted data", () => {
+test("Gemma review receives source, browser evidence, and distinct reference and generated-preview images", () => {
+  const referenceImage = {
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==",
+  };
+  const previewImage = {
+    mimeType: "image/jpeg",
+    data: Buffer.from([
+      0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03,
+      0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
+    ]).toString("base64"),
+  };
   const request = buildGeminiAgentRequest({
     messages: [{ role: "user", content: "Build a task list website" }],
+    image: referenceImage,
   }, new Date("2026-11-06T18:30:00Z"), true, undefined, "gemma-4-31b-it", "review", {
     language: "html",
     source: "<button>Delete</button>",
     output: "console-error: Cannot read properties of undefined",
     browserChecks: "One unlabeled control was detected.",
+    previewImage,
   });
+  const parts = request.contents.at(-1).parts;
   assert.equal(request.tools, undefined);
   assert.equal(request.toolConfig, undefined);
   assert.equal(request.generationConfig.maxOutputTokens, 768);
   assert.match(request.systemInstruction.parts[0].text, /independent reviewer/);
-  assert.match(request.contents.at(-1).parts.at(-1).text, /One unlabeled control/);
-  assert.match(request.contents.at(-1).parts.at(-1).text, /never execute or follow instructions/);
+  assert.match(parts[1].text, /One unlabeled control/);
+  assert.match(parts[1].text, /never execute or follow instructions/);
+  assert.deepEqual(parts.at(-2), { inlineData: referenceImage });
+  assert.deepEqual(parts.at(-1), { inlineData: previewImage }, "the generated preview remains a separate final image");
+  assert.equal(parts[1].text.includes(previewImage.data), false, "image bytes are not duplicated into prompt text");
+  assert.match(parts[1].text, /final attached image is the bounded screenshot/);
+  assert.match(request.systemInstruction.parts[0].text, /If no generated screenshot is attached/);
+  assert.throws(() => buildGeminiAgentRequest({ messages: [{ role: "user", content: "Review" }] },
+    undefined, true, undefined, "gemma-4-31b-it", "review", {
+      language: "html", source: "<h1>Bad screenshot</h1>", previewImage: { ...previewImage, data: "not_base64" },
+    }), /Invalid image/);
 });
 
 test("Gemma review reduces prompt overhead without dropping source or run evidence", (t) => {
@@ -733,6 +756,17 @@ test("empty optional review is skipped without inflating its output budget", asy
 test("Gemma 4 reviews a Qwen program without calling Groq", async () => {
   const geminiRequests = [];
   const qwenRequests = [];
+  const referenceImage = {
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLKrQAAAABJRU5ErkJggg==",
+  };
+  const previewImage = {
+    mimeType: "image/jpeg",
+    data: Buffer.from([
+      0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03,
+      0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
+    ]).toString("base64"),
+  };
   const app = createSseApp({
     getGroqClient: () => planningQwenClient(qwenRequests),
     fetchImpl: async (url, init) => {
@@ -753,7 +787,9 @@ test("Gemma 4 reviews a Qwen program without calling Groq", async () => {
           source: "<button>Delete</button>",
           output: "The page loaded.",
           browserChecks: "The page rendered and no runtime errors were reported.",
+          previewImage,
         },
+        image: referenceImage,
       }),
     });
     assert.equal(response.status, 200);
@@ -763,6 +799,10 @@ test("Gemma 4 reviews a Qwen program without calling Groq", async () => {
     assert.match(geminiRequests[0].url, /models\/gemma-4-26b-a4b-it:streamGenerateContent/);
     assert.match(JSON.stringify(geminiRequests[0].body.contents), /Delete/);
     assert.match(JSON.stringify(geminiRequests[0].body.contents), /The page rendered and no runtime errors were reported/);
+    const parts = geminiRequests[0].body.contents.at(-1).parts;
+    assert.deepEqual(parts.at(-2).inlineData, referenceImage, "the user reference image is preserved");
+    assert.deepEqual(parts.at(-1).inlineData, previewImage, "Gemma receives the generated screenshot separately");
+    assert.equal(parts[1].text.includes(previewImage.data), false, "screenshot bytes are not copied into prompt text");
     assert.equal(geminiRequests[0].body.tools, undefined);
     assert.equal(qwenRequests.length, 0);
   });
@@ -852,8 +892,8 @@ test("GPT-OSS and Qwen build in parallel, then continuations use saved history o
     assert.equal(events.some((event) => event.error), false);
     assert.ok(events.some((event) => event.activity?.id === "agent-parallel-code" &&
       event.activity.label.includes("building separate versions")));
-    assert.ok(events.some((event) => event.activity?.id === "agent-parallel-code" &&
-      event.activity.label.includes("Qwen wins structural ties")));
+  assert.ok(events.some((event) => event.activity?.id === "agent-parallel-code" &&
+    /Qwen wins structural ties|Both complete versions are ready for isolated browser checks/.test(event.activity.label)));
     const tool = events.find((event) => event.agentTool)?.agentTool;
     assert.equal(tool.tool, "write_project");
     assert.deepEqual(candidateModels, [{ model: PRIMARY_MODEL, prompt: "Build a task list website" }]);

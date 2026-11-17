@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AgentReviewContextLanguage } from './agentReviewContextLanguage';
+import type { AgentReviewContextPreviewImage } from './agentReviewContextPreviewImage';
 
 /**
  * Bounded source and isolated-run results for a tool-free Gemma 4 code review.
@@ -18,4 +19,6 @@ export interface AgentReviewContext {
   output?: string;
   /** @maxLength 4000 */
   browserChecks?: string;
+  /** Bounded JPEG screenshot from the exact opaque-origin Nexo-generated preview, never an external page. */
+  previewImage?: AgentReviewContextPreviewImage;
 }
