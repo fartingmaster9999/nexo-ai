@@ -41,6 +41,7 @@ type TestWindow = Window & {
   __deepthinkEnabled?: boolean;
   __agentModeEnabled?: boolean;
   __externalTarget?: string;
+  __workspaceOpen?: boolean;
 };
 
 const testWindow = window as TestWindow;
@@ -165,9 +166,13 @@ function Fixture() {
   const [agentMode, setAgentMode] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [agentWork, setAgentWork] = useState<LiveAgentRunState | null>(null);
+  testWindow.__workspaceOpen = workspaceOpen;
   return (<>
     <button type="button" id="reopen-live" onClick={() => setOpen(true)}>Reopen Live</button>
     <button type="button" id="workspace-control" onClick={() => { testWindow.__workspaceClicks = (testWindow.__workspaceClicks ?? 0) + 1; }}>Workspace control</button>
+    <section hidden={!workspaceOpen} data-testid="fixture-agent-workspace">
+      <div data-testid="fixture-agent-status">{agentWork?.status ?? "idle"}</div>
+    </section>
     <LiveVoiceDialog
       open={open}
       onOpenChange={setOpen}

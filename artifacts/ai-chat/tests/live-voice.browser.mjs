@@ -141,7 +141,14 @@ await withFixture("tests/live-voice.html", async ({ evaluate }) => {
   await waitFor(() => evaluate(`document.querySelector('[data-testid="status-live-agent"]')?.textContent.includes('Agent is building')`), "Live Agent build start");
   await waitFor(() => evaluate(`window.__liveMessages.some(message=>message.toolResponse?.functionResponses?.[0]?.id === 'agent-call-1')`), "Live function response");
   assert.equal(await evaluate(`Boolean(document.querySelector('[role="dialog"].live-agent-docked') && document.querySelector('.live-transcript'))`), true);
+  assert.equal(await evaluate(`window.__workspaceOpen && document.querySelector('[data-testid="fixture-agent-status"]')?.textContent === 'running'`), true);
+  assert.equal(await evaluate(`document.querySelector('.live-status')?.textContent === 'Listening'`), true);
+  assert.equal(await evaluate(`document.querySelector('.live-transcript')?.textContent.includes('Build me a simple study planner') && document.querySelector('.live-transcript')?.textContent.includes('I can build that in your Agent workspace.')`), true);
   assert.equal(await evaluate(`window.__liveSocket.readyState === 1 && !window.__liveTrack.stopped && window.__liveSocket.onmessage !== null`), true);
+  await evaluate(`document.querySelector('[aria-label="Mute microphone"]').click()`);
+  assert.equal(await evaluate(`!window.__liveTrack.enabled && window.__workspaceOpen && document.querySelector('.live-status')?.textContent === 'Listening'`), true);
+  await evaluate(`document.querySelector('[aria-label="Unmute microphone"]').click()`);
+  assert.equal(await evaluate(`window.__liveTrack.enabled && window.__workspaceOpen`), true);
   await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({toolCall:{functionCalls:[{
     id:"open-workspace-call",name:"open_workspace",args:{}
   }]}})})`);
@@ -161,13 +168,22 @@ await withFixture("tests/live-voice.html", async ({ evaluate }) => {
   assert.equal(await evaluate(`window.__liveMessages.some(message=>message.toolResponse?.functionResponses?.[0]?.response?.result?.status === 'started')`), true);
   await evaluate(`window.__finishAgentRun()`);
   await waitFor(() => evaluate(`window.__liveMessages.some(message=>message.clientContent?.turns?.[0]?.parts?.[0]?.text.includes('Agent run has finished'))`), "Agent completion sent back to Live");
+  assert.equal(await evaluate(`document.querySelector('[data-testid="fixture-agent-status"]')?.textContent === 'finished' && document.querySelector('.live-status')?.textContent === 'Listening'`), true);
   await evaluate(`window.__liveSocket.onmessage({data:JSON.stringify({serverContent:{
     outputTranscription:{text:"The Agent finished. Your study planner is ready in the workspace."},
     turnComplete:true
   }})})`);
   await waitFor(() => evaluate(`document.querySelector('.live-transcript')?.textContent.includes('study planner is ready')`), "Live speaks Agent completion");
+  assert.equal(await evaluate(`document.querySelector('.live-transcript')?.textContent.includes('Build me a simple study planner') && document.querySelector('.live-transcript')?.textContent.includes('I can build that in your Agent workspace.')`), true);
   assert.equal(await evaluate(`window.__liveSocket.readyState === 1 && !window.__liveTrack.stopped`), true);
   await evaluate(`document.querySelector('[aria-label="End Live session"]').click()`);
   assert.equal(await evaluate(`window.__liveTrack.stopped && window.__liveContexts.at(-1).state === 'closed' && window.__liveSocket.onmessage === null`), true);
+  assert.equal(await evaluate(`window.__workspaceOpen && document.querySelector('[data-testid="fixture-agent-status"]')?.textContent === 'finished' && document.querySelector('.live-status')?.textContent === 'Session ended'`), true);
+  await evaluate(`document.querySelector('.live-dialog-content > button:has(.sr-only)').click()`);
+  await waitFor(() => evaluate(`!document.querySelector('[role="dialog"]')`), "close Live while keeping the Agent workspace");
+  assert.equal(await evaluate(`window.__workspaceOpen && document.querySelector('[data-testid="fixture-agent-status"]')?.textContent === 'finished'`), true);
+  await evaluate(`document.querySelector('#reopen-live').click()`);
+  await waitFor(() => evaluate(`Boolean(document.querySelector('[role="dialog"].live-agent-docked'))`), "reopen Live beside the workspace");
+  assert.equal(await evaluate(`window.__workspaceOpen && document.querySelector('[data-testid="fixture-agent-status"]')?.textContent === 'finished'`), true);
   console.log("Live browser regression passed: audio stays connected during Agent builds and receives the completion update.");
 });
