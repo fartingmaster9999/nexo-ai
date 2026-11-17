@@ -67,11 +67,13 @@ router.post(["/chat", "/public/chat"], async (req, res): Promise<void> => {
     if (shouldSearchWeb(researchRequested, lastPrompt)) {
       await activity("search", "Searching the web and reading public pages…", "search", "running");
       try {
-        const result = await searchWeb(buildSearchQuery(parsed.data.messages));
+        const result = await searchWeb(buildSearchQuery(parsed.data.messages), controller.signal);
         if (controller.signal.aborted) return;
         webContext = result.context;
         await emit({ sources: result.sources });
-        await activity("search", `${result.cached ? "Reused recent" : "Found"} ${result.sources.length} public sources${result.provider === "public-scraper" ? " with the direct scraper" : ""}`, "search");
+        const sourceMethod = result.provider === "tavily" ? " via Tavily"
+          : result.provider === "firecrawl" ? " via Firecrawl" : " with the direct scraper";
+        await activity("search", `${result.cached ? "Reused recent" : "Found"} ${result.sources.length} public sources${sourceMethod}`, "search");
       } catch {
         if (controller.signal.aborted) return;
         req.log.warn({ service: "web-search" }, "External sources could not be retrieved");

@@ -10,6 +10,7 @@ const USER_AGENT = "NexoAI/1.0 (public information retrieval)";
 type ScraperDependencies = {
   lookupImpl?: typeof lookup;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 };
 
 export function isPublicAddress(address: string): boolean {
@@ -31,13 +32,16 @@ export function isPublicUrl(raw: string): boolean {
 async function publicText(
   raw: string,
   maxBytes = 350000,
-  { lookupImpl = lookup, fetchImpl = fetch }: ScraperDependencies = {},
+  dependencies: ScraperDependencies = {},
 ): Promise<{ text: string; status: number }> {
+  const { lookupImpl = lookup, fetchImpl = fetch, signal } = dependencies;
   let url = raw;
   for (let redirect = 0; redirect < 3; redirect++) {
+    if (signal?.aborted) throw signal.reason;
     if (!isPublicUrl(url)) throw new Error("Only public HTTPS pages can be scraped");
     const parsed = new URL(url);
     const addresses = await lookupImpl(parsed.hostname.replace(/^\[|\]$/g, ""), { all: true });
+    if (signal?.aborted) throw signal.reason;
     if (!addresses.length || addresses.some((entry) => !isPublicAddress(entry.address))) throw new Error("Private network access is blocked");
     const agent = new Agent({ connect: {
       autoSelectFamily: false,
@@ -45,7 +49,11 @@ async function publicText(
     } });
     try {
       const response = await fetchImpl(url, {
-        dispatcher: agent, redirect: "manual", signal: AbortSignal.timeout(4500),
+        dispatcher: agent,
+        redirect: "manual",
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(4500)])
+          : AbortSignal.timeout(4500),
         headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain,application/xhtml+xml" },
       });
       if (response.status >= 300 && response.status < 400) {
@@ -87,13 +95,17 @@ async function scrapePage(page: ScrapedPage, dependencies: ScraperDependencies):
     const main = $("main,article,[role=main]").first();
     const content = (main.length ? main : $("body")).text().replace(/\s+/g, " ").trim();
     return content.length > 80 ? { ...page, markdown: content.slice(0, 3500) } : page;
-  } catch { return page; } // Retain explicitly labelled search excerpts, never bypass a site's restrictions.
+  } catch (error) {
+    if (dependencies.signal?.aborted) throw error;
+    return page;
+  } // Retain explicitly labelled search excerpts, never bypass a site's restrictions.
 }
 
 export function createPublicScraper(dependencies: ScraperDependencies = {}) {
-  return async function scrapePublicSearch(query: string): Promise<ScrapedPage[]> {
+  return async function scrapePublicSearch(query: string, signal?: AbortSignal): Promise<ScrapedPage[]> {
+    const requestDependencies = { ...dependencies, ...(signal ? { signal } : {}) };
     const url = `https://html.duckduckgo.com/html/?kl=us-en&q=${encodeURIComponent(query)}`;
-    const response = await publicText(url, 350000, dependencies);
+    const response = await publicText(url, 350000, requestDependencies);
     if (response.status !== 200 || /anomaly\.js|bots use DuckDuckGo/i.test(response.text)) throw new Error("Public search is unavailable");
     const $ = load(response.text);
     const pages: ScrapedPage[] = [];
@@ -111,7 +123,7 @@ export function createPublicScraper(dependencies: ScraperDependencies = {}) {
       });
     });
     if (!pages.length) throw new Error("No usable public search results");
-    return Promise.all(pages.map((page) => scrapePage(page, dependencies)));
+    return Promise.all(pages.map((page) => scrapePage(page, requestDependencies)));
   };
 }
 

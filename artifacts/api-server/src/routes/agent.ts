@@ -1385,11 +1385,13 @@ export function createAgentRouter({
               await emit({ activity: { id: activityId, label: "Reused an earlier web search", kind: "search", status: "complete" } });
             } else {
               await reviewAction(call.callId, call.tool, arguments_);
-              const searchResult = await search(arguments_.query);
+              const searchResult = await search(arguments_.query, controller.signal);
               sources = cleanSources(searchResult.sources, searchResult.retrievedAt);
               result = searchResult.context.slice(0, MAX_AGENT_RESULT_CHARS);
               if (sources.length) await emit({ sources });
-              await emit({ activity: { id: activityId, label: `Found ${sources.length} public source${sources.length === 1 ? "" : "s"}`, kind: "search", status: "complete" } });
+              const sourceMethod = searchResult.provider === "tavily" ? " via Tavily"
+                : searchResult.provider === "firecrawl" ? " via Firecrawl" : " with the direct scraper";
+              await emit({ activity: { id: activityId, label: `Found ${sources.length} public source${sources.length === 1 ? "" : "s"}${sourceMethod}`, kind: "search", status: "complete" } });
             }
           } catch {
             result = "Web search failed. Do not claim that current facts were verified; answer only with available knowledge and state this limitation.";
