@@ -25,8 +25,8 @@ import { HomeLanding } from '@/components/home-landing';
 import { ResearchBriefPanel } from '@/components/research-brief-panel';
 import NotFound from '@/pages/not-found';
 import { LiveReplyIndicator, NoticeBanner, ThinkingPanel, type Activity, type ChatMessage } from '@/components/answer-details';
-import { consumeChatStream, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
-import { executeCode, makePreviewHtml, formatPreviewReview, readPreviewReview, readPreviewInteractions, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
+import { consumeChatStream, type AgentToolCandidate, type AgentToolExchange, type AgentToolRequest, type StreamEvent } from '@/lib/chat-stream';
+import { checkIsolatedHtmlCandidate, executeCode, makePreviewHtml, formatPreviewReview, readPreviewReview, readPreviewInteractions, waitForPreviewDiagnostics, type PreviewDiagnostic, type RunOutput } from '@/lib/code-runner';
 import { formatInteractionResult, interactionChecksHaveIssues } from '@/lib/preview-interactions';
 import { previewReviewHasIssues } from '@/lib/preview-review';
 import { startRequestDeadline, RESPONSE_DEADLINE_MS, AGENT_BUILD_DEADLINE_MS, AGENT_REVIEW_DEADLINE_MS } from '@/lib/request-deadlines';
@@ -1185,8 +1185,155 @@ function Home() {
           }));
           continue;
         }
-        const tool = nextAgentTool.current as AgentToolRequest | null;
+        let tool = nextAgentTool.current as AgentToolRequest | null;
         if (!requestAgent || !tool) break;
+        let selectedCandidateCheck: {
+          candidate: AgentToolCandidate;
+          language: AgentWorkspaceTask['language'];
+          code: string;
+          executionCode: string;
+          outputs: RunOutput[];
+          executionError: string;
+          previewHtml?: string;
+          previewId?: string;
+          diagnostics: PreviewDiagnostic[];
+          review?: NonNullable<ReturnType<typeof readPreviewReview>>;
+          interactions?: NonNullable<ReturnType<typeof readPreviewInteractions>>;
+          score: number;
+        } | undefined;
+        let candidateComparisonText = '';
+        if (tool.candidates?.length === 2) {
+          const fallbackCandidate = tool.candidates.find(candidate => candidate.callId === tool!.callId);
+          const candidates = await Promise.all(tool.candidates.map(async (candidate) => {
+            try {
+              let projectFiles: AgentWorkspaceTask['projectFiles'];
+              let projectEntrypoint: string | undefined;
+              let language: AgentWorkspaceTask['language'];
+              let code: string;
+              if (candidate.tool === 'write_project') {
+                projectEntrypoint = candidate.arguments.entrypoint;
+                const previous = stagedProject ?? readSavedProject(localStorage, conversationId);
+                projectFiles = createAgentProject(candidate.arguments.files, projectEntrypoint, previous).files;
+                language = projectLanguage(projectEntrypoint);
+                code = projectFiles.find(file => file.path === projectEntrypoint)?.content ?? '';
+              } else if (candidate.tool === 'edit_project') {
+                const saved = readSavedProject(localStorage, conversationId);
+                const source = stagedProject ?? saved;
+                if (!source) throw new Error('The existing project is unavailable for candidate checks.');
+                const selected = saved ? source.selectedPaths.filter(path => saved.selectedPaths.includes(path) ||
+                  !saved.files.some(file => file.path === path)) : source.selectedPaths;
+                projectFiles = applyProjectEdits(source.files, selected, candidate.arguments.edits);
+                projectEntrypoint = candidate.arguments.entrypoint;
+                if (!source.files.some(file => file.path === projectEntrypoint)) throw new Error('The candidate entrypoint is unavailable.');
+                language = projectLanguage(projectEntrypoint);
+                code = projectFiles.find(file => file.path === projectEntrypoint)?.content ?? '';
+              } else {
+                language = candidate.arguments.language;
+                code = candidate.arguments.code;
+                if (language === 'html') {
+                  projectEntrypoint = 'index.html';
+                  const previous = stagedProject ?? readSavedProject(localStorage, conversationId);
+                  projectFiles = createAgentProject([{ path: projectEntrypoint, content: code }], projectEntrypoint, previous).files;
+                }
+              }
+              if (!code.trim()) throw new Error('The candidate has no runnable source.');
+              const isProject = Boolean(projectFiles && projectEntrypoint);
+              const executionCode = projectFiles && projectEntrypoint && language === 'html'
+                ? bundleHtmlProject(projectFiles, projectEntrypoint)
+                : code;
+              let outputs: RunOutput[] = [];
+              let executionError = '';
+              let previewHtml: string | undefined;
+              let previewId: string | undefined;
+              let diagnostics: PreviewDiagnostic[] = [];
+              let review: NonNullable<ReturnType<typeof readPreviewReview>> | undefined;
+              let interactions: NonNullable<ReturnType<typeof readPreviewInteractions>> | undefined;
+              let score: number;
+              if (language === 'html') {
+                const checked = await checkIsolatedHtmlCandidate(executionCode, controller.signal);
+                previewHtml = checked.previewHtml;
+                previewId = checked.previewId;
+                diagnostics = checked.diagnostics;
+                review = checked.review;
+                interactions = checked.interactions;
+                score = checked.passed ? 5 :
+                  (diagnostics.length ? 0 : 2) +
+                  (review && !previewReviewHasIssues(review) && !review.emptyPage ? 1 : 0) +
+                  (interactions && !interactionChecksHaveIssues(interactions) ? 1 : 0);
+              } else {
+                const execution = await executeCode({ language, code: executionCode, signal: controller.signal });
+                outputs = execution.outputs;
+                executionError = execution.error ?? '';
+                score = executionError ? 0 : 3;
+              }
+              return {
+                candidate, language, code, executionCode, outputs, executionError,
+                previewHtml, previewId, diagnostics, review, interactions, score, isProject,
+              };
+            } catch (error) {
+              if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+              return { candidate, score: -1, error: error instanceof Error ? error.message : 'The candidate could not be tested.' };
+            }
+          }));
+          const tested = candidates.filter(candidate => candidate.score >= 0);
+          const selected = tested.reduce<typeof tested[number] | undefined>((best, candidate) => {
+            if (!best || candidate.score > best.score ||
+                candidate.score === best.score && candidate.candidate.callId === fallbackCandidate?.callId) return candidate;
+            return best;
+          }, undefined);
+          candidateComparisonText = candidates.map(candidate =>
+            `${candidate.candidate.model}: ${candidate.score < 0 ? 'browser check unavailable' :
+              candidate.score >= 5 ? 'runtime and browser checks passed' : 'browser check found issues'}.`
+          ).join(' ');
+          if (selected) {
+            const selectedCandidate = selected.candidate;
+            tool = {
+              ...tool,
+              tool: selectedCandidate.tool,
+              callId: selectedCandidate.callId,
+              thoughtSignature: selectedCandidate.thoughtSignature,
+              arguments: selectedCandidate.arguments,
+            } as AgentToolRequest;
+            if ('executionCode' in selected) {
+              const checked = selected as typeof selected & {
+                language: AgentWorkspaceTask['language'];
+                code: string;
+                executionCode: string;
+                outputs: RunOutput[];
+                executionError: string;
+                diagnostics: PreviewDiagnostic[];
+              };
+              selectedCandidateCheck = {
+                candidate: selectedCandidate,
+                language: checked.language,
+                code: checked.code,
+                executionCode: checked.executionCode,
+                outputs: checked.outputs,
+                executionError: checked.executionError,
+                previewHtml: checked.previewHtml,
+                previewId: checked.previewId,
+                diagnostics: checked.diagnostics,
+                review: checked.review,
+                interactions: checked.interactions,
+                score: checked.score,
+              };
+              candidateComparisonText += ` Selected ${selectedCandidate.model} using the sandbox results.`;
+            }
+            agentModel.current = selectedCandidate.model;
+            patchLast((message) => ({ ...message, model: selectedCandidate.model }));
+            patchLast((message) => ({
+              ...message,
+              activity: [...(message.activity ?? []).filter(entry => entry.id !== 'agent-candidate-browser-check'), {
+                id: 'agent-candidate-browser-check',
+                label: `Both builds checked in isolation; ${selectedCandidate.model} ranked highest`,
+                kind: 'code',
+                status: 'complete',
+              }],
+            }));
+          } else {
+            candidateComparisonText += ' Browser checks could not rank either draft; continuing with the server-selected version.';
+          }
+        }
         // Never replay a call whose result (or uncertain in-flight outcome) was saved.
         if (agentHistory.some(entry => entry.callId === tool.callId)) {
           throw new Error('Agent repeated an already handled tool call. Saved files are unchanged; send a new request to continue.');
@@ -1332,19 +1479,37 @@ function Home() {
         let previewInteractionText = '';
         let previewInteractionErrors = false;
         let previewInteractionResult: ReturnType<typeof readPreviewInteractions>;
+        const reusedCandidateCheck = selectedCandidateCheck?.candidate.callId === tool.callId
+          ? selectedCandidateCheck
+          : undefined;
         try {
-          executionCode = projectFiles && projectEntrypoint && language === 'html'
-            ? bundleHtmlProject(projectFiles, projectEntrypoint)
-            : code;
-          const execution = await executeCode({
-            language,
-            code: executionCode,
-            signal: controller.signal,
-          });
-          outputs = execution.outputs;
-          executionError = execution.error ?? '';
-          previewHtml = execution.previewHtml;
-          previewId = execution.previewId;
+          if (reusedCandidateCheck) {
+            executionCode = reusedCandidateCheck.executionCode;
+            outputs = reusedCandidateCheck.outputs;
+            executionError = reusedCandidateCheck.executionError;
+            previewHtml = reusedCandidateCheck.previewHtml;
+            previewId = reusedCandidateCheck.previewId;
+            previewDiagnostics = reusedCandidateCheck.diagnostics;
+            previewReviewText = reusedCandidateCheck.review ? formatPreviewReview(reusedCandidateCheck.review) : '';
+            previewLayoutErrors = !reusedCandidateCheck.review || previewReviewHasIssues(reusedCandidateCheck.review);
+            previewInteractionResult = reusedCandidateCheck.interactions;
+            previewInteractionText = formatInteractionResult(previewInteractionResult);
+            previewInteractionErrors = interactionChecksHaveIssues(previewInteractionResult) ||
+              (Boolean(reusedCandidateCheck.review?.controls) && previewInteractionResult?.status === 'not-requested');
+          } else {
+            executionCode = projectFiles && projectEntrypoint && language === 'html'
+              ? bundleHtmlProject(projectFiles, projectEntrypoint)
+              : code;
+            const execution = await executeCode({
+              language,
+              code: executionCode,
+              signal: controller.signal,
+            });
+            outputs = execution.outputs;
+            executionError = execution.error ?? '';
+            previewHtml = execution.previewHtml;
+            previewId = execution.previewId;
+          }
         } catch (error) {
           if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
           executionError = error instanceof Error ? error.message : 'The browser code runner failed.';
@@ -1362,7 +1527,13 @@ function Home() {
           ].filter(Boolean).join('\n').slice(0, 8000),
         };
         saveContinuation();
-        if (previewHtml && previewId) {
+        if (reusedCandidateCheck) {
+          if (previewHtml && previewId && !isProject) {
+            previewId = crypto.randomUUID();
+            previewHtml = makePreviewHtml(executionCode, previewId, { runInteractionChecks: false });
+            setAgentCodeTask({ ...task, outputs, status: 'running', previewHtml, previewId });
+          }
+        } else if (previewHtml && previewId) {
           setAgentCodeTask(isProject
             ? { ...task, outputs, status: 'running', candidatePreviewHtml: previewHtml, candidatePreviewId: previewId }
             : { ...task, outputs, status: 'running', previewHtml, previewId });
@@ -1579,6 +1750,7 @@ function Home() {
 
         const resultText = [
           `Nexo execution status: ${codeHasErrors ? 'failed' : 'completed'}.`,
+          candidateComparisonText,
           previewInteractionText,
           projectStorageError ? `Project save error: ${projectStorageError}` : '',
           executionError ? `Execution error: ${executionError}` : '',

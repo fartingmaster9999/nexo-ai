@@ -611,6 +611,13 @@ export function createAgentRouter({
       let parallelCodingUsed = false;
       let parallelCodingModel: string | undefined;
       let parallelCodingPromise: Promise<ParallelCodingResult> | undefined;
+      let browserCodingCandidates: Array<{
+        model: string;
+        tool: "run_code" | "write_project" | "edit_project";
+        callId: string;
+        thoughtSignature: string;
+        arguments: Record<string, unknown>;
+      }> | undefined;
       let compareAgentRunPending = compareAgentEligible;
       const startParallelCoding = async (input: typeof parsed.data, toolsAllowed: boolean) => {
         if (!requestParallelCoding || parallelCodingStarted || activeProvider !== "groq" ||
@@ -714,6 +721,23 @@ export function createAgentRouter({
 
         const primaryScore = scoreGroqCodingCandidate(input, primaryResponse);
         const candidateScore = scoreGroqCodingCandidate(input, candidate.response);
+        const toolCandidates = [
+          { model: primaryModel, response: primaryResponse, score: primaryScore },
+          { model: candidate.model, response: candidate.response, score: candidateScore },
+        ].filter(({ response, score }) => score.valid && response.calls.length === 1 &&
+          ["run_code", "write_project", "edit_project"].includes(response.calls[0]!.tool));
+        if (toolCandidates.length === 2) {
+          browserCodingCandidates = toolCandidates.map(({ model, response }) => {
+            const call = response.calls[0]!;
+            return {
+              model,
+              tool: call.tool as "run_code" | "write_project" | "edit_project",
+              callId: call.callId,
+              thoughtSignature: call.thoughtSignature,
+              arguments: call.arguments,
+            };
+          });
+        }
         const candidateWins = candidateScore.valid && (
           !primaryScore.valid ||
           candidateScore.score > primaryScore.score ||
@@ -742,7 +766,9 @@ export function createAgentRouter({
           label: candidateWins
             ? `${modelLabel(selectedModel)}'s complete version passed the project checks`
             : primaryScore.valid
-              ? `${modelLabel(primaryModel)}'s complete version passed; Qwen wins structural ties`
+              ? browserCodingCandidates
+                ? "Both complete versions are ready for isolated browser checks"
+                : `${modelLabel(primaryModel)}'s complete version passed; Qwen wins structural ties`
               : "Neither version passed the project checks; the active model will repair its output",
           kind: "code",
           status: primaryScore.valid || candidateScore.valid ? "complete" : "error",
@@ -1333,6 +1359,10 @@ export function createAgentRouter({
           throw new AgentPublicError("Nexo Agent requested multiple tools at once. Please try a more focused request.");
         }
         const call = modelResponse.calls[0];
+        const browserCandidatesForCall = browserCodingCandidates?.some(candidate => candidate.callId === call?.callId)
+          ? browserCodingCandidates
+          : undefined;
+        browserCodingCandidates = undefined;
         if (isProgramReview && (call || modelResponse.finishReason === "MAX_TOKENS")) {
           throw new AgentPublicError("The independent review was incomplete and was skipped. Continue using the recorded run results.");
         }
@@ -1442,7 +1472,7 @@ export function createAgentRouter({
           }
           await reviewAction(call.callId, call.tool, arguments_);
           await emit({ activity: { id: `agent-project-${call.callId}`, label: "Applying a small exact-match edit in the isolated browser…", kind: "code", status: "running" } });
-          await emit({ agentTool: { ...call, arguments: arguments_, history } });
+          await emit({ agentTool: { ...call, arguments: arguments_, history, candidates: browserCandidatesForCall } });
           await emit({ done: true });
           res.end();
           return;
@@ -1494,6 +1524,7 @@ export function createAgentRouter({
               thoughtSignature: call.thoughtSignature,
               arguments: arguments_,
               history,
+              candidates: browserCandidatesForCall,
             },
           });
           await emit({ done: true });
@@ -1555,6 +1586,7 @@ export function createAgentRouter({
             thoughtSignature: call.thoughtSignature,
             arguments: arguments_,
             history,
+            candidates: browserCandidatesForCall,
           },
         });
         await emit({ done: true });

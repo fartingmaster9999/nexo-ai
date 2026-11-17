@@ -17,18 +17,40 @@ export type AgentToolRequest = {
   thoughtSignature: string;
   arguments: { entrypoint: string; edits: ProjectEdit[] };
   history: AgentToolExchange[];
+  candidates?: AgentToolCandidate[];
 } | {
   tool: 'run_code';
   callId: string;
   thoughtSignature: string;
   arguments: { language: RunLanguage; code: string };
   history: AgentToolExchange[];
+  candidates?: AgentToolCandidate[];
 } | {
   tool: 'write_project';
   callId: string;
   thoughtSignature: string;
   arguments: { entrypoint: string; files: ProjectFile[] };
   history: AgentToolExchange[];
+  candidates?: AgentToolCandidate[];
+};
+export type AgentToolCandidate = {
+  model: string;
+  tool: 'edit_project';
+  callId: string;
+  thoughtSignature: string;
+  arguments: { entrypoint: string; edits: ProjectEdit[] };
+} | {
+  model: string;
+  tool: 'run_code';
+  callId: string;
+  thoughtSignature: string;
+  arguments: { language: RunLanguage; code: string };
+} | {
+  model: string;
+  tool: 'write_project';
+  callId: string;
+  thoughtSignature: string;
+  arguments: { entrypoint: string; files: ProjectFile[] };
 };
 export type AgentRetryRequest = { afterMs: number; history: AgentToolExchange[] };
 export type StreamEvent = { content?: string; reasoning?: string; done?: boolean; error?: string; activity?: Activity; sources?: Source[]; notice?: Notice; model?: string; agentProvider?: 'gemini' | 'groq'; agentTask?: AgentTask; agentTool?: AgentToolRequest; agentRetry?: AgentRetryRequest };
@@ -68,6 +90,9 @@ function isAgentToolRequest(value: unknown): value is AgentToolRequest {
       typeof tool.thoughtSignature !== 'string' || !tool.thoughtSignature || tool.thoughtSignature.length > 4096 ||
       !tool.arguments || typeof tool.arguments !== 'object' || Array.isArray(tool.arguments) ||
       !Array.isArray(tool.history) || tool.history.length > 6) return false;
+  if (tool.candidates !== undefined &&
+      (!Array.isArray(tool.candidates) || tool.candidates.length !== 2 ||
+       !tool.candidates.every((candidate) => isAgentToolCandidate(candidate)))) return false;
   const args = tool.arguments as Record<string, unknown>;
   if (tool.tool === 'run_code') {
     if (!['python', 'javascript', 'html'].includes(String(args.language)) ||
@@ -84,6 +109,16 @@ function isAgentToolRequest(value: unknown): value is AgentToolRequest {
     }
   }
   return isAgentHistory(tool.history);
+}
+
+function isAgentToolCandidate(value: unknown): value is AgentToolCandidate {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.model === 'string' && Boolean(candidate.model) && candidate.model.length <= 128 &&
+    isAgentToolRequest({
+      ...candidate,
+      history: [],
+    });
 }
 
 /** Incremental SSE decoding: UTF-8, LF/CRLF, comments, and split frames. */

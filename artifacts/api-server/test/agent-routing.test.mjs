@@ -1214,6 +1214,58 @@ test("new coding requests build with Qwen and GPT-OSS concurrently and choose th
   [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
 });
 
+test("parallel coding stream includes both valid drafts for isolated browser ranking", async () => {
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearModelUnhealthy);
+  const primary = {
+    entrypoint: "index.html",
+    files: [{ path: "index.html", content: "<!doctype html><html><body><h1>Primary draft</h1></body></html>" }],
+  };
+  const alternate = {
+    entrypoint: "index.html",
+    files: [{ path: "index.html", content: "<!doctype html><html><body><h1>Alternate draft</h1></body></html>" }],
+  };
+  const client = {
+    models: { list: async () => ({ data: catalog }) },
+    chat: { completions: { create: async (request) => {
+      if (request.model === PROMPT_GUARD_MODEL) return { choices: [{ message: { content: "0.01" } }] };
+      if (request.model === SAFEGUARD_MODEL) return { choices: [{ message: { content: '{"violation":0}' } }] };
+      return projectStream("primary-browser-candidate", primary);
+    } } },
+  };
+
+  await withServer(createApp(client, undefined, undefined, {
+    parallelCoding: true,
+    generateGroqCandidate: async (_provider, _input, model) => ({
+      response: {
+        text: "",
+        calls: [{
+          tool: "write_project",
+          callId: "alternate-browser-candidate",
+          thoughtSignature: "alternate-signature",
+          arguments: alternate,
+        }],
+      },
+      requestBytes: 100,
+    }),
+  }), async (url) => {
+    const events = await eventsFrom(await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Build a small HTML app" }] }),
+    }));
+    const tool = events.find(event => event.agentTool)?.agentTool;
+    assert.ok(tool);
+    assert.equal(tool.candidates.length, 2);
+    assert.deepEqual(tool.candidates.map(candidate => candidate.callId).sort(), [
+      "alternate-browser-candidate",
+      "primary-browser-candidate",
+    ]);
+    assert.deepEqual(tool.candidates.map(candidate => candidate.model).sort(), [CODING_FALLBACK, PRIMARY_MODEL].sort());
+    assert.equal(events.some(event => event.error), false);
+  });
+  [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearModelUnhealthy);
+});
+
 test("a successful GPT-OSS candidate is reused when Qwen is rejected", async () => {
   [CODING_FALLBACK, PRIMARY_MODEL, SMALL_MODEL].forEach(clearRateLimit);
   const codeModels = [];

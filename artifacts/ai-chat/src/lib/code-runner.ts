@@ -1,8 +1,10 @@
-import { previewReviewInstrumentation, sanitizePreviewReview, type PreviewReview } from './preview-review.ts';
+import {
+  previewReviewInstrumentation, sanitizePreviewReview, previewReviewHasIssues, type PreviewReview,
+} from './preview-review.ts';
 import { previewFormInstrumentation } from './preview-forms.ts';
 import {
   previewInteractionInstrumentation, sanitizeInteractionResult, readInteractionPlan,
-  interactionResultMatchesPlan, type InteractionResult, type InteractionPlan,
+  interactionResultMatchesPlan, interactionChecksHaveIssues, type InteractionResult, type InteractionPlan,
 } from './preview-interactions.ts';
 export { formatPreviewReview } from './preview-review.ts';
 export type RunLanguage = 'python' | 'javascript' | 'html';
@@ -19,6 +21,14 @@ export type ExecutionResult = {
   error?: string;
   previewHtml?: string;
   previewId?: string;
+};
+export type IsolatedHtmlCandidateCheck = {
+  previewHtml: string;
+  previewId: string;
+  diagnostics: PreviewDiagnostic[];
+  review?: PreviewReview;
+  interactions?: InteractionResult;
+  passed: boolean;
 };
 
 export const MAX_PREVIEW_DIAGNOSTICS = 8;
@@ -370,6 +380,121 @@ export function executeCode(options: ExecuteOptions): Promise<ExecutionResult> {
   const next = runQueue.then(() => executeInRunner(options), () => executeInRunner(options));
   runQueue = next.then(() => undefined, () => undefined);
   return next;
+}
+
+/** Runs one generated HTML draft in its own opaque-origin, network-blocked frame. */
+export function checkIsolatedHtmlCandidate(
+  code: string,
+  signal: AbortSignal,
+): Promise<IsolatedHtmlCandidateCheck> {
+  if (signal.aborted) return Promise.reject(new DOMException('Stopped', 'AbortError'));
+  const previewId = crypto.randomUUID();
+  const previewHtml = makePreviewHtml(code, previewId);
+  const interactionPlan = readInteractionPlan(code);
+  const diagnostics: PreviewDiagnostic[] = [];
+  const seenDiagnostics = new Set<string>();
+  const addDiagnostics = (values: unknown[]) => {
+    for (const value of values.slice(0, MAX_PREVIEW_DIAGNOSTICS)) {
+      const diagnostic = sanitizePreviewDiagnostic(value);
+      if (!diagnostic) continue;
+      const key = `${diagnostic.kind}\n${diagnostic.message}\n${diagnostic.source ?? ''}\n${diagnostic.line ?? ''}`;
+      if (seenDiagnostics.has(key)) continue;
+      seenDiagnostics.add(key);
+      if (diagnostics.length < MAX_PREVIEW_DIAGNOSTICS - 1) diagnostics.push(diagnostic);
+      else {
+        diagnostics.push({ kind: 'limit', message: 'Additional preview errors were omitted.' });
+        break;
+      }
+    }
+  };
+  const frame = document.createElement('iframe');
+  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.tabIndex = -1;
+  frame.title = 'Isolated Agent candidate check';
+  Object.assign(frame.style, {
+    position: 'fixed',
+    left: '-12000px',
+    top: '0',
+    width: '1024px',
+    height: '768px',
+    opacity: '0',
+    pointerEvents: 'none',
+    zIndex: '-1',
+    border: '0',
+  });
+  frame.srcdoc = previewHtml;
+
+  return new Promise((resolve, reject) => {
+    let runtimeComplete = false;
+    let reviewComplete = false;
+    let interactionsComplete = false;
+    let review: PreviewReview | undefined;
+    let interactions: InteractionResult | undefined;
+    let settled = false;
+    let timer = 0;
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('message', receive);
+      signal.removeEventListener('abort', abort);
+      frame.remove();
+    };
+    const finish = (timedOut = false) => {
+      if (settled) return;
+      settled = true;
+      if (timedOut) addDiagnostics([{ kind: 'timeout', message: 'The isolated candidate preview did not finish its browser checks in time.' }]);
+      cleanup();
+      const hasControlsWithoutChecks = Boolean(review?.controls) && interactions?.status === 'not-requested';
+      resolve({
+        previewHtml,
+        previewId,
+        diagnostics: [...diagnostics],
+        review,
+        interactions,
+        passed: !timedOut && diagnostics.length === 0 && Boolean(review) &&
+          !previewReviewHasIssues(review) && !review?.emptyPage &&
+          Boolean(interactions) && !interactionChecksHaveIssues(interactions) && !hasControlsWithoutChecks,
+      });
+    };
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new DOMException('Stopped', 'AbortError'));
+    };
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== 'null' || event.source !== frame.contentWindow) return;
+      const data = event.data;
+      if (!data || typeof data !== 'object' || Array.isArray(data) || data.previewId !== previewId) return;
+      if (data.type === 'nexo-preview-diagnostic') {
+        addDiagnostics([data.diagnostic]);
+      } else if (data.type === 'nexo-preview-complete') {
+        if (runtimeComplete || !Array.isArray(data.diagnostics) ||
+            data.diagnostics.length > MAX_PREVIEW_DIAGNOSTICS) return;
+        runtimeComplete = true;
+        addDiagnostics(data.diagnostics);
+      } else if (data.type === 'nexo-preview-review') {
+        if (reviewComplete) return;
+        const clean = sanitizePreviewReview(data.review);
+        if (!clean) return;
+        review = clean;
+        reviewComplete = true;
+      } else if (data.type === 'nexo-preview-interactions') {
+        if (interactionsComplete) return;
+        const clean = sanitizeInteractionResult(data.result);
+        if (!clean || clean.status === 'running' ||
+            !interactionResultMatchesPlan(clean, interactionPlan)) return;
+        interactions = clean;
+        interactionsComplete = true;
+      }
+      if (runtimeComplete && reviewComplete && interactionsComplete) finish();
+    };
+    window.addEventListener('message', receive);
+    signal.addEventListener('abort', abort, { once: true });
+    timer = window.setTimeout(() => finish(true), PREVIEW_WAIT_MS);
+    document.body.append(frame);
+    if (signal.aborted) abort();
+  });
 }
 
 if (typeof window !== 'undefined') {
